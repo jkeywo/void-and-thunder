@@ -123,10 +123,22 @@ entities:
 
   - component: star-system
     core:
-      status: proposed
-      confidence: provisional
+      status: implemented
+      confidence: confirmed
       title: Star System Playfield
       summary: >-
-        A bounded system to fly around — a central star, a few stations/planets
-        as landmarks and soft bounds that keep play near the action.
+        A bounded disc to fly around. SystemBounds + bounds_return apply a soft
+        inward spring past the edge (no wall); bounds_system runs after Movement.
+        The client draws a central star and stations as circular Landmarks and a
+        parallax starfield backdrop.
       references: [ship-movement]
+    implementation:
+      status: declared
+      paths:
+        [
+          crates/vt_sim/src/world.rs,
+          crates/vt_sim/src/components.rs,
+          crates/vt_client/src/main.rs,
+        ]
+      symbols: [SystemBounds, bounds_return, bounds_system, Landmark]
+      tests: [crates/vt_sim/src/world.rs]

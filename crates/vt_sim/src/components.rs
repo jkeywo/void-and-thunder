@@ -170,6 +170,14 @@ impl Default for Collider {
     }
 }
 
+/// A fixed feature of the star system — the central star, a station, a planet.
+/// Spatial/visual anchor now; a collision/interaction target later. `radius` is
+/// its size for rendering and future hit tests.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Landmark {
+    pub radius: f32,
+}
+
 /// Marks a ship as AI-controlled and carries its combat tuning. The AI system
 /// writes this ship's [`Helm`] and [`FireOrders`]; a ship without it (the
 /// player) is driven by the client instead. This keeps the sim ignorant of who

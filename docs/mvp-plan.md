@@ -40,8 +40,11 @@ Implemented and tested in `crates/vt_sim` + `crates/vt_client`:
 - **Enemy AI** *(M1 — done)* — `desired_helm` + `ai_system`: `AiController` ships
   find the nearest hostile and flee / pursue / present-a-beam-and-fire. *(tested,
   incl. a headless ECS-schedule integration test)*
+- **Star system** *(M2 — done)* — `SystemBounds` + `bounds_return`/`bounds_system`:
+  a soft inward spring turns ships back at the edge (no wall). Client draws a
+  central star + stations as circular `Landmark`s and a parallax starfield. *(tested)*
 - **`SimPlugin`** — all of the above ordered in `FixedUpdate` (`Ai → Movement →
-  Weapons → Resolution`).
+  Bounds → Weapons → Resolution`).
 - **Client** — window, camera-follow, sprites auto-attached to sim entities,
   WASD helm + Q/E broadsides; spawns the player + 3 stationary House targets.
 - **Pipeline** — native `cargo run`; web via Trunk; auto-deploy to GitHub Pages
@@ -74,8 +77,9 @@ non-player ships. **Shipped** — `crates/vt_sim/src/ai.rs` (`desired_helm` +
   so the aiming maths is unit-tested without a `World`.
 - **Done when:** the 3 House ships chase and shoot the player; a fight is losable.
 
-### M2 — Star system playfield  ·  `star-system`
-Somewhere to fight.
+### M2 — Star system playfield  ·  `star-system` ✅ DONE
+Somewhere to fight. **Shipped** — `crates/vt_sim/src/world.rs` (soft bounds) +
+client landmarks and starfield. The list below is the design it was built to.
 
 - A `SystemBounds` resource (radius) + a soft-return system: past the edge,
   damp/steer velocity back inward (no hard wall).

@@ -22,6 +22,15 @@ struct Player;
 #[derive(Component)]
 struct MainCamera;
 
+/// A background star that parallax-scrolls. `factor` near 1.0 reads as very
+/// distant (barely drifts); lower reads as closer (drifts more against the
+/// camera). `base` is its resting world position.
+#[derive(Component)]
+struct Parallax {
+    base: Vec2,
+    factor: f32,
+}
+
 fn main() {
     App::new()
         .add_plugins(
@@ -47,6 +56,7 @@ fn main() {
                 attach_ship_sprites,
                 attach_projectile_sprites,
                 camera_follow,
+                starfield_parallax,
             ),
         )
         .run();
@@ -69,12 +79,67 @@ fn ship(faction: Faction, stats: ShipStats, position: Vec2) -> impl Bundle {
     )
 }
 
-fn setup(mut commands: Commands) {
+fn setup(
+    mut commands: Commands,
+    bounds: Res<SystemBounds>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     commands.spawn((Camera2d, MainCamera));
 
-    // The player's corsair sloop.
+    // The star at the heart of the system, plus a couple of stations as
+    // landmarks. Drawn as circles behind the ships (negative z).
+    spawn_landmark(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        Vec2::ZERO,
+        120.0,
+        Color::srgb(1.0, 0.82, 0.42),
+    );
+    spawn_landmark(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        Vec2::new(-700.0, 500.0),
+        60.0,
+        Color::srgb(0.55, 0.60, 0.72),
+    );
+    spawn_landmark(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        Vec2::new(820.0, -420.0),
+        44.0,
+        Color::srgb(0.60, 0.45, 0.40),
+    );
+
+    // A parallax starfield backdrop, scattered across the system with a cheap
+    // deterministic RNG so it looks the same every run.
+    let mut rng = Lcg::new(0x5EED_C0DE);
+    let spread = bounds.radius * 2.2;
+    for _ in 0..500 {
+        let base = Vec2::new((rng.unit() - 0.5) * spread, (rng.unit() - 0.5) * spread);
+        let factor = 0.90 + rng.unit() * 0.08; // distant: 0.90..0.98
+        let shade = 0.5 + rng.unit() * 0.5;
+        commands.spawn((
+            Sprite {
+                color: Color::srgb(shade, shade, shade * 1.05),
+                custom_size: Some(Vec2::splat(1.0 + rng.unit() * 1.5)),
+                ..default()
+            },
+            Transform::from_translation(base.extend(-10.0)),
+            Parallax { base, factor },
+        ));
+    }
+
+    // The player's corsair sloop, offset from the star.
     commands.spawn((
-        ship(Faction::Corsairs, ShipStats::default(), Vec2::ZERO),
+        ship(
+            Faction::Corsairs,
+            ShipStats::default(),
+            Vec2::new(0.0, -520.0),
+        ),
         Player,
     ));
 
@@ -93,6 +158,39 @@ fn setup(mut commands: Commands) {
         Vec2::new(60.0, -320.0),
     ] {
         commands.spawn((ship(Faction::Houses, heavy, pos), AiController::default()));
+    }
+}
+
+/// Spawn a circular landmark (star/station/planet) behind the ships.
+fn spawn_landmark(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    pos: Vec2,
+    radius: f32,
+    color: Color,
+) {
+    commands.spawn((
+        Landmark { radius },
+        Mesh2d(meshes.add(Circle::new(radius))),
+        MeshMaterial2d(materials.add(color)),
+        Transform::from_translation(pos.extend(-2.0)),
+    ));
+}
+
+/// A tiny linear-congruential RNG — enough to scatter a starfield without
+/// pulling in a dependency.
+struct Lcg(u32);
+
+impl Lcg {
+    fn new(seed: u32) -> Self {
+        Self(seed | 1)
+    }
+
+    /// Next float in `0.0..1.0`.
+    fn unit(&mut self) -> f32 {
+        self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (self.0 >> 8) as f32 / (1u32 << 24) as f32
     }
 }
 
@@ -159,6 +257,23 @@ fn attach_projectile_sprites(
             custom_size: Some(Vec2::splat(6.0)),
             ..default()
         });
+    }
+}
+
+/// Drift the starfield against the camera to fake depth. Distant stars
+/// (`factor` near 1) barely move; nearer ones slide more.
+fn starfield_parallax(
+    camera: Query<&Transform, (With<MainCamera>, Without<Parallax>)>,
+    mut stars: Query<(&Parallax, &mut Transform), Without<MainCamera>>,
+) {
+    let Ok(camera) = camera.single() else {
+        return;
+    };
+    let cam = camera.translation.truncate();
+    for (parallax, mut transform) in &mut stars {
+        let pos = parallax.base + cam * parallax.factor;
+        transform.translation.x = pos.x;
+        transform.translation.y = pos.y;
     }
 }
 

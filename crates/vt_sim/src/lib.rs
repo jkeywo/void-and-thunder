@@ -22,6 +22,7 @@ pub mod combat;
 pub mod components;
 pub mod plugin;
 pub mod ship;
+pub mod world;
 
 pub use plugin::{SimPlugin, SimSet};
 
@@ -30,8 +31,9 @@ pub mod prelude {
     pub use crate::ai::desired_helm;
     pub use crate::combat::{broadside_volley, ProjectileSpawn};
     pub use crate::components::{
-        AiController, Broadside, Collider, Faction, FireOrders, Heading, Helm, Hull, Projectile,
-        Ship, ShipStats, Ttl, Velocity,
+        AiController, Broadside, Collider, Faction, FireOrders, Heading, Helm, Hull, Landmark,
+        Projectile, Ship, ShipStats, Ttl, Velocity,
     };
     pub use crate::plugin::{SimPlugin, SimSet};
+    pub use crate::world::{bounds_return, SystemBounds};
 }
