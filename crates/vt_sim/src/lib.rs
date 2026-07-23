@@ -20,6 +20,7 @@
 pub mod ai;
 pub mod combat;
 pub mod components;
+pub mod events;
 pub mod plugin;
 pub mod ship;
 pub mod spawn;
@@ -35,6 +36,7 @@ pub mod prelude {
         AiController, Broadside, Collider, Faction, FireOrders, Heading, Helm, Hull, Landmark,
         Projectile, Protagonist, Ship, ShipStats, Ttl, Velocity,
     };
+    pub use crate::events::{ShipDestroyed, ShipHit};
     pub use crate::plugin::{SimPlugin, SimSet};
     pub use crate::spawn::{reset_encounter, ship_bundle, Encounter, Outcome, SpawnDirector};
     pub use crate::world::{bounds_return, SystemBounds};

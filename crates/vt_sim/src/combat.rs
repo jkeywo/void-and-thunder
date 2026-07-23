@@ -11,6 +11,7 @@ use bevy_transform::components::Transform;
 use crate::components::{
     Broadside, Collider, Faction, FireOrders, Heading, Hull, Projectile, Ttl, Velocity,
 };
+use crate::events::{ShipDestroyed, ShipHit};
 
 /// How long a cannonball lives before falling into the void (seconds).
 pub const PROJECTILE_TTL: f32 = 2.5;
@@ -134,9 +135,11 @@ pub fn projectile_system(
     }
 }
 
-/// Bevy system: resolve cannonball hits against ships and apply damage.
+/// Bevy system: resolve cannonball hits against ships and apply damage,
+/// announcing each hit for the presentation layer.
 pub fn collision_system(
     mut commands: Commands,
+    mut hits: MessageWriter<ShipHit>,
     projectiles: Query<(Entity, &Transform, &Projectile)>,
     mut ships: Query<(&Transform, &Collider, &Faction, &mut Hull)>,
 ) {
@@ -149,6 +152,10 @@ pub fn collision_system(
             let ship_pos = ship_tf.translation.truncate();
             if circles_overlap(proj_pos, projectile.radius, ship_pos, collider.radius) {
                 hull.current -= projectile.damage;
+                hits.write(ShipHit {
+                    position: proj_pos,
+                    faction: *faction,
+                });
                 commands.entity(proj_entity).despawn();
                 break; // one ball, one hit
             }
@@ -156,10 +163,19 @@ pub fn collision_system(
     }
 }
 
-/// Bevy system: remove ships whose hull has been reduced to zero.
-pub fn destruction_system(mut commands: Commands, ships: Query<(Entity, &Hull)>) {
-    for (entity, hull) in &ships {
+/// Bevy system: remove ships whose hull has been reduced to zero, announcing
+/// each destruction.
+pub fn destruction_system(
+    mut commands: Commands,
+    mut destroyed: MessageWriter<ShipDestroyed>,
+    ships: Query<(Entity, &Transform, &Faction, &Hull)>,
+) {
+    for (entity, transform, faction, hull) in &ships {
         if hull.current <= 0.0 {
+            destroyed.write(ShipDestroyed {
+                position: transform.translation.truncate(),
+                faction: *faction,
+            });
             commands.entity(entity).despawn();
         }
     }

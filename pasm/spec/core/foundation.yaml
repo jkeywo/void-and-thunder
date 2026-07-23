@@ -76,6 +76,33 @@ entities:
       paths: [crates/vt_sim/src/plugin.rs]
       symbols: [SimPlugin, SimSet]
 
+  - component: game-feel
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Game Feel & HUD
+      summary: >-
+        The sim announces ShipHit/ShipDestroyed messages; the client turns them
+        into hit sparks, expanding explosions and screen shake (CameraRig
+        trauma), plus muzzle flashes on new cannonballs. A hull gauge and the
+        wave/outcome HUD text read the encounter. Effects scale-and-fade via the
+        Effect component; ship sprites tint darker as their hull drops.
+      references: [ship-combat, spawn-director, client-shell]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/events.rs, crates/vt_client/src/main.rs]
+      symbols:
+        [
+          ShipHit,
+          ShipDestroyed,
+          CameraRig,
+          Effect,
+          spawn_effect,
+          update_effects,
+          damage_tint,
+          update_hull_bar,
+        ]
+
   - component: client-shell
     core:
       status: implemented

@@ -10,6 +10,7 @@ use bevy_ecs::prelude::*;
 
 use crate::ai::ai_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
+use crate::events::{ShipDestroyed, ShipHit};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
 use crate::world::{bounds_system, SystemBounds};
@@ -39,6 +40,8 @@ impl Plugin for SimPlugin {
         app.init_resource::<SystemBounds>()
             .init_resource::<SpawnDirector>()
             .init_resource::<Encounter>()
+            .add_message::<ShipHit>()
+            .add_message::<ShipDestroyed>()
             .configure_sets(
                 FixedUpdate,
                 (

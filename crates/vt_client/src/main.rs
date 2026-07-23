@@ -35,6 +35,83 @@ struct Parallax {
 #[derive(Component)]
 struct HudText;
 
+/// Marker for the fill bar of the player's hull gauge.
+#[derive(Component)]
+struct HullBarFill;
+
+/// Camera follow target plus screen-shake state. `trauma` decays each frame and
+/// is added to by hits and explosions; shake offset scales with `trauma²`.
+#[derive(Resource, Default)]
+struct CameraRig {
+    target: Vec2,
+    trauma: f32,
+    seed: u32,
+}
+
+impl CameraRig {
+    fn add_trauma(&mut self, amount: f32) {
+        self.trauma = (self.trauma + amount).clamp(0.0, 1.0);
+    }
+
+    /// Next pseudo-random float in `-1.0..1.0`.
+    fn noise(&mut self) -> f32 {
+        self.seed = self
+            .seed
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        ((self.seed >> 8) as f32 / (1u32 << 24) as f32) * 2.0 - 1.0
+    }
+}
+
+/// A short-lived visual effect (muzzle flash, hit spark, explosion) that scales
+/// and fades out over its life, then despawns.
+#[derive(Component)]
+struct Effect {
+    age: f32,
+    life: f32,
+    start_scale: f32,
+    end_scale: f32,
+    color: Color,
+}
+
+/// Base display colour for a faction's ships (before damage tinting).
+fn faction_color(faction: &Faction) -> Color {
+    match faction {
+        Faction::Corsairs => Color::srgb(0.35, 0.85, 0.55),
+        Faction::Houses => Color::srgb(0.85, 0.30, 0.30),
+        Faction::Janissariat => Color::srgb(0.85, 0.65, 0.20),
+        Faction::Guild => Color::srgb(0.45, 0.60, 0.90),
+        Faction::Freebooters => Color::srgb(0.75, 0.45, 0.85),
+    }
+}
+
+/// Spawn a scaling, fading effect sprite at a world position.
+fn spawn_effect(
+    commands: &mut Commands,
+    pos: Vec2,
+    size: f32,
+    start_scale: f32,
+    end_scale: f32,
+    life: f32,
+    color: Color,
+) {
+    commands.spawn((
+        Sprite {
+            color,
+            custom_size: Some(Vec2::splat(size)),
+            ..default()
+        },
+        Transform::from_translation(pos.extend(1.0)),
+        Effect {
+            age: 0.0,
+            life,
+            start_scale,
+            end_scale,
+            color,
+        },
+    ));
+}
+
 fn main() {
     App::new()
         .add_plugins(
@@ -53,6 +130,7 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
         .add_plugins(SimPlugin)
         .init_state::<GameState>()
+        .init_resource::<CameraRig>()
         .add_systems(Startup, setup)
         // Presentation runs in every state.
         .add_systems(
@@ -60,9 +138,21 @@ fn main() {
             (
                 attach_ship_sprites,
                 attach_projectile_sprites,
+                damage_tint,
                 camera_follow,
                 starfield_parallax,
                 update_hud,
+                update_hull_bar,
+            ),
+        )
+        // Juice: muzzle flashes, hit sparks, explosions, screen shake.
+        .add_systems(
+            Update,
+            (
+                muzzle_flashes,
+                spawn_hit_effects,
+                spawn_destroy_effects,
+                update_effects,
             ),
         )
         // Playing: take input and watch for win/lose.
@@ -169,6 +259,32 @@ fn setup(
         },
         HudText,
     ));
+
+    // Player hull gauge: a framed bar in the bottom-left whose fill tracks hull.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(16.0),
+                left: Val::Px(16.0),
+                width: Val::Px(240.0),
+                height: Val::Px(18.0),
+                padding: UiRect::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.30, 0.34, 0.42)),
+        ))
+        .with_children(|frame| {
+            frame.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.35, 0.85, 0.55)),
+                HullBarFill,
+            ));
+        });
 }
 
 /// Spawn a circular landmark (star/station/planet) behind the ships.
@@ -241,15 +357,8 @@ fn attach_ship_sprites(
     ships: Query<(Entity, &Faction), (With<Ship>, Without<Sprite>)>,
 ) {
     for (entity, faction) in &ships {
-        let color = match faction {
-            Faction::Corsairs => Color::srgb(0.35, 0.85, 0.55),
-            Faction::Houses => Color::srgb(0.85, 0.30, 0.30),
-            Faction::Janissariat => Color::srgb(0.85, 0.65, 0.20),
-            Faction::Guild => Color::srgb(0.45, 0.60, 0.90),
-            Faction::Freebooters => Color::srgb(0.75, 0.45, 0.85),
-        };
         commands.entity(entity).insert(Sprite {
-            color,
+            color: faction_color(faction),
             custom_size: Some(Vec2::new(44.0, 20.0)),
             ..default()
         });
@@ -287,17 +396,128 @@ fn starfield_parallax(
     }
 }
 
-/// Keep the camera centred on the player's ship. When the player is gone
-/// (destroyed) the camera simply holds its last position.
+/// Follow the player and apply screen shake. When the player is gone the rig
+/// holds its last target, so the death explosion still shakes in place.
 fn camera_follow(
+    time: Res<Time>,
+    mut rig: ResMut<CameraRig>,
     player: Query<&Transform, (With<Player>, Without<MainCamera>)>,
     mut camera: Query<&mut Transform, With<MainCamera>>,
 ) {
-    let (Ok(player), Ok(mut camera)) = (player.single(), camera.single_mut()) else {
+    if let Ok(player) = player.single() {
+        rig.target = player.translation.truncate();
+    }
+    // Decay trauma; shake amount is trauma squared for a punchy falloff.
+    rig.trauma = (rig.trauma - time.delta_secs() * 1.4).clamp(0.0, 1.0);
+    let amount = rig.trauma * rig.trauma;
+    let offset = Vec2::new(rig.noise(), rig.noise()) * 26.0 * amount;
+
+    let Ok(mut camera) = camera.single_mut() else {
         return;
     };
-    camera.translation.x = player.translation.x;
-    camera.translation.y = player.translation.y;
+    camera.translation.x = rig.target.x + offset.x;
+    camera.translation.y = rig.target.y + offset.y;
+}
+
+/// Tint each ship's sprite darker as its hull is worn down.
+fn damage_tint(mut ships: Query<(&Faction, &Hull, &mut Sprite), With<Ship>>) {
+    for (faction, hull, mut sprite) in &mut ships {
+        let frac = (hull.current / hull.max).clamp(0.0, 1.0);
+        let k = 0.4 + 0.6 * frac;
+        let base = faction_color(faction).to_srgba();
+        sprite.color = Color::srgb(base.red * k, base.green * k, base.blue * k);
+    }
+}
+
+/// A muzzle flash blooms wherever a new cannonball appears.
+fn muzzle_flashes(mut commands: Commands, new_shots: Query<&Transform, Added<Projectile>>) {
+    for transform in &new_shots {
+        spawn_effect(
+            &mut commands,
+            transform.translation.truncate(),
+            10.0,
+            1.4,
+            0.2,
+            0.12,
+            Color::srgb(1.0, 0.95, 0.6),
+        );
+    }
+}
+
+/// Sparks and a little shake when a hull is hit.
+fn spawn_hit_effects(
+    mut commands: Commands,
+    mut hits: MessageReader<ShipHit>,
+    mut rig: ResMut<CameraRig>,
+) {
+    for hit in hits.read() {
+        spawn_effect(
+            &mut commands,
+            hit.position,
+            9.0,
+            0.6,
+            1.8,
+            0.22,
+            Color::srgb(1.0, 0.7, 0.3),
+        );
+        rig.add_trauma(0.12);
+    }
+}
+
+/// An expanding blast and a bigger shake when a ship is destroyed.
+fn spawn_destroy_effects(
+    mut commands: Commands,
+    mut destroyed: MessageReader<ShipDestroyed>,
+    mut rig: ResMut<CameraRig>,
+) {
+    for kill in destroyed.read() {
+        spawn_effect(
+            &mut commands,
+            kill.position,
+            26.0,
+            0.5,
+            3.0,
+            0.5,
+            Color::srgb(1.0, 0.6, 0.25),
+        );
+        rig.add_trauma(0.45);
+    }
+}
+
+/// Advance every effect: scale over its life and fade to nothing, then despawn.
+fn update_effects(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut effects: Query<(Entity, &mut Effect, &mut Transform, &mut Sprite)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut effect, mut transform, mut sprite) in &mut effects {
+        effect.age += dt;
+        let t = (effect.age / effect.life).clamp(0.0, 1.0);
+        if t >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let scale = effect.start_scale + (effect.end_scale - effect.start_scale) * t;
+        transform.scale = Vec3::splat(scale);
+        sprite.color = effect.color.with_alpha(1.0 - t);
+    }
+}
+
+/// Resize the hull gauge to the player's remaining hull (and recolour it).
+fn update_hull_bar(
+    player: Query<&Hull, With<Player>>,
+    mut fill: Query<(&mut Node, &mut BackgroundColor), With<HullBarFill>>,
+) {
+    let frac = player
+        .single()
+        .map(|hull| (hull.current / hull.max).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    for (mut node, mut color) in &mut fill {
+        node.width = Val::Percent(frac * 100.0);
+        // Green when healthy, sliding to red as it drops.
+        *color = BackgroundColor(Color::srgb(0.9 - 0.55 * frac, 0.3 + 0.55 * frac, 0.35));
+    }
 }
 
 /// Move to the game-over state once the encounter has resolved.
