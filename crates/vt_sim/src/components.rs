@@ -44,6 +44,12 @@ impl Faction {
 #[derive(Component, Default)]
 pub struct Ship;
 
+/// The ship the encounter revolves around — spawn director centres waves on it
+/// and the encounter is lost if it dies. The client attaches this to the player;
+/// the sim only needs to know "the protagonist", not "the player".
+#[derive(Component, Default)]
+pub struct Protagonist;
+
 /// Facing angle in radians. `0.0` points along +X; positive is counter-clockwise.
 /// This is the sim's source of truth for orientation; the movement system writes
 /// it into `Transform.rotation` each step so any renderer sees a valid transform.

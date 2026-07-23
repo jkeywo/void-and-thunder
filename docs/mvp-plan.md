@@ -43,8 +43,12 @@ Implemented and tested in `crates/vt_sim` + `crates/vt_client`:
 - **Star system** *(M2 — done)* — `SystemBounds` + `bounds_return`/`bounds_system`:
   a soft inward spring turns ships back at the edge (no wall). Client draws a
   central star + stations as circular `Landmark`s and a parallax starfield. *(tested)*
-- **`SimPlugin`** — all of the above ordered in `FixedUpdate` (`Ai → Movement →
-  Bounds → Weapons → Resolution`).
+- **Spawn director + encounter** *(M3 — done)* — `director_system` sends
+  escalating waves at the `Protagonist`; `Encounter` tracks wave / enemies /
+  `Outcome`; client maps it to `Playing`/`GameOver` with R-to-restart and a HUD
+  line. `ship_bundle` is the single ship constructor. *(tested)*
+- **`SimPlugin`** — all of the above ordered in `FixedUpdate` (`Director → Ai →
+  Movement → Bounds → Weapons → Resolution`).
 - **Client** — window, camera-follow, sprites auto-attached to sim entities,
   WASD helm + Q/E broadsides; spawns the player + 3 stationary House targets.
 - **Pipeline** — native `cargo run`; web via Trunk; auto-deploy to GitHub Pages
@@ -88,8 +92,10 @@ client landmarks and starfield. The list below is the design it was built to.
 - Parallax starfield background so motion reads.
 - **Done when:** flying to the edge turns you back; the space feels like a place.
 
-### M3 — Spawn director & encounter state  ·  `spawn-director`
-Turn skirmish into an encounter.
+### M3 — Spawn director & encounter state  ·  `spawn-director` ✅ DONE
+Turn skirmish into an encounter. **Shipped** — `crates/vt_sim/src/spawn.rs`
+(director, waves, `Encounter`/`Outcome`) + client states/restart/HUD. The list
+below is the design it was built to.
 
 - `SpawnDirector` resource: spawns hostile waves at the system edge around the
   player, wave N bigger/tougher than N−1, next wave when the current is cleared.

@@ -31,6 +31,10 @@ struct Parallax {
     factor: f32,
 }
 
+/// Marker for the heads-up text.
+#[derive(Component)]
+struct HudText;
+
 fn main() {
     App::new()
         .add_plugins(
@@ -48,35 +52,47 @@ fn main() {
         )
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
         .add_plugins(SimPlugin)
+        .init_state::<GameState>()
         .add_systems(Startup, setup)
+        // Presentation runs in every state.
         .add_systems(
             Update,
             (
-                player_input,
                 attach_ship_sprites,
                 attach_projectile_sprites,
                 camera_follow,
                 starfield_parallax,
+                update_hud,
             ),
         )
+        // Playing: take input and watch for win/lose.
+        .add_systems(
+            Update,
+            (player_input, watch_outcome).run_if(in_state(GameState::Playing)),
+        )
+        // Game over: wait for a restart.
+        .add_systems(Update, restart.run_if(in_state(GameState::GameOver)))
         .run();
 }
 
-/// Bundle the components that make an entity a ship in the sim.
-fn ship(faction: Faction, stats: ShipStats, position: Vec2) -> impl Bundle {
-    (
-        Ship,
-        faction,
-        stats,
-        Heading(0.0),
-        Velocity::default(),
-        Helm::default(),
-        FireOrders::default(),
-        Broadside::default(),
-        Hull::new(100.0),
-        Collider::default(),
-        Transform::from_translation(position.extend(0.0)),
-    )
+/// Whether a run is in progress or has ended (win or loss).
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+enum GameState {
+    #[default]
+    Playing,
+    GameOver,
+}
+
+/// The player's starting position, offset from the star at the origin.
+const PLAYER_START: Vec2 = Vec2::new(0.0, -520.0);
+
+/// Spawn the player's corsair sloop — the encounter's protagonist.
+fn spawn_player(commands: &mut Commands) {
+    commands.spawn((
+        ship_bundle(Faction::Corsairs, ShipStats::default(), 100.0, PLAYER_START),
+        Player,
+        Protagonist,
+    ));
 }
 
 fn setup(
@@ -133,32 +149,26 @@ fn setup(
         ));
     }
 
-    // The player's corsair sloop, offset from the star.
-    commands.spawn((
-        ship(
-            Faction::Corsairs,
-            ShipStats::default(),
-            Vec2::new(0.0, -520.0),
-        ),
-        Player,
-    ));
+    // The player's corsair sloop. Enemy waves are spawned by the sim's
+    // SpawnDirector, not here.
+    spawn_player(&mut commands);
 
-    // A few House warships that hunt the player: they pursue, present a
-    // broadside and fire (vt_sim::ai). Wave spawning is the next MVP step —
-    // see docs/mvp-plan.md.
-    let heavy = ShipStats {
-        thrust: 120.0,
-        turn_rate: 1.4,
-        max_speed: 200.0,
-        ..default()
-    };
-    for pos in [
-        Vec2::new(320.0, 180.0),
-        Vec2::new(-360.0, 120.0),
-        Vec2::new(60.0, -320.0),
-    ] {
-        commands.spawn((ship(Faction::Houses, heavy, pos), AiController::default()));
-    }
+    // Heads-up display.
+    commands.spawn((
+        Text::new(""),
+        TextFont {
+            font_size: FontSize::Px(20.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.85, 0.88, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            left: Val::Px(14.0),
+            ..default()
+        },
+        HudText,
+    ));
 }
 
 /// Spawn a circular landmark (star/station/planet) behind the ships.
@@ -277,7 +287,8 @@ fn starfield_parallax(
     }
 }
 
-/// Keep the camera centred on the player's ship.
+/// Keep the camera centred on the player's ship. When the player is gone
+/// (destroyed) the camera simply holds its last position.
 fn camera_follow(
     player: Query<&Transform, (With<Player>, Without<MainCamera>)>,
     mut camera: Query<&mut Transform, With<MainCamera>>,
@@ -287,4 +298,53 @@ fn camera_follow(
     };
     camera.translation.x = player.translation.x;
     camera.translation.y = player.translation.y;
+}
+
+/// Move to the game-over state once the encounter has resolved.
+fn watch_outcome(encounter: Res<Encounter>, mut next: ResMut<NextState<GameState>>) {
+    if encounter.outcome != Outcome::InProgress {
+        next.set(GameState::GameOver);
+    }
+}
+
+/// On the game-over screen, `R` clears the field and starts a fresh run.
+fn restart(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    ships: Query<Entity, With<Ship>>,
+    projectiles: Query<Entity, With<Projectile>>,
+    mut director: ResMut<SpawnDirector>,
+    mut encounter: ResMut<Encounter>,
+    mut next: ResMut<NextState<GameState>>,
+) {
+    if !keys.just_pressed(KeyCode::KeyR) {
+        return;
+    }
+    for entity in ships.iter().chain(&projectiles) {
+        commands.entity(entity).despawn();
+    }
+    reset_encounter(&mut director, &mut encounter);
+    spawn_player(&mut commands);
+    next.set(GameState::Playing);
+}
+
+/// Update the heads-up text with the wave, enemies left, and any outcome.
+fn update_hud(encounter: Res<Encounter>, mut hud: Query<&mut Text, With<HudText>>) {
+    let Ok(mut text) = hud.single_mut() else {
+        return;
+    };
+    text.0 = match encounter.outcome {
+        Outcome::InProgress => format!(
+            "Wave {}  ·  enemies: {}",
+            encounter.wave.max(1),
+            encounter.enemies_remaining
+        ),
+        Outcome::Cleared => format!(
+            "ALL {} WAVES CLEARED — the lanes are yours.\nPress R to sail again.",
+            encounter.wave
+        ),
+        Outcome::PlayerDestroyed => {
+            "YOUR SHIP IS LOST TO THE VOID.\nPress R to sail again.".to_string()
+        }
+    };
 }

@@ -113,13 +113,38 @@ entities:
 
   - component: spawn-director
     core:
-      status: proposed
-      confidence: provisional
-      title: Spawn Director
+      status: implemented
+      confidence: confirmed
+      title: Spawn Director & Encounter State
       summary: >-
-        Populates a star system with hostile ships in escalating waves around
-        the player, and tracks the encounter (ships remaining, player survival).
-      references: [enemy-ai]
+        director_system sends escalating waves (wave_size) of hostile ships from
+        a ring near the system edge (wave_spawn_points) at the Protagonist; the
+        next wave arrives when the current is cleared. Encounter tracks wave,
+        enemies_remaining and Outcome (InProgress/Cleared/PlayerDestroyed). The
+        client maps Outcome to a Playing/GameOver state with an R-to-restart
+        (reset_encounter) and a HUD line. ship_bundle is the one ship constructor.
+      references: [enemy-ai, star-system]
+    implementation:
+      status: declared
+      paths:
+        [
+          crates/vt_sim/src/spawn.rs,
+          crates/vt_sim/src/components.rs,
+          crates/vt_client/src/main.rs,
+        ]
+      symbols:
+        [
+          director_system,
+          wave_size,
+          wave_spawn_points,
+          ship_bundle,
+          reset_encounter,
+          SpawnDirector,
+          Encounter,
+          Outcome,
+          Protagonist,
+        ]
+      tests: [crates/vt_sim/src/spawn.rs]
 
   - component: star-system
     core:
