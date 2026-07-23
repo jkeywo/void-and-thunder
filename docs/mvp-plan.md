@@ -37,7 +37,11 @@ Implemented and tested in `crates/vt_sim` + `crates/vt_client`:
   of momentum-inheriting cannonballs out port/starboard on a cooldown. *(tested)*
 - **Projectiles & damage** — flight, TTL expiry, circle-overlap collision,
   faction-filtered damage, hull destruction. *(tested)*
-- **`SimPlugin`** — all of the above ordered in `FixedUpdate`.
+- **Enemy AI** *(M1 — done)* — `desired_helm` + `ai_system`: `AiController` ships
+  find the nearest hostile and flee / pursue / present-a-beam-and-fire. *(tested,
+  incl. a headless ECS-schedule integration test)*
+- **`SimPlugin`** — all of the above ordered in `FixedUpdate` (`Ai → Movement →
+  Weapons → Resolution`).
 - **Client** — window, camera-follow, sprites auto-attached to sim entities,
   WASD helm + Q/E broadsides; spawns the player + 3 stationary House targets.
 - **Pipeline** — native `cargo run`; web via Trunk; auto-deploy to GitHub Pages
@@ -52,9 +56,10 @@ real encounter. **Everything below is the remaining work.**
 
 Each milestone is a vertical slice that leaves the game playable. Tackle in order.
 
-### M1 — Enemy AI (make the hulks fight back)  ·  `enemy-ai`
+### M1 — Enemy AI (make the hulks fight back)  ·  `enemy-ai` ✅ DONE
 The single biggest step: a controller that writes `Helm`/`FireOrders` for
-non-player ships.
+non-player ships. **Shipped** — `crates/vt_sim/src/ai.rs` (`desired_helm` +
+`ai_system`, `SimSet::Ai`). The list below is the design it was built to.
 
 - New `crates/vt_sim/src/ai.rs`, a system in a new `SimSet::Ai` **before**
   `Movement`.

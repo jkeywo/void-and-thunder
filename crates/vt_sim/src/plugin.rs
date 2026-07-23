@@ -8,12 +8,15 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
+use crate::ai::ai_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::ship::movement_system;
 
 /// Ordered stages of a single simulation step.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SimSet {
+    /// AI controllers decide their ships' helm and fire orders.
+    Ai,
     /// Turn hulls and integrate positions.
     Movement,
     /// Fire broadsides, fly cannonballs.
@@ -29,8 +32,15 @@ impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(
             FixedUpdate,
-            (SimSet::Movement, SimSet::Weapons, SimSet::Resolution).chain(),
+            (
+                SimSet::Ai,
+                SimSet::Movement,
+                SimSet::Weapons,
+                SimSet::Resolution,
+            )
+                .chain(),
         )
+        .add_systems(FixedUpdate, ai_system.in_set(SimSet::Ai))
         .add_systems(FixedUpdate, movement_system.in_set(SimSet::Movement))
         .add_systems(
             FixedUpdate,

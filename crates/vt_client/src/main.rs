@@ -78,12 +78,13 @@ fn setup(mut commands: Commands) {
         Player,
     ));
 
-    // A few stationary House hulks to practise broadsides on. Enemy AI and wave
-    // spawning are the next MVP step — see docs/mvp-plan.md.
+    // A few House warships that hunt the player: they pursue, present a
+    // broadside and fire (vt_sim::ai). Wave spawning is the next MVP step —
+    // see docs/mvp-plan.md.
     let heavy = ShipStats {
         thrust: 120.0,
-        turn_rate: 1.0,
-        max_speed: 160.0,
+        turn_rate: 1.4,
+        max_speed: 200.0,
         ..default()
     };
     for pos in [
@@ -91,7 +92,7 @@ fn setup(mut commands: Commands) {
         Vec2::new(-360.0, 120.0),
         Vec2::new(60.0, -320.0),
     ] {
-        commands.spawn(ship(Faction::Houses, heavy, pos));
+        commands.spawn((ship(Faction::Houses, heavy, pos), AiController::default()));
     }
 }
 

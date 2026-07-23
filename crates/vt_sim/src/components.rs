@@ -169,3 +169,28 @@ impl Default for Collider {
         Self { radius: 26.0 }
     }
 }
+
+/// Marks a ship as AI-controlled and carries its combat tuning. The AI system
+/// writes this ship's [`Helm`] and [`FireOrders`]; a ship without it (the
+/// player) is driven by the client instead. This keeps the sim ignorant of who
+/// "the player" is — it only knows which ships steer themselves.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct AiController {
+    /// Inside this distance the ship stops closing and turns to present a beam.
+    pub engage_range: f32,
+    /// Half-width of the firing arc off each beam (radians). A shot is taken
+    /// when the target sits within this arc of the port or starboard beam.
+    pub fire_arc: f32,
+    /// Below this fraction of max hull the ship breaks off and runs.
+    pub flee_hull_frac: f32,
+}
+
+impl Default for AiController {
+    fn default() -> Self {
+        Self {
+            engage_range: 300.0,
+            fire_arc: 0.35, // ~20°
+            flee_hull_frac: 0.25,
+        }
+    }
+}

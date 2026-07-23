@@ -96,14 +96,20 @@ entities:
 
   - component: enemy-ai
     core:
-      status: proposed
-      confidence: provisional
+      status: implemented
+      confidence: confirmed
       title: Enemy Ship AI
       summary: >-
-        A controller that writes Helm/FireOrders for non-player ships: pursue
-        the target, present a broadside (turn so the beam faces the enemy), fire
-        when the arc lines up, peel off when hull is low.
+        A controller that writes Helm/FireOrders for AiController ships: flee when
+        the hull is low, pursue a distant target bow-on, otherwise turn to present
+        a beam and fire the side whose firing arc lines up. Target is the nearest
+        hostile-faction ship. Decision maths is the pure fn desired_helm.
       references: [ship-movement, ship-combat]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/ai.rs, crates/vt_sim/src/components.rs]
+      symbols: [desired_helm, ai_system, AiController]
+      tests: [crates/vt_sim/src/ai.rs]
 
   - component: spawn-director
     core:
