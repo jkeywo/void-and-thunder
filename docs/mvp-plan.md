@@ -104,11 +104,13 @@ below is the design it was built to.
 - Bevy `States` for `Playing` / `GameOver`; restart on a key.
 - **Done when:** waves keep coming, clearing all = win, dying = lose, R restarts.
 
-### M4 — Game feel & HUD (make it read and feel good) ✅ DONE (visuals)
+### M4 — Game feel & HUD (make it read and feel good) ✅ DONE
 The layer that makes 1–3 satisfying. **Shipped** — sim `ShipHit`/`ShipDestroyed`
 messages drive client hit sparks, explosions, muzzle flashes and screen shake
-(`CameraRig`); a hull gauge + wave/outcome HUD; enemy damage tint. **SFX is the
-one deferred piece** — it needs audio assets (no bundled sounds yet).
+(`CameraRig`); a hull gauge + wave/outcome HUD; enemy damage tint. **SFX now
+done too** — procedurally-synthesised sounds (`crates/vt_client/src/audio.rs`),
+Bevy audio on native and a WebAudio shim on the web. **Gamepad** (Black-Flag
+scheme) also supported.
 
 - **HUD** (`bevy_ui`/`Text`): hull bar, current wave, ships remaining, outcome
   banner.

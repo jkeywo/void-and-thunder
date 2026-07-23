@@ -7,9 +7,16 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+# `wav` enables WAV decoding so the native audio backend can play the
+# procedurally-generated sound effects (see src/audio.rs).
 [dependencies]
-bevy.workspace = true
+bevy = { workspace = true, features = ["wav"] }
 vt_sim.workspace = true
+
+# On the web, Bevy's audio is disabled (it doesn't play nicely in wasm); sound is
+# routed through a WebAudio JS shim instead, called via wasm-bindgen.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
 
 # Native-only: dynamic linking makes iterative debug builds much faster.
 # Enable with `cargo run --features fast-compile`. Never enabled for wasm.

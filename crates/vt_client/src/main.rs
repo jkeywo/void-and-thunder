@@ -12,9 +12,15 @@
 //!   Space   — brace (cut incoming damage)
 //!   B       — board a crippled enemy alongside (loot it)
 //!   R       — restart after a run ends
+//!
+//! Gamepad (Black-Flag scheme): RT/LT throttle & reverse, left stick steer,
+//! LB/RB port/starboard broadside, X brace, A board, Start restart.
 
 use bevy::prelude::*;
 use vt_sim::prelude::*;
+
+mod audio;
+use audio::SfxPlugin;
 
 /// Marker for the entity the local player controls.
 #[derive(Component)]
@@ -115,22 +121,27 @@ fn spawn_effect(
 }
 
 fn main() {
+    let default_plugins = DefaultPlugins
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Void & Thunder".into(),
+                // Let the canvas fill its parent element on the web.
+                fit_canvas_to_parent: true,
+                ..default()
+            }),
+            ..default()
+        })
+        .set(ImagePlugin::default_nearest());
+    // On the web, Bevy audio is disabled — sound goes through a WebAudio shim
+    // (see src/audio.rs). Native keeps Bevy audio.
+    #[cfg(target_arch = "wasm32")]
+    let default_plugins = default_plugins.disable::<bevy::audio::AudioPlugin>();
+
     App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Void & Thunder".into(),
-                        // Let the canvas fill its parent element on the web.
-                        fit_canvas_to_parent: true,
-                        ..default()
-                    }),
-                    ..default()
-                })
-                .set(ImagePlugin::default_nearest()),
-        )
+        .add_plugins(default_plugins)
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
         .add_plugins(SimPlugin)
+        .add_plugins(SfxPlugin)
         .init_state::<GameState>()
         .init_resource::<CameraRig>()
         .add_systems(Startup, setup)
@@ -322,10 +333,21 @@ impl Lcg {
     }
 }
 
-/// Translate the keyboard into the player ship's helm, fire orders, brace, and
-/// a boarding intent.
+/// Deadzone below which stick input is ignored.
+const STICK_DEADZONE: f32 = 0.15;
+
+/// Translate keyboard **and** gamepad into the player ship's helm, fire orders,
+/// brace and boarding intent.
+///
+/// The pad uses a Black-Flag naval scheme:
+///   RT / LT      — throttle forward / reverse (analog)
+///   left stick X — steer
+///   LB / RB      — fire port / starboard broadside
+///   X (West)     — brace
+///   A (South)    — board a crippled ship
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<&Gamepad>,
     mut board: ResMut<BoardIntent>,
     mut player: Query<(&mut Helm, &mut FireOrders, &mut Brace), With<Player>>,
 ) {
@@ -333,6 +355,7 @@ fn player_input(
         return;
     };
 
+    // --- Keyboard ---
     let mut throttle = 0.0;
     if keys.pressed(KeyCode::KeyW) {
         throttle += 1.0;
@@ -349,12 +372,35 @@ fn player_input(
         turn -= 1.0;
     }
 
-    helm.throttle = throttle;
-    helm.turn = turn;
-    orders.port = keys.pressed(KeyCode::KeyQ);
-    orders.starboard = keys.pressed(KeyCode::KeyE);
-    brace.active = keys.pressed(KeyCode::Space);
-    if keys.just_pressed(KeyCode::KeyB) {
+    let mut port = keys.pressed(KeyCode::KeyQ);
+    let mut starboard = keys.pressed(KeyCode::KeyE);
+    let mut bracing = keys.pressed(KeyCode::Space);
+    let mut board_now = keys.just_pressed(KeyCode::KeyB);
+
+    // --- Gamepad (first connected pad), Black-Flag scheme ---
+    if let Some(pad) = gamepads.iter().next() {
+        let rt = pad.get(GamepadButton::RightTrigger2).unwrap_or(0.0);
+        let lt = pad.get(GamepadButton::LeftTrigger2).unwrap_or(0.0);
+        throttle += rt - lt;
+
+        let stick_x = pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0);
+        if stick_x.abs() > STICK_DEADZONE {
+            // Stick right (+X) steers starboard (negative turn).
+            turn -= stick_x;
+        }
+
+        port |= pad.pressed(GamepadButton::LeftTrigger); // LB
+        starboard |= pad.pressed(GamepadButton::RightTrigger); // RB
+        bracing |= pad.pressed(GamepadButton::West); // X / Square
+        board_now |= pad.just_pressed(GamepadButton::South); // A / Cross
+    }
+
+    helm.throttle = throttle.clamp(-1.0, 1.0);
+    helm.turn = turn.clamp(-1.0, 1.0);
+    orders.port = port;
+    orders.starboard = starboard;
+    brace.active = bracing;
+    if board_now {
         board.active = true;
     }
 }
@@ -559,9 +605,11 @@ fn watch_outcome(encounter: Res<Encounter>, mut next: ResMut<NextState<GameState
     }
 }
 
-/// On the game-over screen, `R` clears the field and starts a fresh run.
+/// On the game-over screen, `R` (or the pad's Start) clears the field and starts
+/// a fresh run.
 fn restart(
     keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<&Gamepad>,
     mut commands: Commands,
     ships: Query<Entity, With<Ship>>,
     projectiles: Query<Entity, With<Projectile>>,
@@ -571,7 +619,10 @@ fn restart(
     mut board: ResMut<BoardIntent>,
     mut next: ResMut<NextState<GameState>>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyR) {
+    let pad_restart = gamepads
+        .iter()
+        .any(|pad| pad.just_pressed(GamepadButton::Start));
+    if !keys.just_pressed(KeyCode::KeyR) && !pad_restart {
         return;
     }
     for entity in ships.iter().chain(&projectiles) {

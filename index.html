@@ -30,6 +30,86 @@
         text-align: center;
       }
     </style>
+    <script>
+      // WebAudio sound-effect shim for the wasm build. Bevy audio is disabled on
+      // the web; the game calls window.vtPlaySound(name) via wasm-bindgen.
+      (function () {
+        let ctx;
+        function audioCtx() {
+          if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+          if (ctx.state === 'suspended') ctx.resume();
+          return ctx;
+        }
+        // Browsers block audio until a user gesture — resume on first input.
+        for (const ev of ['keydown', 'pointerdown']) {
+          window.addEventListener(ev, audioCtx);
+        }
+        function env(gain, t0, dur, peak) {
+          gain.gain.setValueAtTime(0.0001, t0);
+          gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.005);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        }
+        function noise(c, dur) {
+          const n = Math.floor(c.sampleRate * dur);
+          const buf = c.createBuffer(1, n, c.sampleRate);
+          const data = buf.getChannelData(0);
+          for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
+          const src = c.createBufferSource();
+          src.buffer = buf;
+          return src;
+        }
+        window.vtPlaySound = function (name) {
+          const c = audioCtx();
+          const t = c.currentTime;
+          if (name === 'hit') {
+            const o = c.createOscillator();
+            o.type = 'square';
+            o.frequency.value = 760;
+            const g = c.createGain();
+            env(g, t, 0.08, 0.12);
+            o.connect(g).connect(c.destination);
+            o.start(t); o.stop(t + 0.09);
+          } else if (name === 'broadside') {
+            const src = noise(c, 0.28);
+            const f = c.createBiquadFilter();
+            f.type = 'lowpass'; f.frequency.value = 500;
+            const g = c.createGain();
+            env(g, t, 0.28, 0.3);
+            src.connect(f).connect(g).connect(c.destination);
+            src.start(t);
+            const o = c.createOscillator();
+            o.type = 'sine';
+            o.frequency.setValueAtTime(120, t);
+            o.frequency.exponentialRampToValueAtTime(50, t + 0.22);
+            const g2 = c.createGain();
+            env(g2, t, 0.22, 0.35);
+            o.connect(g2).connect(c.destination);
+            o.start(t); o.stop(t + 0.24);
+          } else if (name === 'explosion') {
+            const src = noise(c, 0.5);
+            const f = c.createBiquadFilter();
+            f.type = 'lowpass';
+            f.frequency.setValueAtTime(1400, t);
+            f.frequency.exponentialRampToValueAtTime(200, t + 0.4);
+            const g = c.createGain();
+            env(g, t, 0.5, 0.45);
+            src.connect(f).connect(g).connect(c.destination);
+            src.start(t);
+          } else if (name === 'board') {
+            [523, 784].forEach((freq, i) => {
+              const o = c.createOscillator();
+              o.type = 'triangle';
+              o.frequency.value = freq;
+              const g = c.createGain();
+              const tt = t + i * 0.12;
+              env(g, tt, 0.18, 0.22);
+              o.connect(g).connect(c.destination);
+              o.start(tt); o.stop(tt + 0.2);
+            });
+          }
+        };
+      })();
+    </script>
   </head>
   <body>
     <div id="loading">Crossing the void&hellip;<br /><small>loading Void &amp; Thunder</small></div>

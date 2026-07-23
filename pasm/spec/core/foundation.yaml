@@ -132,6 +132,39 @@ entities:
           update_hull_bar,
         ]
 
+  - component: sound-effects
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Sound Effects (cross-platform)
+      summary: >-
+        Procedurally-synthesised SFX for broadside/hit/explosion/board, triggered
+        by the same events/state the visuals use. Two compile-time backends:
+        native renders WAV buffers played via Bevy AudioPlayer; wasm disables
+        Bevy audio and calls a WebAudio shim in index.html (window.vtPlaySound)
+        via wasm-bindgen.
+      references: [game-feel]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/audio.rs, index.html]
+      symbols: [SfxPlugin, Sound, sfx_broadside, sfx_hits, sfx_explosions, sfx_board]
+
+  - component: controller-input
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Gamepad Support (Black-Flag scheme)
+      summary: >-
+        player_input reads the first Gamepad alongside the keyboard: RT/LT for
+        throttle/reverse, left stick to steer, LB/RB for port/starboard
+        broadsides, X to brace, A to board; Start restarts on the game-over
+        screen. Inputs are merged with the keyboard and clamped.
+      references: [client-shell]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/main.rs]
+      symbols: [player_input, restart, STICK_DEADZONE]
+
   - component: client-shell
     core:
       status: implemented

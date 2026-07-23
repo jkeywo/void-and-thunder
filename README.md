@@ -21,10 +21,17 @@ Black Flag*'s naval combat and *Rogue Galaxy*'s roving space pirates.
 | **B** | Board a crippled enemy alongside (loot it) |
 | **R** | Restart after a run ends   |
 
+**Gamepad** (Black-Flag scheme): **RT/LT** throttle & reverse · **left stick**
+steer · **LB/RB** port/starboard broadside · **X** brace · **A** board · **Start**
+restart.
+
 You can't strafe — turn the hull to bring a broadside to bear. Presenting your
 beam is the skill. Batter an enemy's hull low enough and it's **crippled** (grey,
 drifting): pull alongside and press **B** to board and plunder it, or finish it
 with fire. Clear every wave to win.
+
+Sound effects are synthesised procedurally — played through Bevy audio on native,
+and through a WebAudio shim (`index.html`) on the web, where Bevy audio is disabled.
 
 ## Architecture
 
