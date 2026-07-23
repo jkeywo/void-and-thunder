@@ -75,7 +75,12 @@ pub fn circles_overlap(a: Vec2, ra: f32, b: Vec2, rb: f32) -> bool {
 }
 
 /// Bevy system: tick broadside cooldowns and spawn cannonballs for any ship
-/// with standing [`FireOrders`].
+/// requesting fire.
+///
+/// [`FireOrders`] is a *request*, consumed here — raise a flag and it fires once
+/// (if the bank has reloaded), then the flag is cleared. That is what makes the
+/// player's hold-to-aim / release-to-fire work: the client raises the flag on
+/// release. The AI simply re-requests every tick, so it still fires on cooldown.
 pub fn weapons_system(
     time: Res<Time>,
     mut commands: Commands,
@@ -85,20 +90,26 @@ pub fn weapons_system(
         &Velocity,
         &Faction,
         &mut Broadside,
-        &FireOrders,
+        &mut FireOrders,
     )>,
 ) {
     let dt = time.delta_secs();
-    for (transform, heading, velocity, faction, mut bank, orders) in &mut ships {
+    for (transform, heading, velocity, faction, mut bank, mut orders) in &mut ships {
         if bank.timer > 0.0 {
             bank.timer = (bank.timer - dt).max(0.0);
         }
-        if bank.timer > 0.0 || (!orders.port && !orders.starboard) {
+        // Consume the request whether or not it can be honoured: a shot asked
+        // for mid-reload is dropped, not queued.
+        let (want_port, want_starboard) = (orders.port, orders.starboard);
+        orders.port = false;
+        orders.starboard = false;
+
+        if bank.timer > 0.0 || (!want_port && !want_starboard) {
             continue;
         }
         let pos = transform.translation.truncate();
         let mut fired = false;
-        for &(side_active, is_port) in &[(orders.port, true), (orders.starboard, false)] {
+        for &(side_active, is_port) in &[(want_port, true), (want_starboard, false)] {
             if !side_active {
                 continue;
             }

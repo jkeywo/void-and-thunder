@@ -15,15 +15,18 @@ Black Flag*'s naval combat and *Rogue Galaxy*'s roving space pirates.
 | **S** | Reverse                    |
 | **A** | Turn to port (left)        |
 | **D** | Turn to starboard (right)  |
-| **Q** | Fire **port** broadside    |
-| **E** | Fire **starboard** broadside |
+| **Q** | **Hold** to aim the port broadside, **release** to fire |
+| **E** | **Hold** to aim the starboard broadside, **release** to fire |
 | **Space** | Brace — cut incoming damage |
 | **B** | Board a crippled enemy alongside (loot it) |
 | **R** | Restart after a run ends   |
 
 **Gamepad** (Black-Flag scheme): **RT/LT** throttle & reverse · **left stick**
-steer · **LB/RB** port/starboard broadside · **X** brace · **A** board · **Start**
-restart.
+steer · **LB/RB** hold-aim / release-fire the broadsides · **X** brace ·
+**A** board · **Start** restart.
+
+Holding a broadside draws the aim beams for that side — where the volley will
+actually go, computed with the sim's own geometry. Let go to fire.
 
 You can't strafe — turn the hull to bring a broadside to bear. Presenting your
 beam is the skill. Batter an enemy's hull low enough and it's **crippled** (grey,
@@ -32,6 +35,15 @@ with fire. Clear every wave to win.
 
 Sound effects are synthesised procedurally — played through Bevy audio on native,
 and through a WebAudio shim (`index.html`) on the web, where Bevy audio is disabled.
+
+## Presentation — 2.5D
+
+The simulation is **flat**: it works in the XY plane, with heading as a rotation
+about Z. The client treats **+Z as up** and renders that plane in 3D — hulls are
+boxes, shot and worlds are spheres, a grid marks the plane, and a perspective
+camera sits slightly above it, looking gently down and yawing to follow the
+ship. So the view is fully 3D while the game stays a Black-Flag naval duel.
+`vt_sim` needed no changes for any of it.
 
 ## Architecture
 

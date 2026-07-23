@@ -38,10 +38,13 @@ entities:
       confidence: confirmed
       title: Ship Combat
       summary: >-
-        Black-Flag-style broadsides. FireOrders discharge a port or starboard
-        bank on cooldown; the volley spreads cannonballs along the hull, each
-        inheriting ship momentum. Projectiles fly, expire on a TTL, and on a
-        circle overlap apply damage to hostile-faction hulls; dead hulls despawn.
+        Black-Flag-style broadsides. FireOrders is a *request* consumed by
+        weapons_system (raise it, it fires once if reloaded, then it is cleared)
+        — which is what makes the player's hold-to-aim / release-to-fire work,
+        while the AI simply re-requests each tick. The volley spreads cannonballs
+        along the hull, each inheriting ship momentum. Projectiles fly, expire on
+        a TTL, and on a circle overlap apply damage to hostile-faction hulls
+        (reduced while bracing); dead hulls despawn.
       references: [ship-movement]
     implementation:
       status: declared
@@ -169,17 +172,29 @@ entities:
     core:
       status: implemented
       confidence: confirmed
-      title: Client Shell (renderer, input, window)
+      title: Client Shell (2.5D renderer, input, window)
       summary: >-
         The Bevy front end. Mounts SimPlugin, spawns ships as sim entities,
-        translates the keyboard into Helm/FireOrders intent, and draws sim
-        entities as sprites (long axis = bow). Native and wasm from one binary.
-        Owns no game rules.
+        translates input into Helm/FireOrders intent, and renders in 2.5D: the
+        sim's flat XY plane is drawn with +Z as up — hulls are Cuboids, shot and
+        worlds Spheres, a gizmo grid marks the plane, and a perspective camera
+        sits slightly above it yawing to follow the ship (camera_orbit). Native
+        and wasm from one binary. Owns no game rules.
       references: [void-and-thunder-simulation]
     implementation:
       status: declared
       paths: [crates/vt_client/src/main.rs]
-      symbols: [player_input, attach_ship_sprites, camera_follow, Player]
+      symbols:
+        [
+          player_input,
+          attach_ship_visuals,
+          attach_projectile_visuals,
+          camera_orbit,
+          draw_grid,
+          draw_aim_beams,
+          Player,
+          GameMeshes,
+        ]
 
   # ---- Proposed for the MVP (see docs/mvp-plan.md) ----
 
