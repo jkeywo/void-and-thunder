@@ -21,6 +21,7 @@ pub mod ai;
 pub mod combat;
 pub mod components;
 pub mod events;
+pub mod piracy;
 pub mod plugin;
 pub mod ship;
 pub mod spawn;
@@ -33,10 +34,11 @@ pub mod prelude {
     pub use crate::ai::desired_helm;
     pub use crate::combat::{broadside_volley, ProjectileSpawn};
     pub use crate::components::{
-        AiController, Broadside, Collider, Faction, FireOrders, Heading, Helm, Hull, Landmark,
-        Projectile, Protagonist, Ship, ShipStats, Ttl, Velocity,
+        AiController, Brace, Broadside, Collider, Disabled, Faction, FireOrders, Heading, Helm,
+        Hull, Landmark, Projectile, Protagonist, Ship, ShipStats, Ttl, Velocity,
     };
     pub use crate::events::{ShipDestroyed, ShipHit};
+    pub use crate::piracy::{BoardIntent, Plunder, BOARD_RANGE, CRIPPLE_THRESHOLD};
     pub use crate::plugin::{SimPlugin, SimSet};
     pub use crate::spawn::{reset_encounter, ship_bundle, Encounter, Outcome, SpawnDirector};
     pub use crate::world::{bounds_return, SystemBounds};

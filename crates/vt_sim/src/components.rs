@@ -176,6 +176,19 @@ impl Default for Collider {
     }
 }
 
+/// A ship's brace state. While `active`, incoming damage is reduced — the
+/// Black-Flag defensive move. The controller (player/AI) sets it each frame.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Brace {
+    pub active: bool,
+}
+
+/// Marks a ship as crippled — hull driven low enough that it stops fighting and
+/// drifts, boardable by the protagonist. Not destroyed: it can be looted (the
+/// piracy payoff) or finished off with more fire.
+#[derive(Component, Default)]
+pub struct Disabled;
+
 /// A fixed feature of the star system — the central star, a station, a planet.
 /// Spatial/visual anchor now; a collision/interaction target later. `radius` is
 /// its size for rendering and future hit tests.

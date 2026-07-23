@@ -117,8 +117,9 @@ one deferred piece** — it needs audio assets (no bundled sounds yet).
 - **Readability:** health tint on enemy hulls; off-screen enemy markers.
 - **Done when:** a new player understands the fight without instructions.
 
-### M5 — Piracy finisher (optional for MVP, defines the game)
-The thing that makes it *piracy*, not just a shooter. Pull in if M1–M4 land early.
+### M5 — Piracy finisher (optional for MVP, defines the game) ✅ DONE
+The thing that makes it *piracy*, not just a shooter. **Shipped** —
+`crates/vt_sim/src/piracy.rs` (brace, cripple, board, `Plunder`).
 
 - **Brace** (Black Flag): a held key that reduces incoming damage.
 - **Cripple + board:** a hull below a threshold is disabled, not destroyed; close

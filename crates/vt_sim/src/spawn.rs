@@ -11,8 +11,8 @@ use bevy_transform::components::Transform;
 use std::f32::consts::TAU;
 
 use crate::components::{
-    AiController, Broadside, Collider, Faction, FireOrders, Heading, Helm, Hull, Protagonist, Ship,
-    ShipStats, Velocity,
+    AiController, Brace, Broadside, Collider, Faction, FireOrders, Heading, Helm, Hull,
+    Protagonist, Ship, ShipStats, Velocity,
 };
 use crate::world::SystemBounds;
 
@@ -27,6 +27,7 @@ pub fn ship_bundle(faction: Faction, stats: ShipStats, hull_max: f32, pos: Vec2)
         Velocity::default(),
         Helm::default(),
         FireOrders::default(),
+        Brace::default(),
         Broadside::default(),
         Hull::new(hull_max),
         Collider::default(),

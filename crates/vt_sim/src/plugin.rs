@@ -11,6 +11,7 @@ use bevy_ecs::prelude::*;
 use crate::ai::ai_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::events::{ShipDestroyed, ShipHit};
+use crate::piracy::{boarding_system, cripple_system, BoardIntent, Plunder};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
 use crate::world::{bounds_system, SystemBounds};
@@ -30,6 +31,8 @@ pub enum SimSet {
     Weapons,
     /// Resolve hits, apply damage, destroy wrecks.
     Resolution,
+    /// Cripple low-hull ships and resolve boarding.
+    Piracy,
 }
 
 /// Registers the Void & Thunder simulation on a Bevy `App`.
@@ -40,6 +43,8 @@ impl Plugin for SimPlugin {
         app.init_resource::<SystemBounds>()
             .init_resource::<SpawnDirector>()
             .init_resource::<Encounter>()
+            .init_resource::<Plunder>()
+            .init_resource::<BoardIntent>()
             .add_message::<ShipHit>()
             .add_message::<ShipDestroyed>()
             .configure_sets(
@@ -51,6 +56,7 @@ impl Plugin for SimPlugin {
                     SimSet::Bounds,
                     SimSet::Weapons,
                     SimSet::Resolution,
+                    SimSet::Piracy,
                 )
                     .chain(),
             )
@@ -69,6 +75,12 @@ impl Plugin for SimPlugin {
                 (collision_system, destruction_system)
                     .chain()
                     .in_set(SimSet::Resolution),
+            )
+            .add_systems(
+                FixedUpdate,
+                (cripple_system, boarding_system)
+                    .chain()
+                    .in_set(SimSet::Piracy),
             );
     }
 }

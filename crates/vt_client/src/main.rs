@@ -8,8 +8,10 @@
 //! Controls (a Black-Flag-style helm):
 //!   W / S   — throttle forward / reverse
 //!   A / D   — turn to port / starboard
-//!   Q       — fire the port broadside
-//!   E       — fire the starboard broadside
+//!   Q / E   — fire the port / starboard broadside
+//!   Space   — brace (cut incoming damage)
+//!   B       — board a crippled enemy alongside (loot it)
+//!   R       — restart after a run ends
 
 use bevy::prelude::*;
 use vt_sim::prelude::*;
@@ -320,12 +322,14 @@ impl Lcg {
     }
 }
 
-/// Translate the keyboard into the player ship's [`Helm`] and [`FireOrders`].
+/// Translate the keyboard into the player ship's helm, fire orders, brace, and
+/// a boarding intent.
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
-    mut player: Query<(&mut Helm, &mut FireOrders), With<Player>>,
+    mut board: ResMut<BoardIntent>,
+    mut player: Query<(&mut Helm, &mut FireOrders, &mut Brace), With<Player>>,
 ) {
-    let Ok((mut helm, mut orders)) = player.single_mut() else {
+    let Ok((mut helm, mut orders, mut brace)) = player.single_mut() else {
         return;
     };
 
@@ -349,6 +353,10 @@ fn player_input(
     helm.turn = turn;
     orders.port = keys.pressed(KeyCode::KeyQ);
     orders.starboard = keys.pressed(KeyCode::KeyE);
+    brace.active = keys.pressed(KeyCode::Space);
+    if keys.just_pressed(KeyCode::KeyB) {
+        board.active = true;
+    }
 }
 
 /// Give every ship without one a sprite. The long axis points along the bow.
@@ -419,13 +427,37 @@ fn camera_follow(
     camera.translation.y = rig.target.y + offset.y;
 }
 
-/// Tint each ship's sprite darker as its hull is worn down.
-fn damage_tint(mut ships: Query<(&Faction, &Hull, &mut Sprite), With<Ship>>) {
-    for (faction, hull, mut sprite) in &mut ships {
+/// Tint each ship's sprite: darker as its hull wears down, grey when crippled
+/// (boardable), and a blue cast while bracing.
+fn damage_tint(
+    mut ships: Query<
+        (
+            &Faction,
+            &Hull,
+            &mut Sprite,
+            Option<&Disabled>,
+            Option<&Brace>,
+        ),
+        With<Ship>,
+    >,
+) {
+    for (faction, hull, mut sprite, disabled, brace) in &mut ships {
+        if disabled.is_some() {
+            // Crippled hulk — drifting, boardable.
+            sprite.color = Color::srgb(0.42, 0.44, 0.5);
+            continue;
+        }
         let frac = (hull.current / hull.max).clamp(0.0, 1.0);
         let k = 0.4 + 0.6 * frac;
         let base = faction_color(faction).to_srgba();
-        sprite.color = Color::srgb(base.red * k, base.green * k, base.blue * k);
+        let (mut r, mut g, mut b) = (base.red * k, base.green * k, base.blue * k);
+        if brace.is_some_and(|brace| brace.active) {
+            // Wash toward a cold brace-blue.
+            r = r * 0.5;
+            g = g * 0.6 + 0.3;
+            b = b * 0.5 + 0.5;
+        }
+        sprite.color = Color::srgb(r, g, b);
     }
 }
 
@@ -535,6 +567,8 @@ fn restart(
     projectiles: Query<Entity, With<Projectile>>,
     mut director: ResMut<SpawnDirector>,
     mut encounter: ResMut<Encounter>,
+    mut plunder: ResMut<Plunder>,
+    mut board: ResMut<BoardIntent>,
     mut next: ResMut<NextState<GameState>>,
 ) {
     if !keys.just_pressed(KeyCode::KeyR) {
@@ -544,24 +578,31 @@ fn restart(
         commands.entity(entity).despawn();
     }
     reset_encounter(&mut director, &mut encounter);
+    *plunder = Plunder::default();
+    *board = BoardIntent::default();
     spawn_player(&mut commands);
     next.set(GameState::Playing);
 }
 
-/// Update the heads-up text with the wave, enemies left, and any outcome.
-fn update_hud(encounter: Res<Encounter>, mut hud: Query<&mut Text, With<HudText>>) {
+/// Update the heads-up text with the wave, enemies left, plunder, and outcome.
+fn update_hud(
+    encounter: Res<Encounter>,
+    plunder: Res<Plunder>,
+    mut hud: Query<&mut Text, With<HudText>>,
+) {
     let Ok(mut text) = hud.single_mut() else {
         return;
     };
     text.0 = match encounter.outcome {
         Outcome::InProgress => format!(
-            "Wave {}  ·  enemies: {}",
+            "Wave {}  ·  enemies: {}  ·  plundered: {}\n[W/S] throttle  [A/D] steer  [Q/E] broadside  [Space] brace  [B] board crippled",
             encounter.wave.max(1),
-            encounter.enemies_remaining
+            encounter.enemies_remaining,
+            plunder.ships_boarded,
         ),
         Outcome::Cleared => format!(
-            "ALL {} WAVES CLEARED — the lanes are yours.\nPress R to sail again.",
-            encounter.wave
+            "ALL {} WAVES CLEARED — the lanes are yours.  Ships plundered: {}.\nPress R to sail again.",
+            encounter.wave, plunder.ships_boarded,
         ),
         Outcome::PlayerDestroyed => {
             "YOUR SHIP IS LOST TO THE VOID.\nPress R to sail again.".to_string()

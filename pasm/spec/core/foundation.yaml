@@ -76,6 +76,35 @@ entities:
       paths: [crates/vt_sim/src/plugin.rs]
       symbols: [SimPlugin, SimSet]
 
+  - component: piracy-finisher
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Piracy Finisher — Brace & Board
+      summary: >-
+        Brace (a ship's Brace.active) cuts incoming damage by BRACE_DAMAGE_FACTOR
+        in collision_system. cripple_system marks enemies below CRIPPLE_THRESHOLD
+        hull as Disabled — they stop steering/firing (AI skips Disabled) and
+        drift; boarding_system loots the nearest Disabled ship within BOARD_RANGE
+        of the Protagonist when BoardIntent is raised, tallying Plunder. Runs in
+        SimSet::Piracy after Resolution.
+      references: [ship-combat, enemy-ai, spawn-director]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/piracy.rs, crates/vt_sim/src/components.rs]
+      symbols:
+        [
+          cripple_system,
+          boarding_system,
+          Plunder,
+          BoardIntent,
+          Brace,
+          Disabled,
+          CRIPPLE_THRESHOLD,
+          BOARD_RANGE,
+        ]
+      tests: [crates/vt_sim/src/piracy.rs]
+
   - component: game-feel
     core:
       status: implemented

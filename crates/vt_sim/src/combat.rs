@@ -9,9 +9,12 @@ use bevy_time::Time;
 use bevy_transform::components::Transform;
 
 use crate::components::{
-    Broadside, Collider, Faction, FireOrders, Heading, Hull, Projectile, Ttl, Velocity,
+    Brace, Broadside, Collider, Faction, FireOrders, Heading, Hull, Projectile, Ttl, Velocity,
 };
 use crate::events::{ShipDestroyed, ShipHit};
+
+/// Fraction of damage a braced ship still takes (Black-Flag brace).
+pub const BRACE_DAMAGE_FACTOR: f32 = 0.35;
 
 /// How long a cannonball lives before falling into the void (seconds).
 pub const PROJECTILE_TTL: f32 = 2.5;
@@ -141,17 +144,19 @@ pub fn collision_system(
     mut commands: Commands,
     mut hits: MessageWriter<ShipHit>,
     projectiles: Query<(Entity, &Transform, &Projectile)>,
-    mut ships: Query<(&Transform, &Collider, &Faction, &mut Hull)>,
+    mut ships: Query<(&Transform, &Collider, &Faction, &mut Hull, Option<&Brace>)>,
 ) {
     for (proj_entity, proj_tf, projectile) in &projectiles {
         let proj_pos = proj_tf.translation.truncate();
-        for (ship_tf, collider, faction, mut hull) in &mut ships {
+        for (ship_tf, collider, faction, mut hull, brace) in &mut ships {
             if !projectile.faction.hostile_to(*faction) {
                 continue;
             }
             let ship_pos = ship_tf.translation.truncate();
             if circles_overlap(proj_pos, projectile.radius, ship_pos, collider.radius) {
-                hull.current -= projectile.damage;
+                let braced = brace.is_some_and(|b| b.active);
+                let damage = projectile.damage * if braced { BRACE_DAMAGE_FACTOR } else { 1.0 };
+                hull.current -= damage;
                 hits.write(ShipHit {
                     position: proj_pos,
                     faction: *faction,

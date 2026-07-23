@@ -19,7 +19,7 @@ use bevy_math::Vec2;
 use bevy_transform::components::Transform;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use crate::components::{AiController, Faction, FireOrders, Heading, Helm, Hull, Ship};
+use crate::components::{AiController, Disabled, Faction, FireOrders, Heading, Helm, Hull, Ship};
 
 /// Wrap an angle to the range `(-PI, PI]`.
 fn wrap(angle: f32) -> f32 {
@@ -101,7 +101,7 @@ pub fn ai_system(
             &mut Helm,
             &mut FireOrders,
         ),
-        With<Ship>,
+        (With<Ship>, Without<Disabled>),
     >,
     targets: Query<(&Transform, &Faction), With<Ship>>,
 ) {
