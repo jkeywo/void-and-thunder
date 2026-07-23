@@ -1,0 +1,16 @@
+# Trunk builds the wasm/web client from index.html at the workspace root.
+# `data-bin="vt_client"` in index.html selects the binary; cargo builds it
+# for wasm32 across the workspace.
+#
+# Local dev:   trunk serve         (http://localhost:8080)
+# Local build: trunk build --release
+# The CI Pages build passes --public-url /void-and-thunder/ so asset paths
+# resolve under the project subpath on github.io.
+
+[build]
+target = "index.html"
+dist = "dist"
+
+[serve]
+address = "127.0.0.1"
+port = 8080

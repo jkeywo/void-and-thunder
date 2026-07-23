@@ -1,0 +1,14 @@
+package:
+  id: settled_dark
+  display_name: The Settled Dark
+  spec: worldspec-core/0.6
+
+revision: { id: settled-dark-0.1, status: development }
+
+extensions: []
+genre_profile: grimdark_science_fiction
+style_profiles: [grimdark, gothic]     # bible voice, shared with both consumers
+
+dependencies: {}                       # leaf setting base
+
+validation: { mode: development }

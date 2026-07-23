@@ -1,0 +1,126 @@
+entities:
+  - system: void-and-thunder-simulation
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Void & Thunder Simulation
+      summary: >-
+        Renderer-agnostic, fixed-step ship simulation for space piracy in the
+        Settled Dark. Built on Bevy ECS (logic-only subcrates), so it runs
+        headless in tests. Owns all game rules; the client owns none.
+      references: [ship-movement, ship-combat, sim-plugin]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src]
+      symbols: [SimPlugin, SimSet]
+      tests: [crates/vt_sim/src/ship.rs, crates/vt_sim/src/combat.rs]
+
+  - component: ship-movement
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Ship Movement
+      summary: >-
+        Arcade helm physics — the throttle/turn intent in Helm rotates the hull,
+        thrusts along the bow, applies drag and clamps to a sail-set top speed,
+        then integrates position. Pure maths in helm_step; the ECS system wraps
+        it. Heading is the source of truth and is written into Transform.
+      references: [ship-combat]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/ship.rs, crates/vt_sim/src/components.rs]
+      symbols: [helm_step, movement_system, ShipStats, Helm, Heading, Velocity]
+      tests: [crates/vt_sim/src/ship.rs]
+
+  - component: ship-combat
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Ship Combat
+      summary: >-
+        Black-Flag-style broadsides. FireOrders discharge a port or starboard
+        bank on cooldown; the volley spreads cannonballs along the hull, each
+        inheriting ship momentum. Projectiles fly, expire on a TTL, and on a
+        circle overlap apply damage to hostile-faction hulls; dead hulls despawn.
+      references: [ship-movement]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/combat.rs, crates/vt_sim/src/components.rs]
+      symbols:
+        [
+          broadside_volley,
+          circles_overlap,
+          weapons_system,
+          projectile_system,
+          collision_system,
+          destruction_system,
+          Broadside,
+          Projectile,
+          Hull,
+          Faction,
+        ]
+      tests: [crates/vt_sim/src/combat.rs]
+
+  - component: sim-plugin
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Simulation Plugin
+      summary: >-
+        Wires every sim system into FixedUpdate in a fixed order
+        (Movement -> Weapons -> Resolution) via SimSet, so ship physics is
+        deterministic and independent of render framerate.
+      references: [ship-movement, ship-combat]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/plugin.rs]
+      symbols: [SimPlugin, SimSet]
+
+  - component: client-shell
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Client Shell (renderer, input, window)
+      summary: >-
+        The Bevy front end. Mounts SimPlugin, spawns ships as sim entities,
+        translates the keyboard into Helm/FireOrders intent, and draws sim
+        entities as sprites (long axis = bow). Native and wasm from one binary.
+        Owns no game rules.
+      references: [void-and-thunder-simulation]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/main.rs]
+      symbols: [player_input, attach_ship_sprites, camera_follow, Player]
+
+  # ---- Proposed for the MVP (see docs/mvp-plan.md) ----
+
+  - component: enemy-ai
+    core:
+      status: proposed
+      confidence: provisional
+      title: Enemy Ship AI
+      summary: >-
+        A controller that writes Helm/FireOrders for non-player ships: pursue
+        the target, present a broadside (turn so the beam faces the enemy), fire
+        when the arc lines up, peel off when hull is low.
+      references: [ship-movement, ship-combat]
+
+  - component: spawn-director
+    core:
+      status: proposed
+      confidence: provisional
+      title: Spawn Director
+      summary: >-
+        Populates a star system with hostile ships in escalating waves around
+        the player, and tracks the encounter (ships remaining, player survival).
+      references: [enemy-ai]
+
+  - component: star-system
+    core:
+      status: proposed
+      confidence: provisional
+      title: Star System Playfield
+      summary: >-
+        A bounded system to fly around — a central star, a few stations/planets
+        as landmarks and soft bounds that keep play near the action.
+      references: [ship-movement]

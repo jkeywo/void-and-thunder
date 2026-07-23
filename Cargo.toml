@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["crates/vt_sim", "crates/vt_client"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["John K"]
+repository = "https://github.com/jkeywo/void-and-thunder"
+
+[workspace.dependencies]
+# Full engine — client only.
+bevy = "0.19"
+# Logic-only subcrates — the simulation crate uses these (no renderer/window/audio),
+# so it stays headless and unit-testable while sharing Transform with the client.
+bevy_app = "0.19"
+bevy_ecs = "0.19"
+bevy_math = "0.19"
+bevy_time = "0.19"
+bevy_transform = "0.19"
+
+vt_sim = { path = "crates/vt_sim" }
+
+# Faster iterative builds: our code lightly optimised, dependencies fully optimised.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# Smaller, faster wasm for the web client.
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+panic = "abort"

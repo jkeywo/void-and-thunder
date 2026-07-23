@@ -1,0 +1,64 @@
+entities:
+  - decision: sim-on-bevy-ecs
+    core:
+      status: accepted
+      confidence: confirmed
+      title: The simulation is structured on Bevy ECS, not plain Rust
+      summary: >-
+        vt_sim depends on the logic-only Bevy subcrates (bevy_ecs, bevy_app,
+        bevy_math, bevy_time, bevy_transform) and models ships as ECS entities
+        with a SimPlugin, rather than a hand-rolled struct-of-arrays sim.
+      rationale:
+        - >-
+          Keeps one authoring model (ECS) across sim and client, and lets sim
+          and renderer share Transform directly.
+        - >-
+          Still compiles fast and runs headless because no render, window or
+          audio crates are pulled in.
+        - >-
+          Pure gameplay maths (helm_step, broadside_volley) stays in free
+          functions so it is unit-testable without a World.
+      references: [void-and-thunder-simulation, sim-plugin]
+
+  - decision: fixed-update-sim
+    core:
+      status: accepted
+      confidence: confirmed
+      title: All sim systems run in FixedUpdate
+      summary: Movement/weapons/resolution run at a fixed timestep, ordered by SimSet.
+      rationale:
+        - Deterministic ship physics independent of render framerate.
+        - A precondition for replays and for fair, repeatable combat tuning.
+      references: [sim-plugin]
+
+  - decision: web-deploy-via-trunk-pages
+    core:
+      status: accepted
+      confidence: confirmed
+      title: Web client ships via Trunk to GitHub Pages on push to main
+      summary: >-
+        trunk build --release --public-url /void-and-thunder/ in CI, published
+        with the official actions/deploy-pages flow.
+      rationale:
+        - Trunk is the standard Bevy/wasm bundler.
+        - >-
+          public-url matches the repo subpath so assets resolve on
+          <user>.github.io/void-and-thunder/.
+      references: [client-shell]
+
+  - decision: setting-vendored
+    core:
+      status: accepted
+      confidence: confirmed
+      title: The Settled Dark setting is vendored read-only into the repo
+      summary: >-
+        design/setting/settled_dark/ holds a copy of the shared worldspec
+        package, with SOURCE.md recording where canon lives.
+      rationale:
+        - >-
+          The game must build and deploy self-contained; CI has no access to the
+          AnalogueGames worldspec tree.
+        - >-
+          Canon still lives upstream; this is a read-only snapshot the game reads
+          for flavour and naming.
+      references: [ship-combat]

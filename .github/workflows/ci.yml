@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust — fmt, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Test (sim + client build)
+        run: cargo test --workspace
+
+  pasm:
+    name: PASM — architecture spec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Validate the spec, then scan the implementation against it
+        run: |
+          uv run pasm validate pasm/spec
+          uv run pasm scan pasm/spec --json > pasm-scan.json || true

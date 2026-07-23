@@ -1,0 +1,16 @@
+[package]
+name = "vt_sim"
+description = "Void & Thunder simulation — ship physics, combat, spawning. Renderer-agnostic, built on Bevy ECS."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Logic-only Bevy: ECS, App/Plugin, math, time, transform. No render/window/audio.
+bevy_app.workspace = true
+bevy_ecs.workspace = true
+bevy_math.workspace = true
+bevy_time.workspace = true
+bevy_transform.workspace = true

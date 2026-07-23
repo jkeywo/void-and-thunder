@@ -1,0 +1,16 @@
+[project]
+name = "void-and-thunder-tooling"
+version = "0.1.0"
+description = "Design/architecture tooling for Void & Thunder. The game is Rust; this exists only to run PASM against the spec in pasm/spec."
+requires-python = ">=3.11"
+dependencies = [
+    # PASM: models the intended shape of the codebase and checks the Rust
+    # implementation against it, so an agent can't quietly invent a second way
+    # of doing something that already exists. See pasm/spec/.
+    "pasm @ git+https://github.com/jkeywo/pasm",
+]
+
+[tool.uv]
+# Local checkout override — comment out to pin to the git revision above.
+# [tool.uv.sources]
+# pasm = { path = "../pasm", editable = true }

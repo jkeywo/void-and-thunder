@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Void &amp; Thunder</title>
+    <link data-trunk rel="rust" href="crates/vt_client/Cargo.toml" data-bin="vt_client" data-wasm-opt="s" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #05050c;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        outline: none;
+      }
+      #loading {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        color: #7a7ab0;
+        font: 500 1rem/1.5 system-ui, sans-serif;
+        letter-spacing: 0.04em;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading">Crossing the void&hellip;<br /><small>loading Void &amp; Thunder</small></div>
+    <script type="module">
+      // Hide the loader once the wasm app has attached its canvas.
+      const obs = new MutationObserver(() => {
+        if (document.querySelector('canvas')) {
+          const l = document.getElementById('loading');
+          if (l) l.remove();
+          obs.disconnect();
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+    </script>
+  </body>
+</html>

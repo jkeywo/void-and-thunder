@@ -1,0 +1,35 @@
+//! # Void & Thunder — Simulation
+//!
+//! The renderer-agnostic core of the game: ship physics and ship-to-ship
+//! combat in the void lanes of the Settled Dark, built on Bevy's ECS.
+//!
+//! This crate depends only on the *logic* parts of Bevy (`bevy_ecs`,
+//! `bevy_app`, `bevy_math`, `bevy_time`, `bevy_transform`) — no windowing,
+//! rendering or audio — so it compiles fast and runs headless in tests. The
+//! `vt_client` crate supplies the renderer, input and window, and mounts
+//! [`SimPlugin`] to bring the simulation to life.
+//!
+//! ## Shape of a ship
+//!
+//! A ship is an entity with: [`Ship`], [`Transform`](bevy_transform::components::Transform)
+//! (position), [`Heading`], [`Velocity`], [`ShipStats`], [`Helm`] (control
+//! intent), [`Hull`], [`Collider`], [`Faction`], plus one [`Broadside`] and a
+//! [`FireOrders`]. A controller (the player, or later an AI) writes `Helm` and
+//! `FireOrders`; the sim does the rest.
+
+pub mod combat;
+pub mod components;
+pub mod plugin;
+pub mod ship;
+
+pub use plugin::{SimPlugin, SimSet};
+
+/// Common imports for consumers of the simulation.
+pub mod prelude {
+    pub use crate::combat::{broadside_volley, ProjectileSpawn};
+    pub use crate::components::{
+        Broadside, Collider, Faction, FireOrders, Heading, Helm, Hull, Projectile, Ship, ShipStats,
+        Ttl, Velocity,
+    };
+    pub use crate::plugin::{SimPlugin, SimSet};
+}

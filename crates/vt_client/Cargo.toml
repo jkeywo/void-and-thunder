@@ -1,0 +1,17 @@
+[package]
+name = "vt_client"
+description = "Void & Thunder client — Bevy renderer, input and window over the vt_sim simulation. Native + wasm."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+bevy.workspace = true
+vt_sim.workspace = true
+
+# Native-only: dynamic linking makes iterative debug builds much faster.
+# Enable with `cargo run --features fast-compile`. Never enabled for wasm.
+[features]
+fast-compile = ["bevy/dynamic_linking"]
