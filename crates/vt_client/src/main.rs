@@ -43,6 +43,12 @@ const CAM_DISTANCE: f32 = 430.0;
 const CAM_HEIGHT: f32 = 170.0;
 /// How quickly the camera yaw catches up to the ship's heading.
 const CAM_YAW_LERP: f32 = 2.5;
+/// Camera pitch (radians above horizontal): resting, minimum, maximum, and the
+/// value it eases to while aiming a broadside.
+const CAM_PITCH_BASE: f32 = 0.55;
+const CAM_PITCH_MIN: f32 = 0.28;
+const CAM_PITCH_MAX: f32 = 1.15;
+const CAM_AIM_PITCH: f32 = 0.72;
 /// Spacing between grid lines on the plane.
 const GRID_SPACING: f32 = 200.0;
 /// Grid cells each way.
@@ -144,14 +150,28 @@ struct BoostBarFill;
 #[derive(Component)]
 struct AimBarFill;
 
-/// Camera orbit + screen-shake state. `yaw` chases the ship's heading; `trauma`
-/// decays each frame and is added to by hits and explosions.
-#[derive(Resource, Default)]
+/// Camera orbit + screen-shake state. `yaw`/`pitch` are eased toward targets set
+/// by free-look or the active aim mode; `trauma` decays each frame and is added
+/// to by hits and explosions.
+#[derive(Resource)]
 struct CameraRig {
     target: Vec2,
     yaw: f32,
+    pitch: f32,
     trauma: f32,
     seed: u32,
+}
+
+impl Default for CameraRig {
+    fn default() -> Self {
+        Self {
+            target: Vec2::ZERO,
+            yaw: 0.0,
+            pitch: CAM_PITCH_BASE,
+            trauma: 0.0,
+            seed: 0,
+        }
+    }
 }
 
 impl CameraRig {
@@ -240,6 +260,7 @@ fn main() {
                 camera_orbit,
                 draw_grid,
                 draw_aim_beams,
+                draw_charge_telegraph,
                 update_hud,
                 update_hull_bar,
                 update_battery_bars,
@@ -282,7 +303,13 @@ const PLAYER_START: Vec2 = Vec2::new(0.0, -520.0);
 /// Spawn the player's corsair sloop — the encounter's protagonist.
 fn spawn_player(commands: &mut Commands) {
     commands.spawn((
-        ship_bundle(Faction::Corsairs, ShipStats::default(), 100.0, PLAYER_START),
+        ship_bundle(
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            PLAYER_START,
+            Broadside::default(),
+        ),
         Player,
         Protagonist,
         BoostDrive::default(),
@@ -661,12 +688,16 @@ fn player_input(
     aiming.port = aim_port;
     aiming.starboard = aim_starboard;
     // Only ever raise the request — the sim clears it once consumed, so a
-    // release is never lost between fixed steps.
+    // release is never lost between fixed steps. The aim direction (toward the
+    // cursor) is clamped to the bank's arc by the sim.
+    let aim_dir = (aim_point - ship).normalize_or_zero();
     if fire_port {
         orders.port = true;
+        orders.aim = Some(aim_dir);
     }
     if fire_starboard {
         orders.starboard = true;
+        orders.aim = Some(aim_dir);
     }
     brace.active = bracing;
     boost.active = boosting;
@@ -813,21 +844,66 @@ fn spawn_emp_effects(
     }
 }
 
-/// Orbit the camera around the player: a shallow view from slightly above the
-/// plane, yawing to follow the ship's heading, plus screen shake.
+/// Orbit the camera around the player. When aiming a broadside the view snaps to
+/// the aim direction; otherwise the player free-looks with the mouse (offset
+/// from screen centre) or right stick — yaw around the ship, pitch between
+/// looking down at it and near-horizontal. Screen shake is added to the eye.
+#[allow(clippy::too_many_arguments)]
 fn camera_orbit(
     time: Res<Time>,
     mut rig: ResMut<CameraRig>,
-    player: Query<(&Transform, &Heading), (With<Player>, Without<MainCamera>)>,
+    aiming: Res<Aiming>,
+    pilot: Res<PilotIntent>,
+    windows: Query<&Window>,
+    gamepads: Query<&Gamepad>,
+    player: Query<(&Transform, &Heading, &Broadside), (With<Player>, Without<MainCamera>)>,
     mut camera: Query<&mut Transform, With<MainCamera>>,
 ) {
     let dt = time.delta_secs();
-    if let Ok((transform, heading)) = player.single() {
-        rig.target = transform.translation.truncate();
-        // Ease the camera yaw toward the ship's heading so turns swing the view.
-        let error = wrap_angle(heading.0 - rig.yaw);
-        rig.yaw = wrap_angle(rig.yaw + error * (1.0 - (-CAM_YAW_LERP * dt).exp()));
+
+    // Free-look offsets from the mouse (offset from centre) and right stick.
+    let (mut look_x, mut look_y) = (0.0f32, 0.0f32);
+    if let Ok(window) = windows.single() {
+        if let (Some(cursor), (w, h)) =
+            (window.cursor_position(), (window.width(), window.height()))
+        {
+            look_x = ((cursor.x / w) * 2.0 - 1.0).clamp(-1.0, 1.0);
+            look_y = ((cursor.y / h) * 2.0 - 1.0).clamp(-1.0, 1.0);
+        }
     }
+    if let Some(pad) = gamepads.iter().next() {
+        let sx = pad.get(GamepadAxis::RightStickX).unwrap_or(0.0);
+        let sy = pad.get(GamepadAxis::RightStickY).unwrap_or(0.0);
+        if sx.abs() > STICK_DEADZONE {
+            look_x = sx;
+        }
+        if sy.abs() > STICK_DEADZONE {
+            look_y = -sy;
+        }
+    }
+
+    let (mut target_yaw, mut target_pitch) = (rig.yaw, CAM_PITCH_BASE);
+    if let Ok((transform, heading, bank)) = player.single() {
+        rig.target = transform.translation.truncate();
+        let pos = transform.translation.truncate();
+        let aiming_broadside = aiming.port || aiming.starboard;
+        if aiming_broadside {
+            // Snap toward where the broadside points.
+            let is_port = aiming.port;
+            let aim_dir = (pilot.aim_point - pos).normalize_or_zero();
+            let dir = broadside_direction(heading.0, is_port, Some(aim_dir), bank.arc);
+            target_yaw = dir.to_angle();
+            target_pitch = CAM_AIM_PITCH;
+        } else {
+            // Follow the heading, offset by free-look.
+            target_yaw = heading.0 + look_x * 0.9;
+            target_pitch = (CAM_PITCH_BASE - look_y * 0.5).clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
+        }
+    }
+
+    let k = 1.0 - (-CAM_YAW_LERP * dt).exp();
+    rig.yaw = wrap_angle(rig.yaw + wrap_angle(target_yaw - rig.yaw) * k);
+    rig.pitch += (target_pitch - rig.pitch) * k;
 
     // Decay trauma; shake amount is trauma squared for a punchy falloff.
     rig.trauma = (rig.trauma - dt * 1.4).clamp(0.0, 1.0);
@@ -837,9 +913,10 @@ fn camera_orbit(
     let Ok(mut camera) = camera.single_mut() else {
         return;
     };
-    let forward = Vec2::from_angle(rig.yaw);
+    let look = Vec2::from_angle(rig.yaw);
+    let back = Vec3::new(-look.x, -look.y, 0.0);
     let focus = rig.target.extend(0.0);
-    let eye = focus - (forward * CAM_DISTANCE).extend(-CAM_HEIGHT) + shake;
+    let eye = focus + (back * rig.pitch.cos() + Vec3::Z * rig.pitch.sin()) * CAM_DISTANCE + shake;
     *camera = Transform::from_translation(eye).looking_at(focus, Vec3::Z);
 }
 
@@ -870,24 +947,45 @@ fn draw_grid(mut gizmos: Gizmos, bounds: Res<SystemBounds>) {
 fn draw_aim_beams(
     mut gizmos: Gizmos,
     aiming: Res<Aiming>,
+    pilot: Res<PilotIntent>,
     player: Query<(&Transform, &Heading, &Velocity, &Broadside), With<Player>>,
 ) {
     let Ok((transform, heading, velocity, bank)) = player.single() else {
         return;
     };
     let pos = transform.translation.truncate();
+    let aim_dir = (pilot.aim_point - pos).normalize_or_zero();
     let color = Color::srgba(1.0, 0.85, 0.4, 0.5);
 
     for (active, is_port) in [(aiming.port, true), (aiming.starboard, false)] {
         if !active {
             continue;
         }
-        for shot in broadside_volley(pos, velocity.0, heading.0, bank, is_port) {
-            let dir = shot.velocity.normalize_or_zero();
+        let dir = broadside_direction(heading.0, is_port, Some(aim_dir), bank.arc);
+        for shot in broadside_volley(pos, velocity.0, dir, bank) {
+            let beam = shot.velocity.normalize_or_zero();
             let start = shot.position.extend(0.0);
-            let end = (shot.position + dir * AIM_BEAM_LEN).extend(0.0);
+            let end = (shot.position + beam * AIM_BEAM_LEN).extend(0.0);
             gizmos.line(start, end, color);
         }
+    }
+}
+
+/// Draw the enemy fire telegraph: a red ring that closes in as a charging
+/// broadside nears firing, plus a line along where the volley will go.
+fn draw_charge_telegraph(mut gizmos: Gizmos, ships: Query<(&Transform, &Broadside)>) {
+    for (transform, bank) in &ships {
+        if bank.charging <= 0.0 || bank.charge_time <= 0.0 {
+            continue;
+        }
+        let pos = transform.translation.truncate();
+        // 1 at the start of the wind-up, 0 the instant it fires.
+        let t = (bank.charging / bank.charge_time).clamp(0.0, 1.0);
+        let radius = 20.0 + t * 70.0;
+        let color = Color::srgba(1.0, 0.3, 0.25, 0.85);
+        gizmos.circle(Isometry3d::from_translation(pos.extend(3.0)), radius, color);
+        let end = pos + bank.charge_dir.normalize_or_zero() * 130.0;
+        gizmos.line(pos.extend(3.0), end.extend(3.0), color);
     }
 }
 

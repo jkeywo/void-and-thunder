@@ -35,7 +35,7 @@ pub use plugin::{SimPlugin, SimSet};
 /// Common imports for consumers of the simulation.
 pub mod prelude {
     pub use crate::ai::desired_helm;
-    pub use crate::combat::{broadside_volley, ProjectileSpawn};
+    pub use crate::combat::{broadside_direction, broadside_volley, ProjectileSpawn};
     pub use crate::components::{
         AiController, BoostDrive, Brace, Broadside, Collider, Disabled, EmpBolt, EmpDefense,
         EmpWeapon, Faction, FireOrders, Heading, Helm, Hull, Landmark, PilotIntent, Projectile,

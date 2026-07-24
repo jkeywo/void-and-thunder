@@ -116,26 +116,41 @@ impl Hull {
 
 /// Firing intent for this frame: which broadside(s) the controller wants to
 /// discharge. Cleared/read by the weapons system. `port` is the ship's left
-/// side (+90° from the bow), `starboard` the right (-90°).
+/// side (+90° from the bow), `starboard` the right (-90°). `aim` is the world
+/// direction the player wants the volley thrown (clamped to the bank's arc);
+/// `None` (the AI's default) fires straight out the beam.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct FireOrders {
     pub port: bool,
     pub starboard: bool,
+    pub aim: Option<Vec2>,
 }
 
-/// A bank of side-mounted cannons — the core Black-Flag offensive weapon.
+/// A bank of side-mounted railguns — the core aimed weapon. The player may steer
+/// the volley within `arc` of the beam; an enemy telegraphs a `charge_time`
+/// wind-up before firing.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Broadside {
     /// Seconds between volleys.
     pub cooldown: f32,
     /// Remaining time until this bank can fire again.
     pub timer: f32,
-    /// Damage per cannonball.
+    /// Damage per shot.
     pub damage: f32,
-    /// Muzzle speed of each ball (units/s), added to the ship's velocity.
+    /// Muzzle speed of each shot (units/s), added to the ship's velocity.
     pub muzzle_speed: f32,
-    /// Number of guns per side (balls per volley, spread along the hull).
+    /// Number of guns per side (shots per volley, spread along the hull).
     pub guns: u32,
+    /// Half-angle the volley may be steered from the beam (radians).
+    pub arc: f32,
+    /// Wind-up before firing (seconds). 0 for the player; ~0.5 for a telegraphed
+    /// enemy so the shot is dodgeable.
+    pub charge_time: f32,
+    /// Remaining wind-up if currently charging (0 = idle). Read by the client to
+    /// draw the telegraph.
+    pub charging: f32,
+    /// World direction captured when the charge began.
+    pub charge_dir: Vec2,
 }
 
 impl Default for Broadside {
@@ -146,6 +161,10 @@ impl Default for Broadside {
             damage: 12.0,
             muzzle_speed: 520.0,
             guns: 3,
+            arc: 0.6, // ~34°
+            charge_time: 0.0,
+            charging: 0.0,
+            charge_dir: Vec2::X,
         }
     }
 }

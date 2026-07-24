@@ -28,29 +28,48 @@ pub struct ProjectileSpawn {
     pub velocity: Vec2,
 }
 
-/// Compute the volley of cannonballs a broadside throws.
-///
-/// `port` fires out the ship's left (+90° from bow), `starboard` out the right.
-/// Guns are spread evenly along the hull so the volley leaves a line, not a
-/// point. Muzzle velocity is added to the ship's own velocity (you inherit the
-/// ship's momentum), which is what makes leading a moving target feel right.
+/// The world direction a broadside on `heading` throws along, given the pilot's
+/// desired `aim` (or `None` to fire straight out the beam), clamped to `±arc` of
+/// the beam. `port` is the ship's left beam (+90° from bow), else starboard.
+pub fn broadside_direction(heading: f32, port: bool, aim: Option<Vec2>, arc: f32) -> Vec2 {
+    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+    let beam = if port {
+        heading + FRAC_PI_2
+    } else {
+        heading - FRAC_PI_2
+    };
+    let wrap = |a: f32| {
+        let a = a.rem_euclid(TAU);
+        if a > PI {
+            a - TAU
+        } else {
+            a
+        }
+    };
+    let angle = match aim {
+        Some(dir) if dir.length_squared() > 1e-6 => {
+            let off = wrap(dir.to_angle() - beam).clamp(-arc, arc);
+            beam + off
+        }
+        _ => beam,
+    };
+    Vec2::from_angle(angle)
+}
+
+/// Compute the volley of shots a broadside throws along `fire_dir` (a unit
+/// world direction). Guns are spread along the hull (perpendicular to the fire
+/// direction) so the volley leaves a line, not a point. Muzzle velocity is added
+/// to the ship's own velocity — you inherit the ship's momentum.
 pub fn broadside_volley(
     ship_pos: Vec2,
     ship_vel: Vec2,
-    heading: f32,
+    fire_dir: Vec2,
     bank: &Broadside,
-    port: bool,
 ) -> Vec<ProjectileSpawn> {
-    let forward = Vec2::from_angle(heading);
-    // Left of the bow is a +90° rotation; right is -90°.
-    let side = if port {
-        forward.perp()
-    } else {
-        -forward.perp()
-    };
+    let dir = fire_dir.normalize_or(Vec2::X);
+    let along = dir.perp(); // spread the guns across the hull
     let guns = bank.guns.max(1);
 
-    // Spread muzzle points along the hull, centred on the ship.
     let hull_length = 40.0;
     let mut out = Vec::with_capacity(guns as usize);
     for i in 0..guns {
@@ -59,8 +78,8 @@ pub fn broadside_volley(
         } else {
             (i as f32 / (guns - 1) as f32) - 0.5
         };
-        let muzzle = ship_pos + forward * (t * hull_length) + side * 22.0;
-        let velocity = ship_vel + side * bank.muzzle_speed;
+        let muzzle = ship_pos + along * (t * hull_length) + dir * 22.0;
+        let velocity = ship_vel + dir * bank.muzzle_speed;
         out.push(ProjectileSpawn {
             position: muzzle,
             velocity,
@@ -74,13 +93,13 @@ pub fn circles_overlap(a: Vec2, ra: f32, b: Vec2, rb: f32) -> bool {
     a.distance_squared(b) <= (ra + rb) * (ra + rb)
 }
 
-/// Bevy system: tick broadside cooldowns and spawn cannonballs for any ship
-/// requesting fire.
+/// Bevy system: fire aimed broadsides, with a per-bank charge/telegraph.
 ///
-/// [`FireOrders`] is a *request*, consumed here — raise a flag and it fires once
-/// (if the bank has reloaded), then the flag is cleared. That is what makes the
-/// player's hold-to-aim / release-to-fire work: the client raises the flag on
-/// release. The AI simply re-requests every tick, so it still fires on cooldown.
+/// [`FireOrders`] is a *request*, consumed here — raise a side and (if the bank
+/// has reloaded) it begins a `charge_time` wind-up along the clamped aim
+/// direction, then fires. `charge_time` 0 (the player) fires immediately; an
+/// enemy's ~0.5s wind-up is drawn by the client so the shot is dodgeable. The AI
+/// re-requests every tick, so it keeps firing on cooldown.
 pub fn weapons_system(
     time: Res<Time>,
     mut commands: Commands,
@@ -98,38 +117,64 @@ pub fn weapons_system(
         if bank.timer > 0.0 {
             bank.timer = (bank.timer - dt).max(0.0);
         }
-        // Consume the request whether or not it can be honoured: a shot asked
-        // for mid-reload is dropped, not queued.
+        let pos = transform.translation.truncate();
+
+        // Resolve an in-progress charge first.
+        if bank.charging > 0.0 {
+            bank.charging = (bank.charging - dt).max(0.0);
+            if bank.charging <= 0.0 {
+                let dir = bank.charge_dir;
+                fire_broadside(&mut commands, pos, velocity.0, dir, &bank, *faction);
+                bank.timer = bank.cooldown;
+            }
+            orders.port = false;
+            orders.starboard = false;
+            continue;
+        }
+
+        // Consume the request (a shot asked for mid-reload is dropped, not queued).
         let (want_port, want_starboard) = (orders.port, orders.starboard);
+        let aim = orders.aim;
         orders.port = false;
         orders.starboard = false;
+        orders.aim = None;
 
         if bank.timer > 0.0 || (!want_port && !want_starboard) {
             continue;
         }
-        let pos = transform.translation.truncate();
-        let mut fired = false;
-        for &(side_active, is_port) in &[(want_port, true), (want_starboard, false)] {
-            if !side_active {
-                continue;
-            }
-            for shot in broadside_volley(pos, velocity.0, heading.0, &bank, is_port) {
-                commands.spawn((
-                    Projectile {
-                        damage: bank.damage,
-                        faction: *faction,
-                        radius: PROJECTILE_RADIUS,
-                    },
-                    Velocity(shot.velocity),
-                    Transform::from_translation(shot.position.extend(0.0)),
-                    Ttl(PROJECTILE_TTL),
-                ));
-            }
-            fired = true;
-        }
-        if fired {
+        // One side per volley; prefer port if both were requested.
+        let is_port = want_port;
+        let dir = broadside_direction(heading.0, is_port, aim, bank.arc);
+        if bank.charge_time > 0.0 {
+            bank.charging = bank.charge_time;
+            bank.charge_dir = dir;
+        } else {
+            fire_broadside(&mut commands, pos, velocity.0, dir, &bank, *faction);
             bank.timer = bank.cooldown;
         }
+    }
+}
+
+/// Spawn one broadside volley along `dir`.
+fn fire_broadside(
+    commands: &mut Commands,
+    pos: Vec2,
+    ship_vel: Vec2,
+    dir: Vec2,
+    bank: &Broadside,
+    faction: Faction,
+) {
+    for shot in broadside_volley(pos, ship_vel, dir, bank) {
+        commands.spawn((
+            Projectile {
+                damage: bank.damage,
+                faction,
+                radius: PROJECTILE_RADIUS,
+            },
+            Velocity(shot.velocity),
+            Transform::from_translation(shot.position.extend(0.0)),
+            Ttl(PROJECTILE_TTL),
+        ));
     }
 }
 
@@ -207,40 +252,38 @@ mod tests {
             guns: 3,
             ..Default::default()
         };
-        let volley = broadside_volley(Vec2::ZERO, Vec2::ZERO, 0.0, &bank, true);
+        let volley = broadside_volley(Vec2::ZERO, Vec2::ZERO, Vec2::Y, &bank);
         assert_eq!(volley.len(), 3);
     }
 
     #[test]
-    fn port_and_starboard_fire_opposite_sides() {
-        let bank = Broadside {
-            guns: 1,
-            muzzle_speed: 100.0,
-            ..Default::default()
-        };
-        // Facing +X: port is +Y, starboard is -Y.
-        let port = broadside_volley(Vec2::ZERO, Vec2::ZERO, 0.0, &bank, true)[0];
-        let stbd = broadside_volley(Vec2::ZERO, Vec2::ZERO, 0.0, &bank, false)[0];
+    fn beam_direction_defaults_to_the_side() {
+        // Facing +X (heading 0): port beam is +Y, starboard is -Y.
+        assert!(broadside_direction(0.0, true, None, 0.6).y > 0.9);
+        assert!(broadside_direction(0.0, false, None, 0.6).y < -0.9);
+    }
+
+    #[test]
+    fn aim_is_clamped_to_the_arc() {
+        // Facing +X, port beam +Y (90°); asking to fire forward (+X, 0°) is 90°
+        // off the beam but the arc is only ~34°, so it clamps toward +Y.
+        let dir = broadside_direction(0.0, true, Some(Vec2::X), 0.6);
+        let angle = dir.to_angle();
         assert!(
-            port.velocity.y > 0.0,
-            "port should throw +Y, got {}",
-            port.velocity.y
-        );
-        assert!(
-            stbd.velocity.y < 0.0,
-            "starboard should throw -Y, got {}",
-            stbd.velocity.y
+            angle >= std::f32::consts::FRAC_PI_2 - 0.6 - 1e-3,
+            "clamped angle {angle} left the arc"
         );
     }
 
     #[test]
-    fn balls_inherit_ship_momentum() {
+    fn shots_inherit_ship_momentum() {
         let bank = Broadside {
             guns: 1,
             ..Default::default()
         };
+        // Fire straight +Y; the ship's +X momentum carries into the shot.
         let ship_vel = Vec2::new(50.0, 0.0);
-        let shot = broadside_volley(Vec2::ZERO, ship_vel, 0.0, &bank, true)[0];
+        let shot = broadside_volley(Vec2::ZERO, ship_vel, Vec2::Y, &bank)[0];
         assert!(
             (shot.velocity.x - 50.0).abs() < 1e-4,
             "vx was {}",

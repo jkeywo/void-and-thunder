@@ -17,8 +17,16 @@ use crate::components::{
 use crate::world::SystemBounds;
 
 /// The components that make an entity a ship. The one true ship constructor —
-/// the player adds [`Protagonist`], the director adds [`AiController`].
-pub fn ship_bundle(faction: Faction, stats: ShipStats, hull_max: f32, pos: Vec2) -> impl Bundle {
+/// the player adds [`Protagonist`], the director adds [`AiController`]. The
+/// `broadside` is passed in so each hull can carry a different one (the player's
+/// fires instantly; enemies telegraph a charge).
+pub fn ship_bundle(
+    faction: Faction,
+    stats: ShipStats,
+    hull_max: f32,
+    pos: Vec2,
+    broadside: Broadside,
+) -> impl Bundle {
     (
         Ship,
         faction,
@@ -28,7 +36,7 @@ pub fn ship_bundle(faction: Faction, stats: ShipStats, hull_max: f32, pos: Vec2)
         Helm::default(),
         FireOrders::default(),
         Brace::default(),
-        Broadside::default(),
+        broadside,
         Hull::new(hull_max),
         Collider::default(),
         EmpDefense::default(),
@@ -157,9 +165,16 @@ pub fn director_system(
         max_speed: 200.0,
         ..Default::default()
     };
+    // Enemy broadsides fire slower and telegraph a 0.5s charge, so the player
+    // can read and dodge them.
+    let enemy_broadside = Broadside {
+        cooldown: 2.8,
+        charge_time: 0.5,
+        ..Default::default()
+    };
     for pos in wave_spawn_points(count, bounds.radius * 0.85, jitter) {
         commands.spawn((
-            ship_bundle(director.faction, stats, hull, pos),
+            ship_bundle(director.faction, stats, hull, pos, enemy_broadside),
             AiController::default(),
         ));
     }
