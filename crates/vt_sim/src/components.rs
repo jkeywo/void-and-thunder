@@ -424,10 +424,12 @@ pub struct Torpedo {
     pub vel: Vec3,
 }
 
-/// The player's transient aiming/firing intent, rebuilt each frame by the
-/// client. The sim reads it to aim weapons and pick targets, keeping the rules
-/// authoritative. Fields are added as later phases land.
-#[derive(Resource, Clone, Copy, Debug, Default)]
+/// A ship's transient aiming/firing intent, rebuilt each frame by whatever
+/// controls it — the client for the player, an AI for others. It is a
+/// *component*, so every ship carries its own and the weapon systems read it
+/// per-ship; the only difference between a player ship and an AI ship is which
+/// system writes this (plus [`Helm`]/[`FireOrders`]).
+#[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PilotIntent {
     /// World point under the aim cursor (mouse / right stick).
     pub aim_point: Vec2,

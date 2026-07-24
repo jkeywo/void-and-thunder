@@ -11,21 +11,74 @@ use bevy_transform::components::Transform;
 use std::f32::consts::TAU;
 
 use crate::components::{
-    AiController, Brace, Broadside, Collider, EmpDefense, Faction, FireOrders, Heading, Helm, Hull,
-    Protagonist, Ship, ShipStats, SpeedScale, Velocity,
+    AiController, BoostDrive, Brace, Broadside, Collider, EmpDefense, EmpWeapon, Faction,
+    FireOrders, Heading, Helm, Hull, MicrowarpDrive, PilotIntent, Protagonist, Ship, ShipStats,
+    SpeedScale, TorpedoBay, Velocity,
 };
 use crate::world::SystemBounds;
 
-/// The components that make an entity a ship. The one true ship constructor —
-/// the player adds [`Protagonist`], the director adds [`AiController`]. The
-/// `broadside` is passed in so each hull can carry a different one (the player's
-/// fires instantly; enemies telegraph a charge).
+/// A ship's full weapon/drive loadout. Every ship carries the same kit; presets
+/// differ only in tuning, so a player and an AI ship are the same entity shape.
+#[derive(Clone, Copy, Debug)]
+pub struct ShipLoadout {
+    pub broadside: Broadside,
+    pub emp: EmpWeapon,
+    pub torpedoes: TorpedoBay,
+    pub boost: BoostDrive,
+    pub microwarp: MicrowarpDrive,
+}
+
+impl Default for ShipLoadout {
+    fn default() -> Self {
+        Self {
+            broadside: Broadside::default(),
+            emp: EmpWeapon::default(),
+            torpedoes: TorpedoBay::default(),
+            boost: BoostDrive::default(),
+            microwarp: MicrowarpDrive::default(),
+        }
+    }
+}
+
+impl ShipLoadout {
+    /// The player's loadout: a heavy 10s broadside and a 20s microwarp.
+    pub fn player() -> Self {
+        Self {
+            broadside: Broadside {
+                cooldown: 10.0,
+                ..Broadside::default()
+            },
+            microwarp: MicrowarpDrive {
+                cooldown: 20.0,
+                ..MicrowarpDrive::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// An enemy's loadout: a slower broadside that telegraphs a 0.5s charge.
+    pub fn enemy() -> Self {
+        Self {
+            broadside: Broadside {
+                cooldown: 2.8,
+                charge_time: 0.5,
+                ..Broadside::default()
+            },
+            ..Self::default()
+        }
+    }
+}
+
+/// The one true ship constructor. Every ship is the same entity shape: base
+/// hull + the full [`ShipLoadout`] + a [`PilotIntent`] its controller writes.
+/// The player adds [`Protagonist`]; an AI adds [`AiController`]. Which one drives
+/// the ship — the client or the sim's AI — is the *only* difference.
 pub fn ship_bundle(
     faction: Faction,
     stats: ShipStats,
     hull_max: f32,
     pos: Vec2,
-    broadside: Broadside,
+    loadout: ShipLoadout,
 ) -> impl Bundle {
     (
         Ship,
@@ -35,13 +88,21 @@ pub fn ship_bundle(
         Velocity::default(),
         Helm::default(),
         FireOrders::default(),
+        PilotIntent::default(),
         Brace::default(),
-        broadside,
         Hull::new(hull_max),
         Collider::default(),
         EmpDefense::default(),
         SpeedScale::default(),
         Transform::from_translation(pos.extend(0.0)),
+        // The full kit — identical set on every ship.
+        (
+            loadout.broadside,
+            loadout.emp,
+            loadout.torpedoes,
+            loadout.boost,
+            loadout.microwarp,
+        ),
     )
 }
 
@@ -165,16 +226,9 @@ pub fn director_system(
         max_speed: 100.0,
         ..Default::default()
     };
-    // Enemy broadsides fire slower and telegraph a 0.5s charge, so the player
-    // can read and dodge them.
-    let enemy_broadside = Broadside {
-        cooldown: 2.8,
-        charge_time: 0.5,
-        ..Default::default()
-    };
     for pos in wave_spawn_points(count, bounds.radius * 0.85, jitter) {
         commands.spawn((
-            ship_bundle(director.faction, stats, hull, pos, enemy_broadside),
+            ship_bundle(director.faction, stats, hull, pos, ShipLoadout::enemy()),
             AiController::default(),
         ));
     }

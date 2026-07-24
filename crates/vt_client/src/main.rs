@@ -344,27 +344,18 @@ const PLAYER_START: Vec2 = Vec2::new(0.0, -520.0);
 
 /// Spawn the player's corsair sloop — the encounter's protagonist.
 fn spawn_player(commands: &mut Commands) {
+    // A player ship is an ordinary ship — the full kit comes from the loadout;
+    // the `Player` marker is what routes the client's input into its PilotIntent.
     commands.spawn((
         ship_bundle(
             Faction::Corsairs,
             ShipStats::default(),
             100.0,
             PLAYER_START,
-            // The player's broadside is a heavy, slow-recharging weapon.
-            Broadside {
-                cooldown: 10.0,
-                ..Broadside::default()
-            },
+            ShipLoadout::player(),
         ),
         Player,
         Protagonist,
-        BoostDrive::default(),
-        EmpWeapon::default(),
-        TorpedoBay::default(),
-        MicrowarpDrive {
-            cooldown: 20.0,
-            ..MicrowarpDrive::default()
-        },
     ));
 }
 
@@ -658,20 +649,21 @@ fn player_input(
     camera_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut board: ResMut<BoardIntent>,
     mut aiming: ResMut<Aiming>,
-    mut pilot: ResMut<PilotIntent>,
     mut player: Query<
         (
             &mut Helm,
             &mut FireOrders,
             &mut Brace,
             &mut BoostDrive,
+            &mut PilotIntent,
             &Transform,
             &Heading,
         ),
         With<Player>,
     >,
 ) {
-    let Ok((mut helm, mut orders, mut brace, mut boost, transform, heading)) = player.single_mut()
+    let Ok((mut helm, mut orders, mut brace, mut boost, mut pilot, transform, heading)) =
+        player.single_mut()
     else {
         return;
     };
@@ -923,11 +915,16 @@ fn camera_orbit(
     time: Res<Time>,
     mut rig: ResMut<CameraRig>,
     aiming: Res<Aiming>,
-    pilot: Res<PilotIntent>,
     windows: Query<&Window>,
     gamepads: Query<&Gamepad>,
     player: Query<
-        (&Transform, &Heading, &Broadside, &MicrowarpDrive),
+        (
+            &Transform,
+            &Heading,
+            &Broadside,
+            &MicrowarpDrive,
+            &PilotIntent,
+        ),
         (With<Player>, Without<MainCamera>),
     >,
     mut camera: Query<&mut Transform, With<MainCamera>>,
@@ -958,7 +955,7 @@ fn camera_orbit(
     let (mut target_yaw, mut target_pitch) = (rig.yaw, CAM_PITCH_BASE);
     let mut desired_focus = rig.target;
     let mut locked = false;
-    if let Ok((transform, heading, bank, drive)) = player.single() {
+    if let Ok((transform, heading, bank, drive, pilot)) = player.single() {
         let pos = transform.translation.truncate();
         desired_focus = pos;
         let aiming_broadside = aiming.port || aiming.starboard;
@@ -1040,10 +1037,9 @@ fn draw_grid(mut gizmos: Gizmos, bounds: Res<SystemBounds>) {
 fn draw_aim_beams(
     mut gizmos: Gizmos,
     aiming: Res<Aiming>,
-    pilot: Res<PilotIntent>,
-    player: Query<(&Transform, &Heading, &Velocity, &Broadside), With<Player>>,
+    player: Query<(&Transform, &Heading, &Velocity, &Broadside, &PilotIntent), With<Player>>,
 ) {
-    let Ok((transform, heading, velocity, bank)) = player.single() else {
+    let Ok((transform, heading, velocity, bank, pilot)) = player.single() else {
         return;
     };
     let pos = transform.translation.truncate();
@@ -1065,7 +1061,10 @@ fn draw_aim_beams(
 }
 
 /// Draw a small reticle on the plane where the aim cursor points.
-fn draw_reticle(mut gizmos: Gizmos, pilot: Res<PilotIntent>) {
+fn draw_reticle(mut gizmos: Gizmos, player: Query<&PilotIntent, With<Player>>) {
+    let Ok(pilot) = player.single() else {
+        return;
+    };
     gizmos.circle(
         Isometry3d::from_translation(pilot.aim_point.extend(1.0)),
         14.0,
@@ -1077,15 +1076,14 @@ fn draw_reticle(mut gizmos: Gizmos, pilot: Res<PilotIntent>) {
 /// clamped destination.
 fn draw_microwarp_range(
     mut gizmos: Gizmos,
-    pilot: Res<PilotIntent>,
-    player: Query<(&Transform, &MicrowarpDrive), With<Player>>,
+    player: Query<(&Transform, &MicrowarpDrive, &PilotIntent), With<Player>>,
 ) {
+    let Ok((transform, drive, pilot)) = player.single() else {
+        return;
+    };
     if !pilot.microwarp_hold {
         return;
     }
-    let Ok((transform, drive)) = player.single() else {
-        return;
-    };
     let ship = transform.translation.truncate();
     let dest = clamp_to_range(ship, pilot.aim_point, drive.range);
     let color = Color::srgba(0.4, 0.9, 0.7, 0.5);
@@ -1100,24 +1098,26 @@ fn draw_microwarp_range(
 /// Show the microwarp ghost at the clamped destination while the pilot aims a
 /// warp, matching the player's heading; hide it otherwise.
 fn microwarp_ghost(
-    pilot: Res<PilotIntent>,
-    player: Query<(&Transform, &Heading, &MicrowarpDrive), (With<Player>, Without<MicrowarpGhost>)>,
+    player: Query<
+        (&Transform, &Heading, &MicrowarpDrive, &PilotIntent),
+        (With<Player>, Without<MicrowarpGhost>),
+    >,
     mut ghost: Query<(&mut Transform, &mut Visibility), With<MicrowarpGhost>>,
 ) {
     let Ok((mut ghost_tf, mut visibility)) = ghost.single_mut() else {
         return;
     };
-    if pilot.microwarp_hold {
-        if let Ok((transform, heading, drive)) = player.single() {
+    if let Ok((transform, heading, drive, pilot)) = player.single() {
+        if pilot.microwarp_hold {
             let origin = transform.translation.truncate();
             let dest = clamp_to_range(origin, pilot.aim_point, drive.range);
             ghost_tf.translation = dest.extend(0.0);
             ghost_tf.rotation = Quat::from_rotation_z(heading.0);
             *visibility = Visibility::Visible;
+            return;
         }
-    } else {
-        *visibility = Visibility::Hidden;
     }
+    *visibility = Visibility::Hidden;
 }
 
 /// Draw the enemy fire telegraph: a red ring that closes in as a charging
@@ -1368,12 +1368,15 @@ fn aim_time_dilation(
     real: Res<Time<Real>>,
     mut virt: ResMut<Time<Virtual>>,
     aiming: Res<Aiming>,
-    pilot: Res<PilotIntent>,
+    player: Query<&PilotIntent, With<Player>>,
     mut battery: ResMut<AimBattery>,
 ) {
     let dt = real.delta_secs();
-    let wants_dilation =
-        aiming.port || aiming.starboard || pilot.torpedo_hold || pilot.microwarp_hold;
+    let (torpedo_hold, microwarp_hold) = player
+        .single()
+        .map(|p| (p.torpedo_hold, p.microwarp_hold))
+        .unwrap_or((false, false));
+    let wants_dilation = aiming.port || aiming.starboard || torpedo_hold || microwarp_hold;
     let target = if wants_dilation && battery.charge > 0.0 {
         battery.charge = (battery.charge - battery.drain_per_sec * dt).max(0.0);
         AIM_TIMESCALE

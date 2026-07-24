@@ -23,6 +23,7 @@ pub mod components;
 pub mod drive;
 pub mod emp;
 pub mod events;
+pub mod harness;
 pub mod piracy;
 pub mod plugin;
 pub mod ship;
@@ -43,8 +44,11 @@ pub mod prelude {
     };
     pub use crate::drive::{clamp_to_range, speed_scale};
     pub use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
+    pub use crate::harness::Harness;
     pub use crate::piracy::{BoardIntent, Plunder, BOARD_RANGE, CRIPPLE_THRESHOLD};
     pub use crate::plugin::{SimPlugin, SimSet};
-    pub use crate::spawn::{reset_encounter, ship_bundle, Encounter, Outcome, SpawnDirector};
+    pub use crate::spawn::{
+        reset_encounter, ship_bundle, Encounter, Outcome, ShipLoadout, SpawnDirector,
+    };
     pub use crate::world::{bounds_return, SystemBounds};
 }

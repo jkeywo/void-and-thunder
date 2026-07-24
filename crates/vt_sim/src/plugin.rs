@@ -10,7 +10,6 @@ use bevy_ecs::prelude::*;
 
 use crate::ai::ai_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
-use crate::components::PilotIntent;
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
 use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
@@ -55,7 +54,6 @@ impl Plugin for SimPlugin {
             .init_resource::<Encounter>()
             .init_resource::<Plunder>()
             .init_resource::<BoardIntent>()
-            .init_resource::<PilotIntent>()
             .add_message::<ShipHit>()
             .add_message::<ShipDestroyed>()
             .add_message::<EmpImpact>()

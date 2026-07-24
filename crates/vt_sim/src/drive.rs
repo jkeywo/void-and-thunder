@@ -63,14 +63,14 @@ pub fn clamp_to_range(origin: Vec2, point: Vec2, range: f32) -> Vec2 {
 }
 
 /// Bevy system: teleport a microwarp ship to the aim point (clamped to range)
-/// when the pilot releases, if the drive has cooled down.
+/// when the pilot releases, if the drive has cooled down. Reads each ship's own
+/// [`PilotIntent`], so player and AI ships share the system.
 pub fn microwarp_system(
     time: Res<Time>,
-    intent: Res<PilotIntent>,
-    mut ships: Query<(&mut Transform, &mut MicrowarpDrive)>,
+    mut ships: Query<(&mut Transform, &mut MicrowarpDrive, &PilotIntent)>,
 ) {
     let dt = time.delta_secs();
-    for (mut transform, mut drive) in &mut ships {
+    for (mut transform, mut drive, intent) in &mut ships {
         drive.timer = (drive.timer - dt).max(0.0);
         let hold = intent.microwarp_hold;
         if drive.was_holding && !hold && drive.timer <= 0.0 {

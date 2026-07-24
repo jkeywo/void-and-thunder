@@ -62,15 +62,16 @@ pub fn swivel_toward(current: f32, desired: f32, max_delta: f32) -> f32 {
 }
 
 /// Bevy system: swivel each EMP emitter toward its target and fire on cooldown.
+/// Each ship reads its own [`PilotIntent`], so player and AI ships use the same
+/// weapon system — only the controller writing the intent differs.
 pub fn emp_system(
     time: Res<Time>,
-    intent: Res<PilotIntent>,
     mut commands: Commands,
-    mut shooters: Query<(&Transform, &Heading, &Faction, &mut EmpWeapon)>,
+    mut shooters: Query<(&Transform, &Heading, &Faction, &mut EmpWeapon, &PilotIntent)>,
     targets: Query<(&Transform, &Velocity, &Faction), With<Ship>>,
 ) {
     let dt = time.delta_secs();
-    for (transform, heading, faction, mut emp) in &mut shooters {
+    for (transform, heading, faction, mut emp, intent) in &mut shooters {
         emp.timer = (emp.timer - dt).max(0.0);
         if !intent.emp_fire {
             continue;

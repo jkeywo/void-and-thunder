@@ -58,16 +58,16 @@ pub fn torpedo_reload_system(time: Res<Time>, mut bays: Query<&mut TorpedoBay>) 
     }
 }
 
-/// Bevy system: accrue locks while aiming; fire a volley on release.
+/// Bevy system: accrue locks while aiming; fire a volley on release. Each bay
+/// reads its own [`PilotIntent`], so this drives player and AI ships alike.
 pub fn torpedo_aim_system(
     time: Res<Time>,
-    intent: Res<PilotIntent>,
     mut commands: Commands,
-    mut bays: Query<(&Transform, &Faction, &mut TorpedoBay)>,
+    mut bays: Query<(&Transform, &Faction, &mut TorpedoBay, &PilotIntent)>,
     targets: Query<(Entity, &Transform, &Faction), With<Ship>>,
 ) {
     let dt = time.delta_secs();
-    for (transform, faction, mut bay) in &mut bays {
+    for (transform, faction, mut bay, intent) in &mut bays {
         let pos = transform.translation.truncate();
 
         if intent.torpedo_hold {
