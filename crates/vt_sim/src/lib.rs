@@ -27,6 +27,7 @@ pub mod piracy;
 pub mod plugin;
 pub mod ship;
 pub mod spawn;
+pub mod torpedo;
 pub mod world;
 
 pub use plugin::{SimPlugin, SimSet};
@@ -38,7 +39,7 @@ pub mod prelude {
     pub use crate::components::{
         AiController, BoostDrive, Brace, Broadside, Collider, Disabled, EmpBolt, EmpDefense,
         EmpWeapon, Faction, FireOrders, Heading, Helm, Hull, Landmark, PilotIntent, Projectile,
-        Protagonist, Ship, ShipStats, SpeedScale, Ttl, Velocity,
+        Protagonist, Ship, ShipStats, SpeedScale, Torpedo, TorpedoBay, Ttl, Velocity,
     };
     pub use crate::drive::speed_scale;
     pub use crate::events::{EmpImpact, ShipDestroyed, ShipHit};

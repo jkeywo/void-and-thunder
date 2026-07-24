@@ -94,6 +94,7 @@ struct GameMaterials {
     shot: Handle<StandardMaterial>,
     star: Handle<StandardMaterial>,
     emp: Handle<StandardMaterial>,
+    torpedo: Handle<StandardMaterial>,
 }
 
 /// Render radius of a cannonball / EMP bolt (the shared sphere is unit-sized).
@@ -234,6 +235,7 @@ fn main() {
                 attach_ship_visuals,
                 attach_projectile_visuals,
                 attach_empbolt_visuals,
+                attach_torpedo_visuals,
                 damage_tint,
                 camera_orbit,
                 draw_grid,
@@ -285,6 +287,7 @@ fn spawn_player(commands: &mut Commands) {
         Protagonist,
         BoostDrive::default(),
         EmpWeapon::default(),
+        TorpedoBay::default(),
     ));
 }
 
@@ -312,6 +315,11 @@ fn setup(
         }),
         emp: materials.add(StandardMaterial {
             base_color: Color::srgb(0.4, 0.72, 1.0),
+            unlit: true,
+            ..default()
+        }),
+        torpedo: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.55, 0.25),
             unlit: true,
             ..default()
         }),
@@ -597,6 +605,7 @@ fn player_input(
     let mut fire_port = mouse.just_released(MouseButton::Left);
     let mut fire_starboard = mouse.just_released(MouseButton::Right);
     let mut emp_fire = keys.pressed(KeyCode::KeyQ);
+    let torpedo_hold = keys.pressed(KeyCode::ControlLeft);
     let mut bracing = keys.pressed(KeyCode::KeyC);
     let mut boosting = keys.pressed(KeyCode::Space);
     let mut board_now = keys.just_pressed(KeyCode::KeyB);
@@ -663,6 +672,7 @@ fn player_input(
     boost.active = boosting;
     pilot.aim_point = aim_point;
     pilot.emp_fire = emp_fire;
+    pilot.torpedo_hold = torpedo_hold;
     if board_now {
         board.active = true;
     }
@@ -716,6 +726,23 @@ fn attach_empbolt_visuals(
         commands.entity(entity).insert((
             Mesh3d(meshes.sphere.clone()),
             MeshMaterial3d(mats.emp.clone()),
+        ));
+    }
+}
+
+/// Give every torpedo an orange sphere (kept scaled by the homing system's
+/// transform, which only overwrites translation).
+fn attach_torpedo_visuals(
+    mut commands: Commands,
+    meshes: Res<GameMeshes>,
+    mats: Res<GameMaterials>,
+    mut torps: Query<(Entity, &mut Transform), (With<Torpedo>, Without<Mesh3d>)>,
+) {
+    for (entity, mut transform) in &mut torps {
+        transform.scale = Vec3::splat(9.0);
+        commands.entity(entity).insert((
+            Mesh3d(meshes.sphere.clone()),
+            MeshMaterial3d(mats.torpedo.clone()),
         ));
     }
 }
@@ -1094,11 +1121,12 @@ fn aim_time_dilation(
     real: Res<Time<Real>>,
     mut virt: ResMut<Time<Virtual>>,
     aiming: Res<Aiming>,
+    pilot: Res<PilotIntent>,
     mut battery: ResMut<AimBattery>,
 ) {
     let dt = real.delta_secs();
-    // Extended in later phases to include torpedo + microwarp aiming.
-    let wants_dilation = aiming.port || aiming.starboard;
+    // Extended in a later phase to include microwarp aiming.
+    let wants_dilation = aiming.port || aiming.starboard || pilot.torpedo_hold;
     let target = if wants_dilation && battery.charge > 0.0 {
         battery.charge = (battery.charge - battery.drain_per_sec * dt).max(0.0);
         AIM_TIMESCALE
@@ -1172,14 +1200,28 @@ fn restart(
 fn update_hud(
     encounter: Res<Encounter>,
     plunder: Res<Plunder>,
+    torps: Query<&TorpedoBay, With<Player>>,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
     let Ok(mut text) = hud.single_mut() else {
         return;
     };
+    let torp_line = torps
+        .single()
+        .map(|bay| {
+            if bay.locks > 0 {
+                format!(
+                    "torpedoes: {} loaded  ·  LOCKED x{}",
+                    bay.loaded as u32, bay.locks
+                )
+            } else {
+                format!("torpedoes: {} loaded", bay.loaded as u32)
+            }
+        })
+        .unwrap_or_default();
     text.0 = match encounter.outcome {
         Outcome::InProgress => format!(
-            "Wave {}  ·  enemies: {}  ·  plundered: {}\n[W/S] throttle  [A/D] steer  [Q/E] hold to aim, release to fire  [Space] brace  [B] board",
+            "Wave {}  ·  enemies: {}  ·  plundered: {}  ·  {torp_line}\n[LMB/RMB] broadside  [Q] EMP  [Ctrl] torpedoes  [Space] boost  [C] brace  [B] board",
             encounter.wave.max(1),
             encounter.enemies_remaining,
             plunder.ships_boarded,

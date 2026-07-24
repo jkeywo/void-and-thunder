@@ -319,6 +319,67 @@ pub struct EmpBolt {
     pub damage_frac: f32,
 }
 
+/// A magazine of homing torpedoes. Tubes reload one at a time; while the pilot
+/// holds aim the bay locks targets (1 instantly, then one per `lock_interval`),
+/// and on release fires that many torpedoes at the locked target. Player-only.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TorpedoBay {
+    /// Tubes available (magazine size).
+    pub tubes_max: u32,
+    /// Tubes currently loaded (fractional while a tube reloads).
+    pub loaded: f32,
+    /// Seconds to reload one tube.
+    pub reload_per_tube: f32,
+    /// Seconds between additional locks while holding aim.
+    pub lock_interval: f32,
+    /// How near the aim cursor a hostile must be to be locked.
+    pub lock_radius: f32,
+    /// Homing turn rate (radians/s).
+    pub turn_rate: f32,
+    /// Cruise speed (units/s).
+    pub speed: f32,
+    /// Hull damage per torpedo.
+    pub damage: f32,
+    /// Height a torpedo launches to (±Z) before arcing back down.
+    pub arc_height: f32,
+    // --- transient aim state ---
+    pub hold_elapsed: f32,
+    pub was_holding: bool,
+    pub locks: u32,
+    pub target: Option<Entity>,
+}
+
+impl Default for TorpedoBay {
+    fn default() -> Self {
+        Self {
+            tubes_max: 10,
+            loaded: 10.0,
+            reload_per_tube: 1.5,
+            lock_interval: 0.5,
+            lock_radius: 150.0,
+            turn_rate: 3.2,
+            speed: 520.0,
+            damage: 22.0,
+            arc_height: 90.0,
+            hold_elapsed: 0.0,
+            was_holding: false,
+            locks: 0,
+            target: None,
+        }
+    }
+}
+
+/// A homing torpedo in flight, chasing `target`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Torpedo {
+    pub faction: Faction,
+    pub target: Entity,
+    pub turn_rate: f32,
+    pub speed: f32,
+    pub damage: f32,
+    pub radius: f32,
+}
+
 /// The player's transient aiming/firing intent, rebuilt each frame by the
 /// client. The sim reads it to aim weapons and pick targets, keeping the rules
 /// authoritative. Fields are added as later phases land.
@@ -328,6 +389,8 @@ pub struct PilotIntent {
     pub aim_point: Vec2,
     /// Holding the EMP weapon.
     pub emp_fire: bool,
+    /// Holding torpedo aim (accruing locks; fires on release).
+    pub torpedo_hold: bool,
 }
 
 /// Marks a ship as AI-controlled and carries its combat tuning. The AI system

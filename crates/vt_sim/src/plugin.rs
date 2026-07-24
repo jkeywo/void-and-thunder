@@ -17,6 +17,9 @@ use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Plunder};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
+use crate::torpedo::{
+    torpedo_aim_system, torpedo_hit_system, torpedo_homing_system, torpedo_reload_system,
+};
 use crate::world::{bounds_system, SystemBounds};
 
 /// Ordered stages of a single simulation step.
@@ -32,8 +35,10 @@ pub enum SimSet {
     Movement,
     /// Keep ships inside the star system's soft boundary.
     Bounds,
-    /// Fire broadsides, fly cannonballs.
+    /// Fire broadsides/EMP, launch torpedoes, fly projectiles.
     Weapons,
+    /// Steer homing torpedoes.
+    Homing,
     /// Resolve hits, apply damage, destroy wrecks.
     Resolution,
     /// Cripple low-hull ships and resolve boarding.
@@ -63,6 +68,7 @@ impl Plugin for SimPlugin {
                     SimSet::Movement,
                     SimSet::Bounds,
                     SimSet::Weapons,
+                    SimSet::Homing,
                     SimSet::Resolution,
                     SimSet::Piracy,
                 )
@@ -72,7 +78,7 @@ impl Plugin for SimPlugin {
             .add_systems(FixedUpdate, ai_system.in_set(SimSet::Ai))
             .add_systems(
                 FixedUpdate,
-                (battery_system, speed_scale_system)
+                (battery_system, torpedo_reload_system, speed_scale_system)
                     .chain()
                     .in_set(SimSet::Systems),
             )
@@ -80,13 +86,24 @@ impl Plugin for SimPlugin {
             .add_systems(FixedUpdate, bounds_system.in_set(SimSet::Bounds))
             .add_systems(
                 FixedUpdate,
-                (weapons_system, emp_system, projectile_system)
+                (
+                    weapons_system,
+                    emp_system,
+                    torpedo_aim_system,
+                    projectile_system,
+                )
                     .chain()
                     .in_set(SimSet::Weapons),
             )
+            .add_systems(FixedUpdate, torpedo_homing_system.in_set(SimSet::Homing))
             .add_systems(
                 FixedUpdate,
-                (collision_system, emp_bolt_system, destruction_system)
+                (
+                    collision_system,
+                    emp_bolt_system,
+                    torpedo_hit_system,
+                    destruction_system,
+                )
                     .chain()
                     .in_set(SimSet::Resolution),
             )
