@@ -282,24 +282,27 @@ entities:
       title: Client Shell (2.5D renderer, input, window)
       summary: >-
         The Bevy front end. Mounts SimPlugin, spawns ships as sim entities,
-        translates input into Helm/FireOrders intent, and renders in 2.5D: the
-        sim's flat XY plane is drawn with +Z as up — hulls are Cuboids, shot and
-        worlds Spheres, a gizmo grid marks the plane, and a perspective camera
-        sits slightly above it yawing to follow the ship (camera_orbit). Native
-        and wasm from one binary. Owns no game rules.
-      references: [void-and-thunder-simulation]
+        writes the player ship's intent components, and renders in 2.5D: the sim's
+        flat XY plane is drawn with +Z as up — Cuboid hulls, Sphere shot/worlds, a
+        gizmo grid, and a player-controlled orbit camera (camera_orbit). T toggles
+        AI control of the player ship (toggle_player_ai drops AiController on it)
+        while the camera stays free-look. Native and wasm from one binary. Owns no
+        game rules.
+      references: [void-and-thunder-simulation, enemy-ai]
     implementation:
       status: declared
       paths: [crates/vt_client/src/main.rs]
       symbols:
         [
           player_input,
+          toggle_player_ai,
           attach_ship_visuals,
           attach_projectile_visuals,
           camera_orbit,
           draw_grid,
           draw_aim_beams,
           Player,
+          PlayerAi,
           GameMeshes,
         ]
 
@@ -312,14 +315,18 @@ entities:
       title: Enemy Ship AI
       summary: >-
         A controller that writes Helm/FireOrders for AiController ships: flee when
-        the hull is low, pursue a distant target bow-on, otherwise turn to present
-        a beam and fire the side whose firing arc lines up. Target is the nearest
-        hostile-faction ship. Decision maths is the pure fn desired_helm.
-      references: [ship-movement, ship-combat]
+        the hull is low, pursue a distant target bow-on, otherwise present a beam
+        and fire (pure fn desired_helm). When AiController.use_abilities is set the
+        pilot also drives the kit via PilotIntent (ai_abilities_system/
+        decide_abilities): microwarp when surrounded, EMP a hostile in range,
+        board the nearest crippled ship when none is near, else torpedo a distant
+        one. Enemies leave use_abilities off; the player-AI toggle turns it on.
+      references: [ship-movement, ship-combat, test-harness]
     implementation:
       status: declared
       paths: [crates/vt_sim/src/ai.rs, crates/vt_sim/src/components.rs]
-      symbols: [desired_helm, ai_system, AiController]
+      symbols:
+        [desired_helm, ai_system, ai_abilities_system, decide_abilities, AiController]
       tests: [crates/vt_sim/src/ai.rs]
 
   - component: spawn-director
