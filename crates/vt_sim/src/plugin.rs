@@ -10,8 +10,10 @@ use bevy_ecs::prelude::*;
 
 use crate::ai::ai_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
+use crate::components::PilotIntent;
 use crate::drive::{battery_system, speed_scale_system};
-use crate::events::{ShipDestroyed, ShipHit};
+use crate::emp::{emp_bolt_system, emp_system};
+use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Plunder};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
@@ -48,8 +50,10 @@ impl Plugin for SimPlugin {
             .init_resource::<Encounter>()
             .init_resource::<Plunder>()
             .init_resource::<BoardIntent>()
+            .init_resource::<PilotIntent>()
             .add_message::<ShipHit>()
             .add_message::<ShipDestroyed>()
+            .add_message::<EmpImpact>()
             .configure_sets(
                 FixedUpdate,
                 (
@@ -76,13 +80,13 @@ impl Plugin for SimPlugin {
             .add_systems(FixedUpdate, bounds_system.in_set(SimSet::Bounds))
             .add_systems(
                 FixedUpdate,
-                (weapons_system, projectile_system)
+                (weapons_system, emp_system, projectile_system)
                     .chain()
                     .in_set(SimSet::Weapons),
             )
             .add_systems(
                 FixedUpdate,
-                (collision_system, destruction_system)
+                (collision_system, emp_bolt_system, destruction_system)
                     .chain()
                     .in_set(SimSet::Resolution),
             )

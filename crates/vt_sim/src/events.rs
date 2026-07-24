@@ -25,3 +25,9 @@ pub struct ShipDestroyed {
     /// The faction of the ship that was destroyed.
     pub faction: Faction,
 }
+
+/// An EMP bolt struck a ship.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct EmpImpact {
+    pub position: Vec2,
+}

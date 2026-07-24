@@ -93,7 +93,11 @@ struct GameMeshes {
 struct GameMaterials {
     shot: Handle<StandardMaterial>,
     star: Handle<StandardMaterial>,
+    emp: Handle<StandardMaterial>,
 }
+
+/// Render radius of a cannonball / EMP bolt (the shared sphere is unit-sized).
+const SHOT_RADIUS: f32 = 7.0;
 
 /// Which broadsides the player is currently *holding* (aiming). Purely
 /// presentational — it drives the aim beam; firing happens on release.
@@ -229,6 +233,7 @@ fn main() {
             (
                 attach_ship_visuals,
                 attach_projectile_visuals,
+                attach_empbolt_visuals,
                 damage_tint,
                 camera_orbit,
                 draw_grid,
@@ -247,6 +252,7 @@ fn main() {
                 muzzle_flashes,
                 spawn_hit_effects,
                 spawn_destroy_effects,
+                spawn_emp_effects,
                 update_effects,
             ),
         )
@@ -278,6 +284,7 @@ fn spawn_player(commands: &mut Commands) {
         Player,
         Protagonist,
         BoostDrive::default(),
+        EmpWeapon::default(),
     ));
 }
 
@@ -300,6 +307,11 @@ fn setup(
         }),
         star: materials.add(StandardMaterial {
             base_color: Color::srgb(0.85, 0.88, 1.0),
+            unlit: true,
+            ..default()
+        }),
+        emp: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.4, 0.72, 1.0),
             unlit: true,
             ..default()
         }),
@@ -535,14 +547,30 @@ impl Lcg {
 /// Broadsides are **hold to aim, release to fire**: while a side's button is
 /// held we only show the aim beam; the release edge raises the sim's
 /// [`FireOrders`] request, which `weapons_system` consumes exactly once.
+#[allow(clippy::too_many_arguments)]
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     gamepads: Query<&Gamepad>,
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut board: ResMut<BoardIntent>,
     mut aiming: ResMut<Aiming>,
-    mut player: Query<(&mut Helm, &mut FireOrders, &mut Brace, &mut BoostDrive), With<Player>>,
+    mut pilot: ResMut<PilotIntent>,
+    mut player: Query<
+        (
+            &mut Helm,
+            &mut FireOrders,
+            &mut Brace,
+            &mut BoostDrive,
+            &Transform,
+            &Heading,
+        ),
+        With<Player>,
+    >,
 ) {
-    let Ok((mut helm, mut orders, mut brace, mut boost)) = player.single_mut() else {
+    let Ok((mut helm, mut orders, mut brace, mut boost, transform, heading)) = player.single_mut()
+    else {
         return;
     };
 
@@ -563,13 +591,39 @@ fn player_input(
         turn -= 1.0;
     }
 
-    let mut aim_port = keys.pressed(KeyCode::KeyQ);
-    let mut aim_starboard = keys.pressed(KeyCode::KeyE);
-    let mut fire_port = keys.just_released(KeyCode::KeyQ);
-    let mut fire_starboard = keys.just_released(KeyCode::KeyE);
+    // Broadsides on the mouse buttons; EMP on Q.
+    let mut aim_port = mouse.pressed(MouseButton::Left);
+    let mut aim_starboard = mouse.pressed(MouseButton::Right);
+    let mut fire_port = mouse.just_released(MouseButton::Left);
+    let mut fire_starboard = mouse.just_released(MouseButton::Right);
+    let mut emp_fire = keys.pressed(KeyCode::KeyQ);
     let mut bracing = keys.pressed(KeyCode::KeyC);
     let mut boosting = keys.pressed(KeyCode::Space);
     let mut board_now = keys.just_pressed(KeyCode::KeyB);
+
+    // Aim cursor: mouse → plane (desktop), overridden by right stick when deflected.
+    let ship = transform.translation.truncate();
+    let mut aim_point = ship + heading.forward() * 320.0;
+    if let (Ok((camera, cam_gt)), Ok(window)) = (camera_q.single(), windows.single()) {
+        if let Some(cursor) = window.cursor_position() {
+            if let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) {
+                if let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Dir3::Z)) {
+                    aim_point = ray.get_point(dist).truncate();
+                }
+            }
+        }
+        if let Some(pad) = gamepads.iter().next() {
+            let stick = Vec2::new(
+                pad.get(GamepadAxis::RightStickX).unwrap_or(0.0),
+                pad.get(GamepadAxis::RightStickY).unwrap_or(0.0),
+            );
+            if stick.length() > STICK_DEADZONE {
+                let right = cam_gt.right().truncate().normalize_or_zero();
+                let up = cam_gt.up().truncate().normalize_or_zero();
+                aim_point = ship + (right * stick.x + up * stick.y) * 520.0;
+            }
+        }
+    }
 
     // --- Gamepad (first connected pad) ---
     if let Some(pad) = gamepads.iter().next() {
@@ -587,6 +641,7 @@ fn player_input(
         aim_starboard |= pad.pressed(GamepadButton::RightTrigger); // RB
         fire_port |= pad.just_released(GamepadButton::LeftTrigger);
         fire_starboard |= pad.just_released(GamepadButton::RightTrigger);
+        emp_fire |= pad.pressed(GamepadButton::West); // X / Square
         bracing |= pad.pressed(GamepadButton::North); // Y / Triangle
         boosting |= pad.pressed(GamepadButton::South); // A / Cross
         board_now |= pad.just_pressed(GamepadButton::East); // B / Circle
@@ -606,6 +661,8 @@ fn player_input(
     }
     brace.active = bracing;
     boost.active = boosting;
+    pilot.aim_point = aim_point;
+    pilot.emp_fire = emp_fire;
     if board_now {
         board.active = true;
     }
@@ -630,14 +687,16 @@ fn attach_ship_visuals(
     }
 }
 
-/// Give every cannonball a small glowing sphere.
+/// Give every cannonball a small glowing sphere (the shared sphere is unit-sized,
+/// so scale it up).
 fn attach_projectile_visuals(
     mut commands: Commands,
     meshes: Res<GameMeshes>,
     mats: Res<GameMaterials>,
-    shots: Query<Entity, (With<Projectile>, Without<Mesh3d>)>,
+    mut shots: Query<(Entity, &mut Transform), (With<Projectile>, Without<Mesh3d>)>,
 ) {
-    for entity in &shots {
+    for (entity, mut transform) in &mut shots {
+        transform.scale = Vec3::splat(SHOT_RADIUS);
         commands.entity(entity).insert((
             Mesh3d(meshes.sphere.clone()),
             MeshMaterial3d(mats.shot.clone()),
@@ -645,14 +704,32 @@ fn attach_projectile_visuals(
     }
 }
 
+/// Give every EMP bolt a small blue sphere.
+fn attach_empbolt_visuals(
+    mut commands: Commands,
+    meshes: Res<GameMeshes>,
+    mats: Res<GameMaterials>,
+    mut bolts: Query<(Entity, &mut Transform), (With<EmpBolt>, Without<Mesh3d>)>,
+) {
+    for (entity, mut transform) in &mut bolts {
+        transform.scale = Vec3::splat(SHOT_RADIUS);
+        commands.entity(entity).insert((
+            Mesh3d(meshes.sphere.clone()),
+            MeshMaterial3d(mats.emp.clone()),
+        ));
+    }
+}
+
 /// Tint each ship's material: darker as its hull wears down, grey when crippled
-/// (boardable), and a blue cast while bracing.
+/// (boardable), a blue cast while bracing, and a cyan EMP glow as it is disabled
+/// by EMP.
 fn damage_tint(
     mut materials: ResMut<Assets<StandardMaterial>>,
     ships: Query<
         (
             &Faction,
             &Hull,
+            &EmpDefense,
             &MeshMaterial3d<StandardMaterial>,
             Option<&Disabled>,
             Option<&Brace>,
@@ -660,7 +737,7 @@ fn damage_tint(
         With<Ship>,
     >,
 ) {
-    for (faction, hull, material, disabled, brace) in &ships {
+    for (faction, hull, emp, material, disabled, brace) in &ships {
         let Some(mut material) = materials.get_mut(&material.0) else {
             continue;
         };
@@ -679,7 +756,33 @@ fn damage_tint(
             g = g * 0.6 + 0.3;
             b = b * 0.5 + 0.5;
         }
+        // EMP glow, growing with the EMP load.
+        let e = (emp.damage / emp.resist).clamp(0.0, 1.0);
+        r = r * (1.0 - e);
+        g = g * (1.0 - e) + 0.7 * e;
+        b = b * (1.0 - e) + 1.0 * e;
         material.base_color = Color::srgb(r, g, b);
+    }
+}
+
+/// A blue crackle where an EMP bolt lands.
+fn spawn_emp_effects(
+    mut commands: Commands,
+    meshes: Res<GameMeshes>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut impacts: MessageReader<EmpImpact>,
+) {
+    for impact in impacts.read() {
+        spawn_effect(
+            &mut commands,
+            &meshes,
+            &mut materials,
+            impact.position,
+            5.0,
+            22.0,
+            0.28,
+            Color::srgb(0.5, 0.8, 1.0),
+        );
     }
 }
 

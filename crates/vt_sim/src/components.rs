@@ -274,6 +274,62 @@ impl BoostDrive {
     }
 }
 
+/// A frontal EMP emitter. While held it swivels within `arc` toward a lead of
+/// the target and fires [`EmpBolt`]s on `cooldown`. Player-only for now.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct EmpWeapon {
+    /// Full width of the firing arc (radians); the emitter aims within ±arc/2 of the bow.
+    pub arc: f32,
+    /// Maximum swivel speed of the emitter (radians/s).
+    pub swivel_rate: f32,
+    /// Current emitter angle relative to the bow (`-arc/2..=arc/2`).
+    pub aim: f32,
+    pub cooldown: f32,
+    pub timer: f32,
+    /// Speed of a fired bolt (units/s).
+    pub bolt_speed: f32,
+    /// EMP dealt per bolt, as a fraction of the *target's* resist (0.25 = 25%).
+    pub bolt_damage_frac: f32,
+    /// Maximum engagement range.
+    pub range: f32,
+}
+
+impl Default for EmpWeapon {
+    fn default() -> Self {
+        use std::f32::consts::FRAC_PI_2;
+        Self {
+            arc: FRAC_PI_2,                     // 90°
+            swivel_rate: 20.0_f32.to_radians(), // ~1s per 20°
+            aim: 0.0,
+            cooldown: 0.4,
+            timer: 0.0,
+            bolt_speed: 720.0,
+            bolt_damage_frac: 0.25,
+            range: 620.0,
+        }
+    }
+}
+
+/// An EMP bolt in flight. On hitting a hostile ship it adds
+/// `damage_frac * target.resist` to that ship's [`EmpDefense`].
+#[derive(Component, Clone, Copy, Debug)]
+pub struct EmpBolt {
+    pub faction: Faction,
+    pub radius: f32,
+    pub damage_frac: f32,
+}
+
+/// The player's transient aiming/firing intent, rebuilt each frame by the
+/// client. The sim reads it to aim weapons and pick targets, keeping the rules
+/// authoritative. Fields are added as later phases land.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct PilotIntent {
+    /// World point under the aim cursor (mouse / right stick).
+    pub aim_point: Vec2,
+    /// Holding the EMP weapon.
+    pub emp_fire: bool,
+}
+
 /// Marks a ship as AI-controlled and carries its combat tuning. The AI system
 /// writes this ship's [`Helm`] and [`FireOrders`]; a ship without it (the
 /// player) is driven by the client instead. This keeps the sim ignorant of who
