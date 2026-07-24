@@ -24,6 +24,7 @@ use crate::components::{
     AiController, Disabled, EmpWeapon, Faction, FireOrders, Heading, Helm, Hull, MicrowarpDrive,
     PilotIntent, Ship, TorpedoBay,
 };
+use crate::piracy::{BoardIntent, BOARD_RANGE};
 
 /// Wrap an angle to the range `(-PI, PI]`.
 fn wrap(angle: f32) -> f32 {
@@ -161,6 +162,7 @@ pub struct AbilityIntent {
     pub emp_fire: bool,
     pub torpedo_hold: bool,
     pub microwarp_hold: bool,
+    pub board: bool,
     pub warp_prime: f32,
 }
 
@@ -173,20 +175,25 @@ fn face(ship: Vec2, heading: f32, aim: Vec2, throttle: f32) -> Helm {
     }
 }
 
-/// Decide the special-ability intent (pure, so it is unit-testable):
+/// Decide the special-ability intent (pure, so it is unit-testable). Priority:
 ///
-/// - **Microwarp** when surrounded (≥ [`SURROUND_COUNT`] hostiles within
+/// - **Microwarp** when surrounded (≥ [`SURROUND_COUNT`] active hostiles within
 ///   [`SURROUND_RADIUS`]) — warp as far as possible *away* from their centroid.
-/// - **EMP** when the nearest hostile is within EMP range (targetable).
-/// - **Torpedoes** when the nearest hostile is beyond EMP range (long range, none
-///   closer) — hold to build a volley, release once enough tubes are locked.
+/// - **EMP** when the nearest active hostile is within EMP range (targetable).
+/// - **Board** a crippled ship when no hostile is near — close on it and board.
+/// - **Torpedoes** when the only hostile is beyond EMP range and nothing is
+///   boardable — hold to build a volley, release once enough tubes are locked.
+///
+/// `hostiles` are the *active* enemies; `boardable` are crippled (disabled) ships.
 pub fn decide_abilities(
     ship: Vec2,
     heading: f32,
     hostiles: &[Vec2],
+    boardable: &[Vec2],
     emp_range: f32,
     microwarp_range: f32,
     microwarp_ready: bool,
+    board_range: f32,
     torpedo_locks: u32,
     warp_prime: f32,
     dt: f32,
@@ -198,17 +205,23 @@ pub fn decide_abilities(
         emp_fire: false,
         torpedo_hold: false,
         microwarp_hold: false,
+        board: false,
         warp_prime: 0.0,
     };
+    let nearest = |ships: &[Vec2]| -> Option<Vec2> {
+        ships.iter().copied().min_by(|a, b| {
+            a.distance_squared(ship)
+                .total_cmp(&b.distance_squared(ship))
+        })
+    };
 
+    // Surrounded by active hostiles -> microwarp escape.
     let near: Vec<Vec2> = hostiles
         .iter()
         .copied()
         .filter(|h| h.distance(ship) < SURROUND_RADIUS)
         .collect();
     if near.len() >= SURROUND_COUNT && microwarp_ready {
-        // Escape: warp away from the enemies' centre of mass, at max range, and
-        // run that way while priming.
         let centroid = near.iter().copied().fold(Vec2::ZERO, |a, b| a + b) / near.len() as f32;
         let away = (ship - centroid).normalize_or(forward);
         out.aim_point = ship + away * microwarp_range;
@@ -223,18 +236,32 @@ pub fn decide_abilities(
         return out;
     }
 
-    if let Some(nearest) = hostiles.iter().copied().min_by(|a, b| {
-        a.distance_squared(ship)
-            .total_cmp(&b.distance_squared(ship))
-    }) {
-        out.aim_point = nearest;
-        if nearest.distance(ship) <= emp_range {
+    // A hostile within EMP range -> EMP it, bow-on.
+    if let Some(target) = nearest(hostiles) {
+        if target.distance(ship) <= emp_range {
+            out.aim_point = target;
             out.emp_fire = true; // the emitter gates arc/target itself
-            out.helm = face(ship, heading, nearest, 0.35); // keep the bow (and EMP arc) on it
-        } else {
-            out.torpedo_hold = torpedo_locks < TORPEDO_MIN_VOLLEY;
-            out.helm = face(ship, heading, nearest, 0.2); // kite at range
+            out.helm = face(ship, heading, target, 0.35);
+            return out;
         }
+    }
+
+    // No hostile near -> go loot the nearest crippled ship.
+    if let Some(prize) = nearest(boardable) {
+        out.aim_point = prize;
+        let dist = prize.distance(ship);
+        out.helm = face(ship, heading, prize, (dist / 300.0).clamp(0.15, 0.6));
+        if dist <= board_range {
+            out.board = true;
+        }
+        return out;
+    }
+
+    // Otherwise lob torpedoes at the distant hostile.
+    if let Some(target) = nearest(hostiles) {
+        out.aim_point = target;
+        out.torpedo_hold = torpedo_locks < TORPEDO_MIN_VOLLEY;
+        out.helm = face(ship, heading, target, 0.2);
     }
     out
 }
@@ -244,6 +271,7 @@ pub fn decide_abilities(
 #[allow(clippy::type_complexity)]
 pub fn ai_abilities_system(
     time: Res<Time>,
+    mut board_intent: ResMut<BoardIntent>,
     mut ships: Query<(
         &Transform,
         &Heading,
@@ -255,12 +283,12 @@ pub fn ai_abilities_system(
         &mut PilotIntent,
         &mut Helm,
     )>,
-    targets: Query<(&Transform, &Faction), With<Ship>>,
+    targets: Query<(&Transform, &Faction, Has<Disabled>), With<Ship>>,
 ) {
     let dt = time.delta_secs();
-    let all: Vec<(Vec2, Faction)> = targets
+    let all: Vec<(Vec2, Faction, bool)> = targets
         .iter()
-        .map(|(t, f)| (t.translation.truncate(), *f))
+        .map(|(t, f, disabled)| (t.translation.truncate(), *f, disabled))
         .collect();
 
     for (transform, heading, faction, mut ai, emp, bay, warp, mut pilot, mut helm) in &mut ships {
@@ -268,18 +296,27 @@ pub fn ai_abilities_system(
             continue;
         }
         let ship = transform.translation.truncate();
+        // Active enemies to fight vs. crippled ships to loot.
         let hostiles: Vec<Vec2> = all
             .iter()
-            .filter(|(_, f)| faction.hostile_to(*f))
-            .map(|(p, _)| *p)
+            .filter(|(_, f, disabled)| !disabled && faction.hostile_to(*f))
+            .map(|(p, _, _)| *p)
             .collect();
+        let boardable: Vec<Vec2> = all
+            .iter()
+            .filter(|(_, f, disabled)| *disabled && faction.hostile_to(*f))
+            .map(|(p, _, _)| *p)
+            .collect();
+
         let d = decide_abilities(
             ship,
             heading.0,
             &hostiles,
+            &boardable,
             emp.range,
             warp.range,
             warp.timer <= 0.0,
+            BOARD_RANGE,
             bay.locks,
             ai.warp_prime,
             dt,
@@ -289,8 +326,12 @@ pub fn ai_abilities_system(
         pilot.emp_fire = d.emp_fire;
         pilot.torpedo_hold = d.torpedo_hold;
         pilot.microwarp_hold = d.microwarp_hold;
-        // Override the broadside helm: this pilot fights bow-on with the kit.
-        if !hostiles.is_empty() {
+        if d.board {
+            board_intent.active = true;
+        }
+        // Override the broadside helm: this pilot fights bow-on with the kit and
+        // steers itself toward prizes.
+        if !hostiles.is_empty() || !boardable.is_empty() {
             *helm = d.helm;
         }
     }
@@ -423,9 +464,11 @@ mod tests {
             Vec2::ZERO,
             0.0,
             &[Vec2::new(300.0, 0.0)],
+            &[],
             620.0,
             900.0,
             true,
+            95.0,
             0,
             0.0,
             0.1,
@@ -441,9 +484,11 @@ mod tests {
             Vec2::ZERO,
             0.0,
             &[Vec2::new(1000.0, 0.0)],
+            &[],
             620.0,
             900.0,
             true,
+            95.0,
             0,
             0.0,
             0.1,
@@ -455,9 +500,11 @@ mod tests {
             Vec2::ZERO,
             0.0,
             &[Vec2::new(1000.0, 0.0)],
+            &[],
             620.0,
             900.0,
             true,
+            95.0,
             5,
             0.0,
             0.1,
@@ -476,7 +523,19 @@ mod tests {
             Vec2::new(220.0, -30.0),
             Vec2::new(180.0, 0.0),
         ];
-        let d = decide_abilities(Vec2::ZERO, 0.0, &hostiles, 620.0, 900.0, true, 0, 0.0, 0.1);
+        let d = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &hostiles,
+            &[],
+            620.0,
+            900.0,
+            true,
+            95.0,
+            0,
+            0.0,
+            0.1,
+        );
         assert!(d.microwarp_hold, "should prime a microwarp");
         assert!(
             d.aim_point.x < 0.0,
@@ -486,5 +545,40 @@ mod tests {
             (d.aim_point.length() - 900.0).abs() < 1.0,
             "should warp at max range"
         );
+    }
+
+    #[test]
+    fn boards_a_crippled_ship_when_no_hostile_near() {
+        // No active hostiles; a crippled ship within board range → board it.
+        let d = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &[],
+            &[Vec2::new(50.0, 0.0)],
+            620.0,
+            900.0,
+            true,
+            95.0,
+            0,
+            0.0,
+            0.1,
+        );
+        assert!(d.board, "should board a crippled ship in range");
+        // A crippled ship out of range → close on it, don't board yet.
+        let far = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &[],
+            &[Vec2::new(400.0, 0.0)],
+            620.0,
+            900.0,
+            true,
+            95.0,
+            0,
+            0.0,
+            0.1,
+        );
+        assert!(!far.board, "too far to board yet");
+        assert!(far.helm.throttle > 0.0, "should close on the prize");
     }
 }

@@ -23,6 +23,7 @@
 //!   Space      — boost (rechargeable battery)
 //!   C          — brace (cut incoming damage)
 //!   B          — board a crippled enemy alongside (loot it)
+//!   T          — toggle AI pilot (the AI flies the ship; you keep the camera)
 //!   R          — restart after a run ends
 //!
 //! Gamepad: left stick throttle/steer, right stick aim/camera, LT/RT broadsides,
