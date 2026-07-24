@@ -33,9 +33,15 @@ pub struct BoardIntent {
 /// steering and firing and drift, boardable.
 pub fn cripple_system(
     mut commands: Commands,
+    // Never cripple the protagonist (it may be AI-piloted via the player-AI toggle).
     mut ships: Query<
         (Entity, &Hull, &mut Helm, &mut FireOrders),
-        (With<Ship>, With<AiController>, Without<Disabled>),
+        (
+            With<Ship>,
+            With<AiController>,
+            Without<Disabled>,
+            Without<Protagonist>,
+        ),
     >,
 ) {
     for (entity, hull, mut helm, mut orders) in &mut ships {

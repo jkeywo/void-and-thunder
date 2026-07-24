@@ -166,6 +166,13 @@ enum InputMethod {
     Gamepad,
 }
 
+/// Whether the player ship is currently flown by the AI (toggle with T). The
+/// camera stays under the player's control either way.
+#[derive(Resource, Default)]
+struct PlayerAi {
+    on: bool,
+}
+
 /// Marker for the boost-battery gauge fill.
 #[derive(Component)]
 struct BoostBarFill;
@@ -284,6 +291,7 @@ fn main() {
         .init_resource::<Aiming>()
         .init_resource::<AimBattery>()
         .init_resource::<InputMethod>()
+        .init_resource::<PlayerAi>()
         .add_systems(Startup, setup)
         // Presentation runs in every state.
         .add_systems(
@@ -323,7 +331,7 @@ fn main() {
         // Playing: take input and watch for win/lose.
         .add_systems(
             Update,
-            (player_input, watch_outcome).run_if(in_state(GameState::Playing)),
+            (player_input, watch_outcome, toggle_player_ai).run_if(in_state(GameState::Playing)),
         )
         .add_systems(Update, track_input_method)
         // Game over: wait for a restart.
@@ -647,6 +655,7 @@ fn player_input(
     gamepads: Query<&Gamepad>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    player_ai: Res<PlayerAi>,
     mut board: ResMut<BoardIntent>,
     mut aiming: ResMut<Aiming>,
     mut player: Query<
@@ -662,6 +671,11 @@ fn player_input(
         With<Player>,
     >,
 ) {
+    // When the AI is flying, the sim writes the player ship's intent — the client
+    // stays hands-off (the camera is handled separately).
+    if player_ai.on {
+        return;
+    }
     let Ok((mut helm, mut orders, mut brace, mut boost, mut pilot, transform, heading)) =
         player.single_mut()
     else {
@@ -915,6 +929,7 @@ fn camera_orbit(
     time: Res<Time>,
     mut rig: ResMut<CameraRig>,
     aiming: Res<Aiming>,
+    player_ai: Res<PlayerAi>,
     windows: Query<&Window>,
     gamepads: Query<&Gamepad>,
     player: Query<
@@ -958,15 +973,18 @@ fn camera_orbit(
     if let Ok((transform, heading, bank, drive, pilot)) = player.single() {
         let pos = transform.translation.truncate();
         desired_focus = pos;
+        // While the AI flies, the camera stays a free-look — it doesn't snap to
+        // the AI's aiming.
+        let manual = !player_ai.on;
         let aiming_broadside = aiming.port || aiming.starboard;
-        if pilot.microwarp_hold {
+        if manual && pilot.microwarp_hold {
             // Top-down, framed on the (range-clamped) warp destination.
             let dest = clamp_to_range(pos, pilot.aim_point, drive.range);
             desired_focus = dest;
             target_yaw = heading.0;
             target_pitch = CAM_MICROWARP_PITCH;
             locked = true;
-        } else if aiming_broadside {
+        } else if manual && aiming_broadside {
             // Lock the yaw along where the broadside points.
             let is_port = aiming.port;
             let aim_dir = (pilot.aim_point - pos).normalize_or_zero();
@@ -1409,6 +1427,32 @@ fn update_battery_bars(
     }
 }
 
+/// Toggle AI control of the player ship with `T`. Enabling it drops an
+/// `AiController` (piloting preset) onto the player so the sim's AI flies it;
+/// disabling it removes the controller and hands the ship back. The camera is
+/// never affected — the player always steers the view.
+fn toggle_player_ai(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut player_ai: ResMut<PlayerAi>,
+    mut aiming: ResMut<Aiming>,
+    mut commands: Commands,
+    player: Query<Entity, With<Player>>,
+) {
+    if !keys.just_pressed(KeyCode::KeyT) {
+        return;
+    }
+    player_ai.on = !player_ai.on;
+    let Ok(entity) = player.single() else {
+        return;
+    };
+    if player_ai.on {
+        commands.entity(entity).insert(AiController::piloting());
+        *aiming = Aiming::default(); // clear any held broadside aim
+    } else {
+        commands.entity(entity).remove::<AiController>();
+    }
+}
+
 /// Track the last-used input device so the HUD shows matching control hints.
 fn track_input_method(
     keys: Res<ButtonInput<KeyCode>>,
@@ -1486,11 +1530,17 @@ fn update_hud(
     encounter: Res<Encounter>,
     plunder: Res<Plunder>,
     method: Res<InputMethod>,
+    player_ai: Res<PlayerAi>,
     torps: Query<&TorpedoBay, With<Player>>,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
     let Ok(mut text) = hud.single_mut() else {
         return;
+    };
+    let ai_line = if player_ai.on {
+        "◆ AI PILOT ENGAGED — you keep the camera · [T] resume control\n"
+    } else {
+        ""
     };
     let torp_line = torps
         .single()
@@ -1511,7 +1561,7 @@ fn update_hud(
     };
     text.0 = match encounter.outcome {
         Outcome::InProgress => format!(
-            "Wave {}  ·  enemies: {}  ·  plundered: {}  ·  {torp_line}\n{hints}",
+            "{ai_line}Wave {}  ·  enemies: {}  ·  plundered: {}  ·  {torp_line}\n{hints}  ·  [T] AI pilot",
             encounter.wave.max(1),
             encounter.enemies_remaining,
             plunder.ships_boarded,

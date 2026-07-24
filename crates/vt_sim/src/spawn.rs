@@ -190,7 +190,8 @@ pub fn director_system(
     mut encounter: ResMut<Encounter>,
     bounds: Res<SystemBounds>,
     protagonist: Query<(), With<Protagonist>>,
-    enemies: Query<(), (With<Ship>, With<AiController>)>,
+    // Exclude the protagonist: it may itself be AI-piloted (player-AI toggle).
+    enemies: Query<(), (With<Ship>, With<AiController>, Without<Protagonist>)>,
 ) {
     if encounter.outcome != Outcome::InProgress {
         return;

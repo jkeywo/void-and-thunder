@@ -11,7 +11,7 @@ use bevy_ecs::prelude::*;
 use bevy_time::Time;
 use std::time::Duration;
 
-use crate::ai::ai_system;
+use crate::ai::{ai_abilities_system, ai_system};
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
@@ -56,7 +56,7 @@ impl Harness {
             (
                 (drain_hits, drain_destroyed, drain_emp).chain(),
                 director_system,
-                ai_system,
+                (ai_system, ai_abilities_system).chain(),
                 (
                     battery_system,
                     torpedo_reload_system,
@@ -120,7 +120,7 @@ fn drain_emp(mut m: ResMut<Messages<EmpImpact>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{AiController, Faction, Hull, Protagonist, ShipStats};
+    use crate::components::{AiController, EmpDefense, Faction, Hull, Protagonist, ShipStats};
     use crate::spawn::{ship_bundle, ShipLoadout};
     use bevy_math::Vec2;
 
@@ -171,5 +171,45 @@ mod tests {
             engaged,
             "the AI-piloted player ship should have hit the enemy"
         );
+    }
+
+    /// The ability AI (`AiController::piloting`) should EMP a close target — the
+    /// enemy's EMP bar takes damage.
+    #[test]
+    fn ai_pilot_emps_a_close_target() {
+        let mut h = Harness::new();
+        h.world.spawn((
+            ship_bundle(
+                Faction::Corsairs,
+                ShipStats::default(),
+                100.0,
+                Vec2::ZERO,
+                ShipLoadout::player(),
+            ),
+            Protagonist,
+            AiController::piloting(),
+        ));
+        // A House ship dead ahead, within EMP range.
+        let enemy = h
+            .world
+            .spawn((
+                ship_bundle(
+                    Faction::Houses,
+                    ShipStats::default(),
+                    100.0,
+                    Vec2::new(300.0, 0.0),
+                    ShipLoadout::enemy(),
+                ),
+                AiController::default(),
+            ))
+            .id();
+
+        h.run(400, 1.0 / 64.0); // ~6 s
+
+        let emped = match h.world.get::<EmpDefense>(enemy) {
+            Some(emp) => emp.damage > 0.0,
+            None => true,
+        };
+        assert!(emped, "the AI pilot should EMP a targetable ship");
     }
 }

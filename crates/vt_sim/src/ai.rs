@@ -16,10 +16,14 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec2;
+use bevy_time::Time;
 use bevy_transform::components::Transform;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use crate::components::{AiController, Disabled, Faction, FireOrders, Heading, Helm, Hull, Ship};
+use crate::components::{
+    AiController, Disabled, EmpWeapon, Faction, FireOrders, Heading, Helm, Hull, MicrowarpDrive,
+    PilotIntent, Ship, TorpedoBay,
+};
 
 /// Wrap an angle to the range `(-PI, PI]`.
 fn wrap(angle: f32) -> f32 {
@@ -138,6 +142,160 @@ pub fn ai_system(
     }
 }
 
+/// Enemies within this radius count toward being "surrounded".
+const SURROUND_RADIUS: f32 = 400.0;
+/// This many nearby hostiles triggers a microwarp escape.
+const SURROUND_COUNT: usize = 2;
+/// Seconds the AI holds a microwarp to prime it before releasing (warping).
+const WARP_PRIME: f32 = 0.4;
+/// Torpedo locks the AI builds before releasing a volley.
+const TORPEDO_MIN_VOLLEY: u32 = 3;
+
+/// What the special-abilities AI wants to do this frame, including a helm that
+/// points the bow at the aim point (EMP is a frontal weapon; microwarp aims at
+/// the escape point, so the same "face the aim" rule sends the ship the right
+/// way in every mode).
+pub struct AbilityIntent {
+    pub aim_point: Vec2,
+    pub helm: Helm,
+    pub emp_fire: bool,
+    pub torpedo_hold: bool,
+    pub microwarp_hold: bool,
+    pub warp_prime: f32,
+}
+
+/// A helm that turns the bow toward `aim` at the given throttle.
+fn face(ship: Vec2, heading: f32, aim: Vec2, throttle: f32) -> Helm {
+    let err = wrap((aim - ship).to_angle() - heading);
+    Helm {
+        throttle,
+        turn: (err * 2.5).clamp(-1.0, 1.0),
+    }
+}
+
+/// Decide the special-ability intent (pure, so it is unit-testable):
+///
+/// - **Microwarp** when surrounded (≥ [`SURROUND_COUNT`] hostiles within
+///   [`SURROUND_RADIUS`]) — warp as far as possible *away* from their centroid.
+/// - **EMP** when the nearest hostile is within EMP range (targetable).
+/// - **Torpedoes** when the nearest hostile is beyond EMP range (long range, none
+///   closer) — hold to build a volley, release once enough tubes are locked.
+pub fn decide_abilities(
+    ship: Vec2,
+    heading: f32,
+    hostiles: &[Vec2],
+    emp_range: f32,
+    microwarp_range: f32,
+    microwarp_ready: bool,
+    torpedo_locks: u32,
+    warp_prime: f32,
+    dt: f32,
+) -> AbilityIntent {
+    let forward = Vec2::from_angle(heading);
+    let mut out = AbilityIntent {
+        aim_point: ship + forward * 300.0,
+        helm: Helm::default(),
+        emp_fire: false,
+        torpedo_hold: false,
+        microwarp_hold: false,
+        warp_prime: 0.0,
+    };
+
+    let near: Vec<Vec2> = hostiles
+        .iter()
+        .copied()
+        .filter(|h| h.distance(ship) < SURROUND_RADIUS)
+        .collect();
+    if near.len() >= SURROUND_COUNT && microwarp_ready {
+        // Escape: warp away from the enemies' centre of mass, at max range, and
+        // run that way while priming.
+        let centroid = near.iter().copied().fold(Vec2::ZERO, |a, b| a + b) / near.len() as f32;
+        let away = (ship - centroid).normalize_or(forward);
+        out.aim_point = ship + away * microwarp_range;
+        out.helm = face(ship, heading, out.aim_point, 1.0);
+        let wp = warp_prime + dt;
+        if wp < WARP_PRIME {
+            out.microwarp_hold = true;
+            out.warp_prime = wp;
+        }
+        // Once primed, holding drops to false and prime resets to 0 — the falling
+        // edge fires the warp in `microwarp_system`.
+        return out;
+    }
+
+    if let Some(nearest) = hostiles.iter().copied().min_by(|a, b| {
+        a.distance_squared(ship)
+            .total_cmp(&b.distance_squared(ship))
+    }) {
+        out.aim_point = nearest;
+        if nearest.distance(ship) <= emp_range {
+            out.emp_fire = true; // the emitter gates arc/target itself
+            out.helm = face(ship, heading, nearest, 0.35); // keep the bow (and EMP arc) on it
+        } else {
+            out.torpedo_hold = torpedo_locks < TORPEDO_MIN_VOLLEY;
+            out.helm = face(ship, heading, nearest, 0.2); // kite at range
+        }
+    }
+    out
+}
+
+/// Bevy system: for AI ships with `use_abilities`, drive the special kit through
+/// their [`PilotIntent`]. Ships without it (enemies) are untouched.
+#[allow(clippy::type_complexity)]
+pub fn ai_abilities_system(
+    time: Res<Time>,
+    mut ships: Query<(
+        &Transform,
+        &Heading,
+        &Faction,
+        &mut AiController,
+        &EmpWeapon,
+        &TorpedoBay,
+        &MicrowarpDrive,
+        &mut PilotIntent,
+        &mut Helm,
+    )>,
+    targets: Query<(&Transform, &Faction), With<Ship>>,
+) {
+    let dt = time.delta_secs();
+    let all: Vec<(Vec2, Faction)> = targets
+        .iter()
+        .map(|(t, f)| (t.translation.truncate(), *f))
+        .collect();
+
+    for (transform, heading, faction, mut ai, emp, bay, warp, mut pilot, mut helm) in &mut ships {
+        if !ai.use_abilities {
+            continue;
+        }
+        let ship = transform.translation.truncate();
+        let hostiles: Vec<Vec2> = all
+            .iter()
+            .filter(|(_, f)| faction.hostile_to(*f))
+            .map(|(p, _)| *p)
+            .collect();
+        let d = decide_abilities(
+            ship,
+            heading.0,
+            &hostiles,
+            emp.range,
+            warp.range,
+            warp.timer <= 0.0,
+            bay.locks,
+            ai.warp_prime,
+            dt,
+        );
+        ai.warp_prime = d.warp_prime;
+        pilot.aim_point = d.aim_point;
+        pilot.emp_fire = d.emp_fire;
+        pilot.torpedo_hold = d.torpedo_hold;
+        pilot.microwarp_hold = d.microwarp_hold;
+        // Override the broadside helm: this pilot fights bow-on with the kit.
+        if !hostiles.is_empty() {
+            *helm = d.helm;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +305,7 @@ mod tests {
             engage_range: 300.0,
             fire_arc: 0.35,
             flee_hull_frac: 0.25,
+            ..Default::default()
         }
     }
 
@@ -254,6 +413,78 @@ mod tests {
         assert!(
             helm.throttle != 0.0 || helm.turn != 0.0,
             "AI should have set a non-idle helm"
+        );
+    }
+
+    #[test]
+    fn emp_when_a_target_is_in_range() {
+        // One hostile within EMP range → fire EMP, no torpedoes.
+        let d = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &[Vec2::new(300.0, 0.0)],
+            620.0,
+            900.0,
+            true,
+            0,
+            0.0,
+            0.1,
+        );
+        assert!(d.emp_fire, "should EMP a targetable ship");
+        assert!(!d.torpedo_hold && !d.microwarp_hold);
+    }
+
+    #[test]
+    fn torpedoes_when_the_only_target_is_far() {
+        // Nearest hostile beyond EMP range, none closer → build a torpedo volley.
+        let d = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &[Vec2::new(1000.0, 0.0)],
+            620.0,
+            900.0,
+            true,
+            0,
+            0.0,
+            0.1,
+        );
+        assert!(!d.emp_fire, "target is too far for EMP");
+        assert!(d.torpedo_hold, "should hold torpedoes to lock the volley");
+        // Once enough tubes are locked, it releases (hold=false) to fire.
+        let released = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &[Vec2::new(1000.0, 0.0)],
+            620.0,
+            900.0,
+            true,
+            5,
+            0.0,
+            0.1,
+        );
+        assert!(
+            !released.torpedo_hold,
+            "should release once enough are locked"
+        );
+    }
+
+    #[test]
+    fn microwarp_away_when_surrounded() {
+        // Three hostiles clustered on +X → warp toward -X (away), at max range.
+        let hostiles = [
+            Vec2::new(200.0, 20.0),
+            Vec2::new(220.0, -30.0),
+            Vec2::new(180.0, 0.0),
+        ];
+        let d = decide_abilities(Vec2::ZERO, 0.0, &hostiles, 620.0, 900.0, true, 0, 0.0, 0.1);
+        assert!(d.microwarp_hold, "should prime a microwarp");
+        assert!(
+            d.aim_point.x < 0.0,
+            "should warp away from the enemies (−X)"
+        );
+        assert!(
+            (d.aim_point.length() - 900.0).abs() < 1.0,
+            "should warp at max range"
         );
     }
 }

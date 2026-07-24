@@ -454,6 +454,12 @@ pub struct AiController {
     pub fire_arc: f32,
     /// Below this fraction of max hull the ship breaks off and runs.
     pub flee_hull_frac: f32,
+    /// When true, this AI also drives the special kit (EMP / torpedoes /
+    /// microwarp) via [`PilotIntent`], not just the broadside. Enemies leave it
+    /// off; the player-piloting AI turns it on.
+    pub use_abilities: bool,
+    /// Transient: how long the AI has been priming a microwarp (internal).
+    pub warp_prime: f32,
 }
 
 impl Default for AiController {
@@ -462,6 +468,18 @@ impl Default for AiController {
             engage_range: 300.0,
             fire_arc: 0.35, // ~20°
             flee_hull_frac: 0.25,
+            use_abilities: false,
+            warp_prime: 0.0,
+        }
+    }
+}
+
+impl AiController {
+    /// An AI that pilots a full player-style ship, using every ability.
+    pub fn piloting() -> Self {
+        Self {
+            use_abilities: true,
+            ..Self::default()
         }
     }
 }
