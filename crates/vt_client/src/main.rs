@@ -56,6 +56,10 @@ const CAM_PITCH_MAX: f32 = 1.2;
 const CAM_AIM_PITCH: f32 = 0.72;
 /// How much the camera pulls in toward the ship at maximum pitch (0 = none).
 const CAM_PITCH_ZOOM: f32 = 0.4;
+/// Near-top-down pitch used while placing a microwarp.
+const CAM_MICROWARP_PITCH: f32 = 1.5;
+/// Faster yaw/pitch ease while locked to an aim (broadside / microwarp).
+const CAM_AIM_LERP: f32 = 9.0;
 /// Spacing between grid lines on the plane.
 const GRID_SPACING: f32 = 200.0;
 /// Grid cells each way.
@@ -97,6 +101,8 @@ struct GameMeshes {
     ship: Handle<Mesh>,
     /// Unit sphere — scaled per use.
     sphere: Handle<Mesh>,
+    /// A long thin torpedo body (oriented along its velocity).
+    torpedo: Handle<Mesh>,
 }
 
 /// Shared materials for things that never change colour.
@@ -125,7 +131,7 @@ struct Aiming {
 }
 
 /// Fraction of normal time while aiming (bullet-time).
-const AIM_TIMESCALE: f32 = 0.25;
+const AIM_TIMESCALE: f32 = 0.10;
 
 /// The aim battery: aiming a weapon dilates global time toward
 /// [`AIM_TIMESCALE`] while this has charge, then eases back. Charge is spent in
@@ -287,12 +293,14 @@ fn main() {
                 attach_projectile_visuals,
                 attach_empbolt_visuals,
                 attach_torpedo_visuals,
+                orient_torpedoes,
                 damage_tint,
                 camera_orbit,
                 draw_grid,
                 draw_aim_beams,
                 draw_charge_telegraph,
                 draw_reticle,
+                draw_microwarp_range,
                 microwarp_ghost,
                 update_hud,
                 update_hull_bar,
@@ -342,14 +350,21 @@ fn spawn_player(commands: &mut Commands) {
             ShipStats::default(),
             100.0,
             PLAYER_START,
-            Broadside::default(),
+            // The player's broadside is a heavy, slow-recharging weapon.
+            Broadside {
+                cooldown: 10.0,
+                ..Broadside::default()
+            },
         ),
         Player,
         Protagonist,
         BoostDrive::default(),
         EmpWeapon::default(),
         TorpedoBay::default(),
-        MicrowarpDrive::default(),
+        MicrowarpDrive {
+            cooldown: 20.0,
+            ..MicrowarpDrive::default()
+        },
     ));
 }
 
@@ -363,6 +378,8 @@ fn setup(
     let game_meshes = GameMeshes {
         ship: meshes.add(Cuboid::new(SHIP_SIZE.x, SHIP_SIZE.y, SHIP_SIZE.z)),
         sphere: meshes.add(Sphere::new(1.0)),
+        // Long in local +Z, so orienting +Z along velocity points it forward.
+        torpedo: meshes.add(Cuboid::new(5.0, 5.0, 26.0)),
     };
     let game_materials = GameMaterials {
         shot: materials.add(StandardMaterial {
@@ -807,20 +824,27 @@ fn attach_empbolt_visuals(
     }
 }
 
-/// Give every torpedo an orange sphere (kept scaled by the homing system's
-/// transform, which only overwrites translation).
+/// Give every torpedo its orange body.
 fn attach_torpedo_visuals(
     mut commands: Commands,
     meshes: Res<GameMeshes>,
     mats: Res<GameMaterials>,
-    mut torps: Query<(Entity, &mut Transform), (With<Torpedo>, Without<Mesh3d>)>,
+    torps: Query<Entity, (With<Torpedo>, Without<Mesh3d>)>,
 ) {
-    for (entity, mut transform) in &mut torps {
-        transform.scale = Vec3::splat(9.0);
+    for entity in &torps {
         commands.entity(entity).insert((
-            Mesh3d(meshes.sphere.clone()),
+            Mesh3d(meshes.torpedo.clone()),
             MeshMaterial3d(mats.torpedo.clone()),
         ));
+    }
+}
+
+/// Orient each torpedo body along its 3D velocity so it visibly points up/down
+/// at launch and pitches over through the arc.
+fn orient_torpedoes(mut torps: Query<(&Torpedo, &mut Transform)>) {
+    for (torp, mut transform) in &mut torps {
+        let dir = torp.vel.normalize_or(Vec3::Z);
+        transform.rotation = Quat::from_rotation_arc(Vec3::Z, dir);
     }
 }
 
@@ -902,7 +926,10 @@ fn camera_orbit(
     pilot: Res<PilotIntent>,
     windows: Query<&Window>,
     gamepads: Query<&Gamepad>,
-    player: Query<(&Transform, &Heading, &Broadside), (With<Player>, Without<MainCamera>)>,
+    player: Query<
+        (&Transform, &Heading, &Broadside, &MicrowarpDrive),
+        (With<Player>, Without<MainCamera>),
+    >,
     mut camera: Query<&mut Transform, With<MainCamera>>,
 ) {
     let dt = time.delta_secs();
@@ -929,21 +956,27 @@ fn camera_orbit(
     }
 
     let (mut target_yaw, mut target_pitch) = (rig.yaw, CAM_PITCH_BASE);
-    if let Ok((transform, heading, bank)) = player.single() {
-        rig.target = transform.translation.truncate();
+    let mut desired_focus = rig.target;
+    let mut locked = false;
+    if let Ok((transform, heading, bank, drive)) = player.single() {
         let pos = transform.translation.truncate();
+        desired_focus = pos;
         let aiming_broadside = aiming.port || aiming.starboard;
         if pilot.microwarp_hold {
-            // Swoop up to a near-top-down view to place the warp.
+            // Top-down, framed on the (range-clamped) warp destination.
+            let dest = clamp_to_range(pos, pilot.aim_point, drive.range);
+            desired_focus = dest;
             target_yaw = heading.0;
-            target_pitch = CAM_PITCH_MAX;
+            target_pitch = CAM_MICROWARP_PITCH;
+            locked = true;
         } else if aiming_broadside {
-            // Snap toward where the broadside points.
+            // Lock the yaw along where the broadside points.
             let is_port = aiming.port;
             let aim_dir = (pilot.aim_point - pos).normalize_or_zero();
             let dir = broadside_direction(heading.0, is_port, Some(aim_dir), bank.arc);
             target_yaw = dir.to_angle();
             target_pitch = CAM_AIM_PITCH;
+            locked = true;
         } else {
             // Follow the heading, offset by free-look (yaw not inverted).
             target_yaw = heading.0 - look_x * 0.9;
@@ -951,9 +984,14 @@ fn camera_orbit(
         }
     }
 
-    let k = 1.0 - (-CAM_YAW_LERP * dt).exp();
+    let lerp = if locked { CAM_AIM_LERP } else { CAM_YAW_LERP };
+    let k = 1.0 - (-lerp * dt).exp();
     rig.yaw = wrap_angle(rig.yaw + wrap_angle(target_yaw - rig.yaw) * k);
     rig.pitch += (target_pitch - rig.pitch) * k;
+    // Ease the focus toward the ship (or the warp point) tightly.
+    let fk = 1.0 - (-10.0 * dt).exp();
+    let focus_step = (desired_focus - rig.target) * fk;
+    rig.target += focus_step;
 
     // Decay trauma; shake amount is trauma squared for a punchy falloff.
     rig.trauma = (rig.trauma - dt * 1.4).clamp(0.0, 1.0);
@@ -1033,6 +1071,30 @@ fn draw_reticle(mut gizmos: Gizmos, pilot: Res<PilotIntent>) {
         14.0,
         Color::srgba(1.0, 1.0, 1.0, 0.5),
     );
+}
+
+/// While placing a microwarp, draw the reachable range ring and a line to the
+/// clamped destination.
+fn draw_microwarp_range(
+    mut gizmos: Gizmos,
+    pilot: Res<PilotIntent>,
+    player: Query<(&Transform, &MicrowarpDrive), With<Player>>,
+) {
+    if !pilot.microwarp_hold {
+        return;
+    }
+    let Ok((transform, drive)) = player.single() else {
+        return;
+    };
+    let ship = transform.translation.truncate();
+    let dest = clamp_to_range(ship, pilot.aim_point, drive.range);
+    let color = Color::srgba(0.4, 0.9, 0.7, 0.5);
+    gizmos.circle(
+        Isometry3d::from_translation(ship.extend(1.0)),
+        drive.range,
+        color,
+    );
+    gizmos.line(ship.extend(1.0), dest.extend(1.0), color);
 }
 
 /// Show the microwarp ghost at the clamped destination while the pilot aims a

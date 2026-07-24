@@ -7,7 +7,7 @@
 //! same entities to draw them.
 
 use bevy_ecs::prelude::*;
-use bevy_math::Vec2;
+use bevy_math::{Vec2, Vec3};
 
 /// Which power a ship answers to. Used for friendly-fire filtering and, later,
 /// AI target selection. Names are drawn from the Settled Dark setting.
@@ -82,13 +82,15 @@ pub struct ShipStats {
 
 impl Default for ShipStats {
     fn default() -> Self {
-        // A corsair sloop. Tuned slow and stately after playtesting: turn at 25%
-        // and top speed at 50% of the original snappy values.
+        // A corsair sloop. Slow and stately: turn at 25% and top speed at 50% of
+        // the original snappy values. Drag is high (little coast/drift); thrust
+        // is scaled with it so the ship still reaches `max_speed` (eq ≈
+        // thrust/drag).
         Self {
-            thrust: 130.0,
+            thrust: 1120.0,
             turn_rate: 0.55,
             max_speed: 170.0,
-            linear_drag: 0.6,
+            linear_drag: 6.0,
         }
     }
 }
@@ -354,14 +356,12 @@ pub struct TorpedoBay {
     pub lock_interval: f32,
     /// How near the aim cursor a hostile must be to be locked.
     pub lock_radius: f32,
-    /// Homing turn rate (radians/s).
+    /// Homing turn rate (radians/s) — kept low so the launch arc is visible.
     pub turn_rate: f32,
-    /// Cruise speed (units/s).
+    /// Cruise speed (units/s); torpedoes launch and fly at this the whole way.
     pub speed: f32,
     /// Hull damage per torpedo.
     pub damage: f32,
-    /// Height a torpedo launches to (±Z) before arcing back down.
-    pub arc_height: f32,
     // --- transient aim state ---
     pub hold_elapsed: f32,
     pub was_holding: bool,
@@ -372,15 +372,14 @@ pub struct TorpedoBay {
 impl Default for TorpedoBay {
     fn default() -> Self {
         Self {
-            tubes_max: 10,
-            loaded: 10.0,
+            tubes_max: 6,
+            loaded: 6.0,
             reload_per_tube: 1.5,
             lock_interval: 0.5,
             lock_radius: 150.0,
-            turn_rate: 3.2,
+            turn_rate: 1.5,
             speed: 260.0,
             damage: 22.0,
-            arc_height: 90.0,
             hold_elapsed: 0.0,
             was_holding: false,
             locks: 0,
@@ -410,7 +409,9 @@ impl Default for MicrowarpDrive {
     }
 }
 
-/// A homing torpedo in flight, chasing `target`.
+/// A homing torpedo in flight, chasing `target`. It carries its own 3D velocity
+/// (it launches straight up/down off the plane and arcs over), so it does not
+/// use the flat [`Velocity`] component.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Torpedo {
     pub faction: Faction,
@@ -419,6 +420,8 @@ pub struct Torpedo {
     pub speed: f32,
     pub damage: f32,
     pub radius: f32,
+    /// Full 3D velocity.
+    pub vel: Vec3,
 }
 
 /// The player's transient aiming/firing intent, rebuilt each frame by the

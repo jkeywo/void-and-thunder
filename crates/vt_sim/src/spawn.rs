@@ -160,7 +160,7 @@ pub fn director_system(
     let hull = director.base_hull + (director.wave - 1) as f32 * 25.0;
     let jitter = director.next_seed();
     let stats = ShipStats {
-        thrust: 60.0,
+        thrust: 660.0,
         turn_rate: 0.35,
         max_speed: 100.0,
         ..Default::default()

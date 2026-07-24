@@ -3,19 +3,20 @@
 //! While the pilot holds aim, [`torpedo_aim_system`] locks the hostile nearest
 //! the aim cursor and accrues launch count (1 instantly, then one per
 //! `lock_interval`, capped by loaded tubes). On release it fires that many
-//! [`Torpedo`]s from alternating top/bottom of the ship; [`torpedo_homing_system`]
-//! steers them toward the target while their launch arc settles back to the
-//! plane, and [`torpedo_hit_system`] applies hull damage on contact. The
-//! decidable pieces ([`torpedo_locks`], [`home_velocity`]) are unit-tested.
+//! [`Torpedo`]s straight up/down off the plane at full speed; their slow
+//! rate-limited turn ([`home_velocity`], a 3D axis-angle rotation — no gravity)
+//! arcs them over onto the target, and [`torpedo_hit_system`] applies hull damage
+//! on a 3D contact. The decidable pieces ([`torpedo_locks`], [`home_velocity`])
+//! are unit-tested.
 
 use bevy_ecs::prelude::*;
-use bevy_math::Vec2;
+use bevy_math::{Quat, Vec2, Vec3};
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 
-use crate::combat::{circles_overlap, BRACE_DAMAGE_FACTOR};
+use crate::combat::BRACE_DAMAGE_FACTOR;
 use crate::components::{
-    Brace, Collider, Faction, Hull, PilotIntent, Ship, Torpedo, TorpedoBay, Ttl, Velocity,
+    Brace, Collider, Faction, Hull, PilotIntent, Ship, Torpedo, TorpedoBay, Ttl,
 };
 use crate::events::ShipHit;
 
@@ -26,16 +27,24 @@ pub fn torpedo_locks(elapsed: f32, interval: f32, cap: u32) -> u32 {
     (1 + extra).min(cap)
 }
 
-/// Turn `vel` toward `desired_dir` by at most `turn_rate * dt`, keeping `speed`.
-pub fn home_velocity(vel: Vec2, desired_dir: Vec2, speed: f32, turn_rate: f32, dt: f32) -> Vec2 {
-    let current = vel.normalize_or(desired_dir.normalize_or(Vec2::X));
+/// Turn a 3D velocity toward `desired_dir` by at most `turn_rate * dt`, keeping
+/// `speed`. Rotates about the axis `current × desired` — a real angular limit,
+/// so a torpedo launched straight up arcs over toward its target instead of
+/// snapping. No gravity: only the turn shapes the arc.
+pub fn home_velocity(vel: Vec3, desired_dir: Vec3, speed: f32, turn_rate: f32, dt: f32) -> Vec3 {
+    let current = vel.normalize_or(desired_dir.normalize_or(Vec3::X));
     let desired = desired_dir.normalize_or(current);
-    let max = turn_rate * dt;
-    // Signed angle from current to desired, clamped to the max turn.
-    let cross = current.x * desired.y - current.y * desired.x;
     let dot = current.dot(desired).clamp(-1.0, 1.0);
-    let angle = dot.acos().copysign(cross).clamp(-max, max);
-    Vec2::from_angle(current.to_angle() + angle) * speed
+    let angle = dot.acos();
+    if angle < 1e-4 {
+        return desired * speed;
+    }
+    let max = turn_rate * dt;
+    let step = angle.min(max);
+    // Axis of rotation from current toward desired; fall back to Z if antiparallel.
+    let axis = current.cross(desired).try_normalize().unwrap_or(Vec3::Z);
+    let new_dir = Quat::from_axis_angle(axis, step) * current;
+    new_dir.normalize_or(desired) * speed
 }
 
 /// Bevy system: reload torpedo tubes one at a time.
@@ -85,12 +94,7 @@ pub fn torpedo_aim_system(
             // Release edge: fire the locked volley.
             if bay.was_holding && bay.locks > 0 {
                 if let Some(target) = bay.target {
-                    // Launch toward the target's current position.
-                    let target_pos = targets
-                        .get(target)
-                        .map(|(_, tf, _)| tf.translation.truncate())
-                        .unwrap_or(intent.aim_point);
-                    fire_volley(&mut commands, pos, target_pos, *faction, &bay, target);
+                    fire_volley(&mut commands, pos, *faction, &bay, target);
                     bay.loaded = (bay.loaded - bay.locks as f32).max(0.0);
                 }
             }
@@ -102,24 +106,18 @@ pub fn torpedo_aim_system(
     }
 }
 
-/// Spawn `bay.locks` torpedoes from alternating top/bottom of the ship, launched
-/// toward the target with a slight fan.
+/// Spawn `bay.locks` torpedoes, launched straight up/down off the plane at full
+/// speed. Their slow turn then arcs them over onto the target.
 fn fire_volley(
     commands: &mut Commands,
     pos: Vec2,
-    target_pos: Vec2,
     faction: Faction,
     bay: &TorpedoBay,
     target: Entity,
 ) {
-    let toward = (target_pos - pos).normalize_or(Vec2::X);
-    let base_angle = toward.to_angle();
     for i in 0..bay.locks {
-        let side = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let z = side * bay.arc_height;
-        // Fan the launch headings slightly so a volley spreads then converges.
-        let spread = (i as f32 - (bay.locks as f32 - 1.0) * 0.5) * 0.12;
-        let dir = Vec2::from_angle(base_angle + spread);
+        let up = if i % 2 == 0 { 1.0 } else { -1.0 };
+        let vel = Vec3::new(0.0, 0.0, up * bay.speed);
         commands.spawn((
             Torpedo {
                 faction,
@@ -127,37 +125,35 @@ fn fire_volley(
                 turn_rate: bay.turn_rate,
                 speed: bay.speed,
                 damage: bay.damage,
-                radius: 9.0,
+                radius: 12.0,
+                vel,
             },
-            Velocity(dir * bay.speed),
-            Transform::from_translation(pos.extend(z)),
-            Ttl(6.0),
+            Transform::from_translation(pos.extend(0.0)),
+            Ttl(8.0),
         ));
     }
 }
 
-/// Bevy system: home torpedoes toward their target and settle their arc to the plane.
+/// Bevy system: steer torpedoes in 3D toward their target and integrate.
 pub fn torpedo_homing_system(
     time: Res<Time>,
     targets: Query<&Transform, With<Ship>>,
-    mut torps: Query<(&mut Transform, &mut Velocity, &Torpedo), Without<Ship>>,
+    mut torps: Query<(&mut Transform, &mut Torpedo), Without<Ship>>,
 ) {
     let dt = time.delta_secs();
-    for (mut transform, mut velocity, torp) in &mut torps {
-        let pos = transform.translation.truncate();
+    for (mut transform, mut torp) in &mut torps {
         if let Ok(target_tf) = targets.get(torp.target) {
-            let to = target_tf.translation.truncate() - pos;
+            let to = target_tf.translation - transform.translation;
             if to.length_squared() > 1e-3 {
-                velocity.0 = home_velocity(velocity.0, to, torp.speed, torp.turn_rate, dt);
+                torp.vel = home_velocity(torp.vel, to, torp.speed, torp.turn_rate, dt);
             }
         }
-        transform.translation += (velocity.0 * dt).extend(0.0);
-        // Ease the launch arc back down to the plane.
-        transform.translation.z += (0.0 - transform.translation.z) * (dt * 2.5).min(1.0);
+        transform.translation += torp.vel * dt;
     }
 }
 
-/// Bevy system: apply hull damage when a torpedo reaches a hostile ship.
+/// Bevy system: apply hull damage when a torpedo reaches a hostile ship. Uses a
+/// 3D distance so a torpedo still arcing high above the plane doesn't detonate.
 pub fn torpedo_hit_system(
     mut commands: Commands,
     mut hits: MessageWriter<ShipHit>,
@@ -165,17 +161,16 @@ pub fn torpedo_hit_system(
     mut ships: Query<(&Transform, &Collider, &Faction, &mut Hull, Option<&Brace>), With<Ship>>,
 ) {
     for (entity, transform, torp) in &torps {
-        let pos = transform.translation.truncate();
         for (ship_tf, collider, faction, mut hull, brace) in &mut ships {
             if !torp.faction.hostile_to(*faction) {
                 continue;
             }
-            let ship_pos = ship_tf.translation.truncate();
-            if circles_overlap(pos, torp.radius, ship_pos, collider.radius) {
+            let reach = torp.radius + collider.radius;
+            if transform.translation.distance_squared(ship_tf.translation) <= reach * reach {
                 let braced = brace.is_some_and(|b| b.active);
                 hull.current -= torp.damage * if braced { BRACE_DAMAGE_FACTOR } else { 1.0 };
                 hits.write(ShipHit {
-                    position: ship_pos,
+                    position: ship_tf.translation.truncate(),
                     faction: *faction,
                 });
                 commands.entity(entity).despawn();
@@ -203,11 +198,14 @@ mod tests {
 
     #[test]
     fn homing_turns_toward_the_target_but_is_rate_limited() {
-        // Flying +X, target is +Y: after a small step, velocity should have
-        // rotated toward +Y but not all the way.
-        let v = home_velocity(Vec2::new(500.0, 0.0), Vec2::new(0.0, 1.0), 500.0, 1.0, 0.1);
+        // Launched straight up (+Z), target is +X: after a small step the
+        // velocity tilts toward +X but is still mostly +Z (a visible arc).
+        let v = home_velocity(Vec3::new(0.0, 0.0, 500.0), Vec3::X, 500.0, 1.0, 0.1);
         assert!((v.length() - 500.0).abs() < 1e-3, "speed preserved");
-        assert!(v.y > 0.0, "turned toward the target");
-        assert!(v.x > 0.0, "not turned all the way in one step");
+        assert!(v.x > 0.0, "turned toward the target");
+        assert!(
+            v.z > 0.0,
+            "not turned all the way in one step (still arcing up)"
+        );
     }
 }
