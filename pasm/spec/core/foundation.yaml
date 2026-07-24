@@ -38,13 +38,14 @@ entities:
       confidence: confirmed
       title: Ship Combat
       summary: >-
-        Black-Flag-style broadsides. FireOrders is a *request* consumed by
-        weapons_system (raise it, it fires once if reloaded, then it is cleared)
-        — which is what makes the player's hold-to-aim / release-to-fire work,
-        while the AI simply re-requests each tick. The volley spreads cannonballs
-        along the hull, each inheriting ship momentum. Projectiles fly, expire on
-        a TTL, and on a circle overlap apply damage to hostile-faction hulls
-        (reduced while bracing); dead hulls despawn.
+        Aimed broadsides. FireOrders is a *request* consumed by weapons_system
+        (hold-to-aim / release-to-fire); the player's aim direction is clamped to
+        the beam ± Broadside.arc by broadside_direction (None = the beam, used by
+        the AI). A fire request begins a charge_time wind-up along the captured
+        direction, then fires — 0 for the player, ~0.5s telegraphed for enemies.
+        broadside_volley spreads shots along the hull, each inheriting ship
+        momentum; projectiles fly, expire on a TTL, and on overlap damage
+        hostile-faction hulls (reduced while bracing); dead hulls despawn.
       references: [ship-movement]
     implementation:
       status: declared
@@ -52,6 +53,7 @@ entities:
       symbols:
         [
           broadside_volley,
+          broadside_direction,
           circles_overlap,
           weapons_system,
           projectile_system,
@@ -107,6 +109,88 @@ entities:
           BOARD_RANGE,
         ]
       tests: [crates/vt_sim/src/piracy.rs]
+
+  - component: ship-drives
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Ship Drives & Time Dilation
+      summary: >-
+        Per-ship SpeedScale (= EMP x boost) recomputed each step and applied by
+        movement_system. EmpDefense is the EMP bar that inverse-lerps speed and
+        recovers; BoostDrive is a rechargeable speed overdrive; MicrowarpDrive is
+        a short-range aimed teleport (clamp_to_range, cooldown-gated). Aiming any
+        weapon dilates global time to 25% via the client's AimBattery easing
+        Time<Virtual> (bullet-time), spent in real seconds so the sim slows while
+        input/camera stay live. All tuning is per-ship.
+      references: [ship-movement, emp-weapon]
+    implementation:
+      status: declared
+      paths:
+        [
+          crates/vt_sim/src/drive.rs,
+          crates/vt_sim/src/components.rs,
+          crates/vt_client/src/main.rs,
+        ]
+      symbols:
+        [
+          speed_scale,
+          speed_scale_system,
+          battery_system,
+          microwarp_system,
+          clamp_to_range,
+          SpeedScale,
+          EmpDefense,
+          BoostDrive,
+          MicrowarpDrive,
+        ]
+      tests: [crates/vt_sim/src/drive.rs]
+
+  - component: emp-weapon
+    core:
+      status: implemented
+      confidence: confirmed
+      title: EMP Emitter
+      summary: >-
+        Frontal auto-tracking weapon (player-only). While held, emp_system picks
+        the hostile nearest the aim cursor within range and arc, swivels the
+        emitter toward its lead (rate-limited, arc-clamped) and fires EmpBolts on
+        cooldown; emp_bolt_system applies 25% of the target's EMP resist per hit.
+      references: [ship-drives, ship-combat]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/emp.rs, crates/vt_sim/src/components.rs]
+      symbols:
+        [emp_system, emp_bolt_system, lead_angle, swivel_toward, EmpWeapon, EmpBolt]
+      tests: [crates/vt_sim/src/emp.rs]
+
+  - component: torpedoes
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Homing Torpedoes
+      summary: >-
+        A reloading magazine (player-only). Holding aim locks the hostile nearest
+        the cursor and accrues launch count (1 + 1 per 0.5s, capped by loaded
+        tubes / 10); release fires that many homing torpedoes from alternating
+        top/bottom, arcing back to the plane. torpedo_homing_system steers them,
+        torpedo_hit_system applies hull damage, tubes reload one at a time.
+      references: [ship-combat]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/torpedo.rs, crates/vt_sim/src/components.rs]
+      symbols:
+        [
+          torpedo_aim_system,
+          torpedo_homing_system,
+          torpedo_hit_system,
+          torpedo_reload_system,
+          torpedo_locks,
+          home_velocity,
+          TorpedoBay,
+          Torpedo,
+        ]
+      tests: [crates/vt_sim/src/torpedo.rs]
 
   - component: game-feel
     core:

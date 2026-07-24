@@ -9,24 +9,32 @@ Black Flag*'s naval combat and *Rogue Galaxy*'s roving space pirates.
 
 ## Controls
 
-| Key   | Action                     |
-| ----- | -------------------------- |
-| **W** | Throttle forward           |
-| **S** | Reverse                    |
-| **A** | Turn to port (left)        |
-| **D** | Turn to starboard (right)  |
-| **Q** | **Hold** to aim the port broadside, **release** to fire |
-| **E** | **Hold** to aim the starboard broadside, **release** to fire |
-| **Space** | Brace — cut incoming damage |
+Aim with the **mouse** (or right stick). **Aiming a broadside, torpedo, or
+microwarp dilates time** — bullet-time — from a rechargeable aim battery, giving
+you a moment to line up the shot.
+
+| Key | Action |
+| --- | --- |
+| **W / S** | Throttle forward / reverse |
+| **A / D** | Turn to port / starboard |
+| **LMB / RMB** | Hold to aim the port / starboard **broadside** (within an arc), release to fire — the camera snaps to the aim direction |
+| **Q** | **EMP** — hold to auto-track a target and drain its drive (slowing it) |
+| **Ctrl** | **Torpedoes** — hold to lock (1, then +1 per 0.5s, up to 10), release to fire a homing volley |
+| **Shift** | **Microwarp** — hold to place a short-range teleport point (ghost preview), release to warp |
+| **Space** | Boost (rechargeable battery) |
+| **C** | Brace — cut incoming damage |
 | **B** | Board a crippled enemy alongside (loot it) |
-| **R** | Restart after a run ends   |
+| **R** | Restart after a run ends |
 
-**Gamepad** (Black-Flag scheme): **RT/LT** throttle & reverse · **left stick**
-steer · **LB/RB** hold-aim / release-fire the broadsides · **X** brace ·
-**A** board · **Start** restart.
+**Gamepad**: **left stick** throttle/steer · **right stick** aim & camera ·
+**LT/RT** broadsides · **LB** torpedoes · **RB** microwarp · **X** EMP ·
+**A** boost · **Y** brace · **B** board · **Start** restart.
 
-Holding a broadside draws the aim beams for that side — where the volley will
-actually go, computed with the sim's own geometry. Let go to fire.
+You can't strafe — turn the hull to bring a broadside to bear, and steer the
+volley within its arc toward the reticle. Enemy broadsides **telegraph a 0.5s
+charge** (a closing red ring) so you can dodge or brace. Batter a hull low enough
+and it's **crippled** (grey, drifting): board it (**B**) to plunder, or finish it.
+Clear every wave to win.
 
 You can't strafe — turn the hull to bring a broadside to bear. Presenting your
 beam is the skill. Batter an enemy's hull low enough and it's **crippled** (grey,

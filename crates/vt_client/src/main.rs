@@ -11,18 +11,22 @@
 //! around the player's ship. So the gameplay stays a Black-Flag naval duel while
 //! the view is fully 3D — boxes for hulls, spheres for shot and worlds.
 //!
-//! Controls (kit is being rolled out phase by phase — see the plan):
-//!   W / S   — throttle forward / reverse
-//!   A / D   — turn to port / starboard
-//!   Q / E   — **hold** to aim the port / starboard broadside, **release** to fire
-//!             (aiming dilates time — bullet-time — from the aim battery)
-//!   Space   — boost (rechargeable battery)
-//!   C       — brace (cut incoming damage)
-//!   B       — board a crippled enemy alongside (loot it)
-//!   R       — restart after a run ends
+//! Controls — aim with the mouse (or right stick). Aiming a broadside, torpedo
+//! or microwarp dilates time (bullet-time) from a rechargeable aim battery.
+//!   W / S      — throttle forward / reverse
+//!   A / D      — turn to port / starboard
+//!   LMB / RMB  — hold to aim the port / starboard broadside (within an arc),
+//!                release to fire; the camera snaps to the aim direction
+//!   Q          — EMP: hold to auto-track and drain a target's drive
+//!   Left Ctrl  — torpedoes: hold to lock (1 + 1 per 0.5s), release to volley
+//!   Left Shift — microwarp: hold to place a teleport point, release to warp
+//!   Space      — boost (rechargeable battery)
+//!   C          — brace (cut incoming damage)
+//!   B          — board a crippled enemy alongside (loot it)
+//!   R          — restart after a run ends
 //!
-//! Gamepad: RT/LT throttle & reverse, left stick steer, LB/RB hold-aim/
-//! release-fire broadsides, A boost, Y brace, B board, Start restart.
+//! Gamepad: left stick throttle/steer, right stick aim/camera, LT/RT broadsides,
+//! LB torpedoes, RB microwarp, X EMP, A boost, Y brace, B board, Start restart.
 
 use bevy::prelude::*;
 use bevy::time::{Real, Virtual};
@@ -266,6 +270,7 @@ fn main() {
                 draw_grid,
                 draw_aim_beams,
                 draw_charge_telegraph,
+                draw_reticle,
                 microwarp_ghost,
                 update_hud,
                 update_hull_bar,
@@ -999,6 +1004,15 @@ fn draw_aim_beams(
             gizmos.line(start, end, color);
         }
     }
+}
+
+/// Draw a small reticle on the plane where the aim cursor points.
+fn draw_reticle(mut gizmos: Gizmos, pilot: Res<PilotIntent>) {
+    gizmos.circle(
+        Isometry3d::from_translation(pilot.aim_point.extend(1.0)),
+        14.0,
+        Color::srgba(1.0, 1.0, 1.0, 0.5),
+    );
 }
 
 /// Show the microwarp ghost at the clamped destination while the pilot aims a
