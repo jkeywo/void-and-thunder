@@ -34,3 +34,6 @@ __pycache__/
 # Transient run/debug logs
 /hud-log.txt
 /ultralight.log
+
+# Local trunk dev-server log
+/trunk-serve.log

@@ -40,6 +40,7 @@
 
 use bevy::asset::AssetPath;
 use bevy::gltf::GltfAssetLabel;
+use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::time::{Real, Virtual};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -134,6 +135,10 @@ const LOOK_YAW_LIMIT: f32 = PI;
 const RECENTER_DELAY: f32 = 3.0;
 /// How gently the idle camera eases back to its default position.
 const RECENTER_LERP: f32 = 1.6;
+/// How much a pixel of mouse motion sweeps the broadside arc offset (-1..1). At
+/// ~0.0032 a rightward drag of ~310px covers the full half-arc. Motion-driven,
+/// not cursor-position-driven, so the aim never sticks where the cursor sat.
+const MOUSE_AIM_SENS: f32 = 0.0032;
 /// Gamepad aim-pointer speed (world units/sec at full stick) for the top-down
 /// torpedo / microwarp pointer and the EMP aim — rate-based, like a mouse.
 const AIM_CURSOR_RATE: f32 = 780.0;
@@ -279,6 +284,16 @@ impl Default for FreeLook {
     }
 }
 
+/// The broadside arc offset (-1..1 across the bank's arc) while a broadside is
+/// held, driven by yaw *input*: the gamepad stick sets it absolutely
+/// (spring-centred); the mouse accumulates motion into it so you steer with
+/// movement and each aim begins centred on the beam. Reset to 0 whenever no
+/// broadside is held, so the aim never sticks wherever the cursor last sat.
+#[derive(Resource, Default)]
+struct BroadsideAim {
+    offset: f32,
+}
+
 /// The world point the aim reticle sits on for the pointer-aimed kit (EMP,
 /// torpedo, microwarp). The mouse sets it absolutely (plane pick); the gamepad
 /// nudges it at a rate (like a mouse). It rests just ahead of the bow whenever
@@ -390,6 +405,14 @@ fn main() {
             }),
             ..default()
         })
+        // We ship no `.meta` sidecars. Skip the meta lookup entirely so assets
+        // load cleanly on the web, where a dev server (trunk) answers the missing
+        // `.meta` with a 200 + index.html that Bevy then fails to parse as RON —
+        // which otherwise breaks every model/texture load.
+        .set(AssetPlugin {
+            meta_check: bevy::asset::AssetMetaCheck::Never,
+            ..default()
+        })
         .set(ImagePlugin::default_nearest());
     // On the web, Bevy audio is disabled — sound goes through a WebAudio shim
     // (see src/audio.rs). Native keeps Bevy audio.
@@ -413,6 +436,7 @@ fn main() {
         .init_resource::<Paused>()
         .init_resource::<FreeLook>()
         .init_resource::<AimCursor>()
+        .init_resource::<BroadsideAim>()
         .add_systems(Startup, setup)
         // Presentation runs in every state.
         .add_systems(
@@ -720,9 +744,11 @@ fn player_input(
     method: Res<InputMethod>,
     paused: Res<Paused>,
     player_ai: Res<PlayerAi>,
+    mouse_motion: Res<AccumulatedMouseMotion>,
     mut board: ResMut<BoardIntent>,
     mut aiming: ResMut<Aiming>,
     mut aim_cursor: ResMut<AimCursor>,
+    mut broadside_aim: ResMut<BroadsideAim>,
     mut player: Query<
         (
             &mut Helm,
@@ -733,6 +759,7 @@ fn player_input(
             &Transform,
             &Heading,
             &Broadside,
+            &MicrowarpDrive,
         ),
         With<Player>,
     >,
@@ -742,7 +769,7 @@ fn player_input(
     if paused.0 || player_ai.on {
         return;
     }
-    let Ok((mut helm, mut orders, mut brace, mut boost, mut pilot, transform, heading, bank)) =
+    let Ok((mut helm, mut orders, mut brace, mut boost, mut pilot, transform, heading, bank, warp)) =
         player.single_mut()
     else {
         return;
@@ -801,6 +828,11 @@ fn player_input(
     aiming.port = aim_port;
     aiming.starboard = aim_starboard;
 
+    // The microwarp can't even be *aimed* while it's recharging — suppress the
+    // hold so the top-down view, ghost preview and aim-battery drain never engage
+    // on cooldown. (The sim also gates the warp itself on the same timer.)
+    let microwarp_hold = microwarp_hold && warp.timer <= 0.0;
+
     // --- Aim ---
     let ship = transform.translation.truncate();
     let dt = real.delta_secs();
@@ -822,26 +854,26 @@ fn player_input(
     };
 
     let aiming_broadside = aim_port || aim_starboard;
+    if !aiming_broadside {
+        // Each fresh broadside aim starts centred on the beam.
+        broadside_aim.offset = 0.0;
+    }
     let aim_point = if aiming_broadside {
-        // The yaw axis drives the aim *directly* across the bank's arc — full
-        // deflection reaches the arc's edge, centre points straight out the beam.
-        // (The camera yaw follows this, so you steer the whole view.) Prefer port
-        // when both sides are held, matching the sim's volley choice.
-        let axis = if use_pad {
-            right_stick(GamepadAxis::RightStickX)
-        } else if let Ok(window) = windows.single() {
-            window
-                .cursor_position()
-                .map(|c| (c.x / window.width().max(1.0) * 2.0 - 1.0).clamp(-1.0, 1.0))
-                .unwrap_or(0.0)
+        // Drive the arc offset (-1..1) from yaw *input*, not cursor position: the
+        // gamepad stick is absolute (spring-centred); the mouse accumulates motion
+        // so you steer with movement and each aim begins centred. That's what keeps
+        // the aim from sticking wherever the cursor happened to sit.
+        let is_port = aim_port; // prefer port when both are held (matches the sim)
+        if use_pad {
+            broadside_aim.offset = right_stick(GamepadAxis::RightStickX).clamp(-1.0, 1.0);
         } else {
-            0.0
-        };
-        let is_port = aim_port;
-        let beam = heading.0 + if is_port { PI * 0.5 } else { -PI * 0.5 };
-        // Right (+axis) sweeps the aim clockwise (toward the bow on starboard,
-        // toward the stern on port) — a consistent "push right, swing right".
-        let angle = beam - axis * bank.arc;
+            broadside_aim.offset =
+                (broadside_aim.offset + mouse_motion.delta.x * MOUSE_AIM_SENS).clamp(-1.0, 1.0);
+        }
+        let beam = heading.0 + if is_port { FRAC_PI_2 } else { -FRAC_PI_2 };
+        // Right (+offset) sweeps the aim clockwise — a consistent "push right,
+        // swing right" on both banks.
+        let angle = beam - broadside_aim.offset * bank.arc;
         ship + Vec2::from_angle(angle) * 320.0
     } else if emp_fire || torpedo_hold || microwarp_hold {
         // Pointer aim for the kit. Mouse sets it absolutely (plane pick); the
