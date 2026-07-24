@@ -141,27 +141,52 @@
     <script>
       // HUD overlay shim for the wasm build. The game's HudBridgePlugin builds a
       // JSON snapshot of the player ship each frame and pushes it here via
-      // wasm-bindgen. The HUD itself is the self-contained page assets/ui/hud.html,
-      // mounted as a transparent, click-through iframe over the canvas; bridge.js
-      // (loaded inside it) exposes __applyHud. See crates/vt_client/src/hud.rs.
+      // wasm-bindgen. The HUD is the self-contained page assets/ui/hud.html; we
+      // inject its <style> + body into a same-document overlay <div> (NOT an
+      // iframe — a transparent iframe over a WebGL canvas composites with an
+      // opaque backing in Chromium and hides the game). bridge.js exposes
+      // __applyHud. See crates/vt_client/src/hud.rs.
       (function () {
-        let frame;
+        const BASE = 'assets/ui/';
         window.vtHudInit = function () {
-          if (frame) return;
-          frame = document.createElement('iframe');
-          frame.id = 'vt-hud';
-          frame.src = 'assets/ui/hud.html';
-          frame.setAttribute('scrolling', 'no');
-          Object.assign(frame.style, {
-            position: 'fixed', inset: '0', width: '100vw', height: '100vh',
-            border: '0', margin: '0', background: 'transparent',
-            pointerEvents: 'none', zIndex: '5',
-          });
-          document.body.appendChild(frame);
+          if (document.getElementById('vt-hud-overlay')) return;
+          const overlay = document.createElement('div');
+          overlay.id = 'vt-hud-overlay';
+          // Same-document, transparent, click-through, above the canvas.
+          overlay.style.cssText =
+            'position:fixed;inset:0;z-index:5;pointer-events:none;background:transparent;';
+          document.body.appendChild(overlay);
+
+          fetch(BASE + 'hud.html')
+            .then((r) => r.text())
+            .then((html) => {
+              const doc = new DOMParser().parseFromString(html, 'text/html');
+              // Scoped-ish styles into <head> (hud.html selectors are namespaced
+              // under #hud/.panel; the html,body rule only sets transparent).
+              doc.querySelectorAll('style').forEach((s) =>
+                document.head.appendChild(s.cloneNode(true))
+              );
+              // Body content (minus scripts) into the overlay.
+              Array.from(doc.body.children).forEach((el) => {
+                if (el.tagName !== 'SCRIPT') overlay.appendChild(el.cloneNode(true));
+              });
+              // Load bridge.js (sets __hosted + __applyHud), then run hud.html's
+              // inline script (defines updateHud, boot). Both run in THIS window,
+              // so their document.getElementById calls resolve the injected nodes.
+              const bridge = document.createElement('script');
+              bridge.src = BASE + 'bridge.js';
+              bridge.onload = () => {
+                doc.body.querySelectorAll('script:not([src])').forEach((orig) => {
+                  const s = document.createElement('script');
+                  s.textContent = orig.textContent;
+                  document.body.appendChild(s);
+                });
+              };
+              document.head.appendChild(bridge);
+            });
         };
         window.vtHudApply = function (json) {
-          const w = frame && frame.contentWindow;
-          if (w && typeof w.__applyHud === 'function') w.__applyHud(json);
+          if (typeof window.__applyHud === 'function') window.__applyHud(json);
         };
       })();
     </script>
