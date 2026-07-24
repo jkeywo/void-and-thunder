@@ -108,7 +108,9 @@ pub fn ai_system(
         ),
         (With<Ship>, Without<Disabled>),
     >,
-    targets: Query<(&Transform, &Faction), With<Ship>>,
+    // Crippled ships are prizes, not threats — never target them, so an AI never
+    // wastes a broadside finishing off a hulk it (or the player-AI) means to loot.
+    targets: Query<(&Transform, &Faction), (With<Ship>, Without<Disabled>)>,
 ) {
     // Snapshot every ship's position + faction once, so the mutable pass below
     // doesn't conflict with reading potential targets.
@@ -460,6 +462,56 @@ mod tests {
         assert!(
             helm.throttle != 0.0 || helm.turn != 0.0,
             "AI should have set a non-idle helm"
+        );
+    }
+
+    /// An AI ship must not fire on a *crippled* hostile sitting on its beam — a
+    /// hulk is loot, not a target. Without excluding `Disabled` ships from the
+    /// AI's target set, the player-AI would destroy the ship it means to board.
+    #[test]
+    fn ai_holds_fire_on_a_crippled_prize() {
+        use crate::components::Hull;
+        use bevy_ecs::prelude::*;
+
+        let mut world = World::new();
+
+        // A crippled Corsair dead on the House ship's port beam (+Y), in range.
+        world.spawn((
+            Ship,
+            Faction::Corsairs,
+            Disabled,
+            Transform::from_xyz(0.0, 100.0, 0.0),
+            Heading(0.0),
+            Hull {
+                current: 10.0,
+                max: 100.0,
+            },
+            Helm::default(),
+            FireOrders::default(),
+        ));
+
+        // House ship at the origin facing +X — the only hostile is the hulk.
+        let enemy = world
+            .spawn((
+                Ship,
+                Faction::Houses,
+                AiController::default(),
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Heading(0.0),
+                Hull::new(100.0),
+                Helm::default(),
+                FireOrders::default(),
+            ))
+            .id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(ai_system);
+        schedule.run(&mut world);
+
+        let orders = world.get::<FireOrders>(enemy).unwrap();
+        assert!(
+            !orders.port && !orders.starboard,
+            "AI must not fire on a crippled prize"
         );
     }
 
