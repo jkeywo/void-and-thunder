@@ -138,6 +138,33 @@
         };
       })();
     </script>
+    <script>
+      // HUD overlay shim for the wasm build. The game's HudBridgePlugin builds a
+      // JSON snapshot of the player ship each frame and pushes it here via
+      // wasm-bindgen. The HUD itself is the self-contained page assets/ui/hud.html,
+      // mounted as a transparent, click-through iframe over the canvas; bridge.js
+      // (loaded inside it) exposes __applyHud. See crates/vt_client/src/hud.rs.
+      (function () {
+        let frame;
+        window.vtHudInit = function () {
+          if (frame) return;
+          frame = document.createElement('iframe');
+          frame.id = 'vt-hud';
+          frame.src = 'assets/ui/hud.html';
+          frame.setAttribute('scrolling', 'no');
+          Object.assign(frame.style, {
+            position: 'fixed', inset: '0', width: '100vw', height: '100vh',
+            border: '0', margin: '0', background: 'transparent',
+            pointerEvents: 'none', zIndex: '5',
+          });
+          document.body.appendChild(frame);
+        };
+        window.vtHudApply = function (json) {
+          const w = frame && frame.contentWindow;
+          if (w && typeof w.__applyHud === 'function') w.__applyHud(json);
+        };
+      })();
+    </script>
   </head>
   <body>
     <div id="loading">Crossing the void&hellip;<br /><small>loading Void &amp; Thunder</small></div>

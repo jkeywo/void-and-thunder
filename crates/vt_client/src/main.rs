@@ -54,6 +54,9 @@ use render::{space_skybox, SpaceSkyboxAsset, SpaceSkyboxPlugin};
 mod star;
 use star::{spawn_star, StarHaloMaterial, StarPlugin, StarSurfaceMaterial};
 
+mod hud;
+use hud::HudBridgePlugin;
+
 // ---- Presentation constants ----
 
 // Placeholder ship hulls: CC0 low-poly models from Quaternius's Ultimate
@@ -153,7 +156,7 @@ const EDGE_MARGIN: f32 = 42.0;
 
 /// Marker for the entity the local player controls.
 #[derive(Component)]
-struct Player;
+pub(crate) struct Player;
 
 /// Marker for the camera so we can make it orbit the player.
 #[derive(Component)]
@@ -408,6 +411,7 @@ fn main() {
         .add_plugins(SfxPlugin)
         .add_plugins(SpaceSkyboxPlugin)
         .add_plugins(StarPlugin)
+        .add_plugins(HudBridgePlugin)
         .init_state::<GameState>()
         .init_resource::<CameraRig>()
         .init_resource::<Aiming>()

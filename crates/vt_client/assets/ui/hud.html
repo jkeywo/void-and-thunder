@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Salvage HUD</title>
+<!-- Host seam. Present when served alongside the game (assets/ui/): sets
+     window.__hosted (suppresses the demo) and defines __applyHud. Absent when
+     the file is opened standalone (404, harmless) so the demo runs for preview. -->
+<script src="bridge.js"></script>
+<!--
+================================================================================
+  GRIMDARK SPACE-PIRACY HUD OVERLAY
+  Single self-contained file. Transparent body. No external requests.
+  Layered on top of a live 3D game inside a transparent webview.
+--------------------------------------------------------------------------------
+  ANCHORED CLUSTERS (center of screen stays clear):
+    - TOP-CENTER  : hull integrity
+    - TOP-RIGHT   : ship coordinates (X / Y)
+    - BOTTOM-LEFT : L-shaped frame — port & starboard broadside cooldowns
+                    (left-justified, narrow top of the L) above a wider row of
+                    torpedo tubes (the foot of the L)
+    - BOTTOM-RIGHT: thrusters (boost battery) + warp cooldown on one line,
+                    warp on the far right
+--------------------------------------------------------------------------------
+  ENTRY POINT (single global):
+
+    window.updateHud(state)
+
+  STATE SCHEMA (all fields optional; last known value is retained):
+
+    updateHud({
+      coords:       { x: -1423, y: 8821 },  // integers
+      hull:         0.72,   // 0..1  (1 = intact, 0 = destroyed)
+      boostBattery: 0.45,   // 0..1  (1 = full charge)  -> "THRUSTERS"
+      portCd:       { remaining: 0.0, duration: 1.5 },  // seconds; 0 remaining = READY
+      starboardCd:  { remaining: 0.9, duration: 1.5 },  // gauge core shows remaining seconds
+      microwarpCd:  { remaining: 1.2, duration: 2.0 },  // duration drives the arc fill
+      // (a bare number is still accepted and read as a 0..1 fraction, legacy)
+      torpedoes: [          // one entry per tube (array length = tube count)
+        { state: "ready" },
+        { state: "loading", progress: 0.4 }, // progress 0..1
+        { state: "empty" }
+      ]
+    })
+
+  IPC / CLICKABLE CONTROLS:
+    Readout-only — NO clickable controls, NO ipc actions emitted.
+    window.ipc.postMessage is never called. (Guarded sendIpc() helper exists
+    for future use; no action names currently in play.)
+
+  PERFORMANCE MODEL:
+    - STATIC layer: each cluster's panel art (tarnished metal, bolts, hazard
+      paint, grime, scratches, bezel) painted ONCE to its own <canvas>.
+    - DYNAMIC layer: live elements promoted with will-change:transform. Motion
+      uses ONLY transform / opacity (bars=scaleX, tubes=scaleY, jitter/scan/
+      flicker/pulse=transform+opacity). Radial cooldowns use SVG stroke-
+      dashoffset (paint-only, never triggers layout reflow).
+    - Text updates via textContent only, in fixed-width tabular boxes.
+
+  DEV NOTE: add "#bg" to the URL to paint a dark space backdrop for preview.
+  Default page background is fully transparent.
+================================================================================
+-->
+<style>
+  html, body { margin:0; padding:0; background:transparent; height:100%; overflow:hidden; }
+
+  #devbg{ position:fixed; inset:0; display:none; z-index:0;
+    background:radial-gradient(1200px 700px at 70% 20%, #10141c 0%, #05070b 60%, #010204 100%); }
+  #devbg.on{ display:block; }
+  #devbg::after{ content:""; position:absolute; inset:0; opacity:.5;
+    background-image:
+      radial-gradient(1px 1px at 20% 30%, #9fb4d0 40%, transparent 42%),
+      radial-gradient(1px 1px at 65% 55%, #c9d6ea 40%, transparent 42%),
+      radial-gradient(1px 1px at 82% 22%, #7f93b0 40%, transparent 42%),
+      radial-gradient(1px 1px at 38% 72%, #b9c7de 40%, transparent 42%),
+      radial-gradient(1px 1px at 12% 82%, #6d80a0 40%, transparent 42%),
+      radial-gradient(1px 1px at 90% 78%, #aebcd6 40%, transparent 42%); }
+
+  :root{
+    --amb:#ffb200; --amb-dim:#b57402; --amb-glow:rgba(255,178,0,.55);
+    --warn:#ff7a18; --crit:#ff2f14;
+    --screen-bg:#080602;
+    --font:"Courier New", ui-monospace, "DejaVu Sans Mono", monospace;
+  }
+
+  #hud{ position:fixed; inset:0; z-index:10; font-family:var(--font);
+    -webkit-user-select:none; user-select:none; pointer-events:none; }
+
+  .panel{ position:absolute; filter:drop-shadow(0 10px 18px rgba(0,0,0,.6)); }
+  #pTop   { top:14px; left:50%; transform:translateX(-50%); width:320px; height:54px; }
+  #pCoords{ top:14px; right:18px; width:176px; height:62px; }
+  #pLeft  { bottom:18px; left:18px;  width:262px; height:160px; }
+  #pRight { bottom:18px; right:18px; width:252px; height:96px; }
+
+  .art{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+
+  .screen{ position:absolute; inset:12px;
+    background:
+      radial-gradient(120% 120% at 50% 40%, rgba(40,26,2,.35) 0%, rgba(6,5,2,.9) 70%, #040301 100%),
+      var(--screen-bg);
+    border-radius:3px; overflow:hidden;
+    box-shadow: inset 0 0 22px rgba(0,0,0,.9), inset 0 0 3px rgba(255,178,0,.15); }
+  /* L-shaped screen for the bottom-left cluster (broadsides narrow, torpedoes wide) */
+  #pLeft .screen{ inset:0; border-radius:0;
+    clip-path: polygon(12px 12px, 138px 12px, 138px 84px, 250px 84px, 250px 148px, 12px 148px); }
+  .screen::before{ content:""; position:absolute; inset:0; z-index:5; pointer-events:none;
+    background:repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.42) 3px);
+    mix-blend-mode:multiply; }
+  .screen::after{ content:""; position:absolute; inset:0; z-index:6; pointer-events:none;
+    background:radial-gradient(130% 100% at 50% 45%, transparent 55%, rgba(0,0,0,.55) 100%); }
+
+  .scanband{ position:absolute; left:0; right:0; top:0; height:26px; z-index:7; pointer-events:none;
+    background:linear-gradient(to bottom, transparent, rgba(255,190,60,.10), transparent);
+    will-change:transform; animation:scan 5.5s linear infinite; }
+  @keyframes scan{ 0%{transform:translateY(-30px)} 100%{transform:translateY(160px)} }
+
+  .deadpx{ position:absolute; width:1px; height:1px; z-index:8; }
+
+  .glow{ position:absolute; inset:0; z-index:4; color:var(--amb);
+    will-change:transform, opacity; animation:flicker 7s steps(1,end) infinite; }
+  @keyframes flicker{
+    0%,100%{opacity:1} 3%{opacity:.72} 4%{opacity:1} 41%{opacity:1}
+    42%{opacity:.55} 43%{opacity:1} 68%{opacity:.86} 69%{opacity:1}
+    92%{opacity:1} 93%{opacity:.66} 94%{opacity:1} }
+
+  .ui{ position:absolute; inset:8px 12px; display:flex; flex-direction:column; }
+
+  .lbl{ font-size:8px; letter-spacing:2px; color:var(--amb-dim); text-transform:uppercase;
+    text-shadow:0 0 4px var(--amb-glow); }
+  .readout{ color:var(--amb); text-shadow:0 0 6px var(--amb-glow), 0 0 1px var(--amb);
+    font-variant-numeric:tabular-nums; letter-spacing:1px; }
+
+  /* coords */
+  .coord{ display:flex; align-items:baseline; justify-content:flex-end; gap:8px; }
+  .coord .lbl{ width:12px; }
+  .coord .num{ display:inline-block; min-width:70px; text-align:right; font-size:17px; font-weight:bold; line-height:1.25; }
+
+  /* bars */
+  .barrow{ display:flex; align-items:center; gap:7px; }
+  .barrow .lbl{ flex:0 0 auto; }
+  .bar{ position:relative; flex:1; height:10px; background:rgba(255,178,0,.06);
+    border:1px solid rgba(255,178,0,.28); box-shadow:inset 0 0 4px rgba(0,0,0,.8); overflow:hidden; }
+  .bar .fill{ position:absolute; inset:0; transform-origin:left center; transform:scaleX(0);
+    will-change:transform; transition:transform .18s linear;
+    background:var(--amb); box-shadow:0 0 8px var(--amb-glow); }
+  .bar.warn .fill{ background:var(--warn); box-shadow:0 0 8px rgba(255,122,24,.6); }
+  .bar.crit .fill{ background:var(--crit); box-shadow:0 0 9px rgba(255,47,20,.7);
+    animation:critblink 1s steps(1,end) infinite; }
+  @keyframes critblink{ 0%,100%{opacity:1} 50%{opacity:.35} }
+  .bar .segs{ position:absolute; inset:0; z-index:2; pointer-events:none;
+    background:repeating-linear-gradient(to right, transparent 0 8px, rgba(0,0,0,.85) 8px 10px); }
+  .pct{ display:inline-block; min-width:36px; text-align:right; font-size:12px; font-weight:bold; }
+
+  /* gauges */
+  .gauges{ display:flex; gap:12px; }
+  .gauge{ position:relative; width:48px; height:48px; text-align:center; }
+  .gauge svg{ position:absolute; inset:0; width:48px; height:48px; }
+  .gauge .track{ fill:none; stroke:rgba(255,178,0,.14); stroke-width:4; }
+  .gauge .arc{ fill:none; stroke:var(--amb); stroke-width:4; stroke-linecap:butt;
+    filter:drop-shadow(0 0 3px var(--amb-glow)); transform:rotate(-90deg); transform-origin:50% 50%; }
+  .gauge.warp .arc{ stroke:var(--warn); filter:drop-shadow(0 0 3px rgba(255,122,24,.6)); stroke-dasharray:6 2 100; }
+  .gauge .core{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:10px; font-weight:bold; letter-spacing:1px; will-change:transform, opacity; }
+  .gauge.ready .arc{ opacity:.28; }
+  .gauge.ready .core{ color:var(--amb); text-shadow:0 0 8px var(--amb); animation:pulse 1.1s ease-in-out infinite; }
+  .gauge.warp.ready .core{ color:var(--warn); text-shadow:0 0 8px var(--warn); }
+  @keyframes pulse{ 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.16);opacity:.7} }
+  .gauge .gl{ position:absolute; left:-8px; right:-8px; bottom:-10px; font-size:8px; letter-spacing:2px; color:var(--amb-dim); }
+
+  /* torpedo tubes */
+  .torps{ display:flex; flex-direction:column; gap:3px; }
+  .torps .lbl{ margin-bottom:1px; }
+  .tuberow{ display:flex; gap:5px; }
+  .tube{ position:relative; flex:1; height:28px; border:1px solid rgba(255,178,0,.3);
+    background:rgba(255,178,0,.04); box-shadow:inset 0 0 5px rgba(0,0,0,.85); overflow:hidden; }
+  .tube .tfill{ position:absolute; inset:0; transform-origin:bottom center; transform:scaleY(0);
+    will-change:transform; transition:transform .2s linear;
+    background:linear-gradient(to top, var(--amb), rgba(255,178,0,.4)); box-shadow:0 0 8px var(--amb-glow); }
+  .tube .tg{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:8px; font-weight:bold; letter-spacing:1px; z-index:2; text-shadow:0 0 3px rgba(0,0,0,.9); }
+  .tube.ready .tfill{ transform:scaleY(1); }
+  .tube.ready .tg{ color:#1c1200; }
+  .tube.loading .tfill{ background:linear-gradient(to top, var(--warn), rgba(255,122,24,.35)); }
+  .tube.loading .tg{ color:var(--warn); }
+  .tube.empty{ border-color:rgba(255,178,0,.14); background:rgba(0,0,0,.35); }
+  .tube.empty .tg{ color:rgba(255,178,0,.22); }
+</style>
+</head>
+<body>
+  <div id="devbg"></div>
+
+  <div id="hud">
+    <!-- TOP-CENTER : hull -->
+    <div class="panel" id="pTop">
+      <canvas class="art"></canvas>
+      <div class="screen"><div class="scanband"></div><div class="glow"><div class="ui" style="justify-content:center;">
+        <div class="barrow">
+          <span class="lbl">HULL</span>
+          <div class="bar" id="hullBar"><div class="fill"></div><div class="segs"></div></div>
+          <span class="pct readout" id="hullPct">--%</span>
+        </div>
+      </div></div></div>
+    </div>
+
+    <!-- TOP-RIGHT : coordinates -->
+    <div class="panel" id="pCoords">
+      <canvas class="art"></canvas>
+      <div class="screen"><div class="scanband"></div><div class="glow"><div class="ui" style="justify-content:center; gap:2px;">
+        <div class="coord"><span class="lbl">X</span><span class="num readout" id="cx">+00000</span></div>
+        <div class="coord"><span class="lbl">Y</span><span class="num readout" id="cy">+00000</span></div>
+      </div></div></div>
+    </div>
+
+    <!-- BOTTOM-LEFT : L-shape — broadsides (narrow top) + torpedo tubes (wide foot) -->
+    <div class="panel" id="pLeft">
+      <canvas class="art"></canvas>
+      <div class="screen"><div class="scanband"></div><div class="glow"><div class="ui" style="inset:8px 12px;">
+        <div class="gauges" style="height:78px; flex:0 0 auto;">
+          <div class="gauge" id="port">
+            <svg viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="18"></circle><circle class="arc" cx="24" cy="24" r="18"></circle></svg>
+            <div class="core readout">RDY</div><div class="gl">◄ PORT</div>
+          </div>
+          <div class="gauge" id="stbd">
+            <svg viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="18"></circle><circle class="arc" cx="24" cy="24" r="18"></circle></svg>
+            <div class="core readout">RDY</div><div class="gl">STBD ►</div>
+          </div>
+        </div>
+        <div class="torps" style="margin-top:2px;">
+          <span class="lbl">TORPEDO TUBES</span>
+          <div class="tuberow" id="tubes"></div>
+        </div>
+      </div></div></div>
+    </div>
+
+    <!-- BOTTOM-RIGHT : thrusters + warp on one line, warp far right -->
+    <div class="panel" id="pRight">
+      <canvas class="art"></canvas>
+      <div class="screen"><div class="scanband"></div><div class="glow"><div class="ui" style="justify-content:center;">
+        <div style="display:flex; align-items:center; gap:14px;">
+          <div class="barrow" style="flex:1;">
+            <span class="lbl">THRUST</span>
+            <div class="bar" id="boostBar"><div class="fill"></div><div class="segs"></div></div>
+            <span class="pct readout" id="boostPct">--%</span>
+          </div>
+          <div class="gauge warp" id="warp" style="flex:0 0 auto;">
+            <svg viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="18"></circle><circle class="arc" cx="24" cy="24" r="18"></circle></svg>
+            <div class="core readout">RDY</div><div class="gl">WARP</div>
+          </div>
+        </div>
+      </div></div></div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  function sendIpc(action, extra){
+    try{ if (window.ipc && typeof window.ipc.postMessage === "function")
+      window.ipc.postMessage(JSON.stringify(Object.assign({action:action}, extra||{}))); }catch(e){}
+  }
+
+  // ---------- shared texture helpers ----------
+  function texture(g,w,h){
+    g.fillStyle="rgba(255,235,200,.06)"; g.fillRect(0,0,w,3);
+    g.fillStyle="rgba(0,0,0,.35)"; g.fillRect(0,h-4,w,4);
+    var i,bx,by,br,gg;
+    for(i=0;i<Math.round(w*h/900);i++){
+      bx=Math.random()*w; by=Math.random()*h; br=4+Math.random()*22;
+      gg=g.createRadialGradient(bx,by,0,bx,by,br);
+      gg.addColorStop(0,"rgba(0,0,0,"+(0.05+Math.random()*0.18).toFixed(3)+")");
+      gg.addColorStop(1,"rgba(0,0,0,0)");
+      g.fillStyle=gg; g.beginPath(); g.arc(bx,by,br,0,7); g.fill();
+    }
+    for(i=0;i<18;i++){
+      g.strokeStyle=Math.random()<.5?"rgba(255,240,220,.07)":"rgba(0,0,0,.22)";
+      g.lineWidth=Math.random()<.85?1:2;
+      var x1=Math.random()*w,y1=Math.random()*h;
+      g.beginPath(); g.moveTo(x1,y1); g.lineTo(x1+(Math.random()*40-20),y1+(Math.random()*16-8)); g.stroke();
+    }
+  }
+  function hazardStripe(g,w){
+    var hx=8,hy=4,hw=Math.min(96,w*0.42),hh=7,step=9;
+    g.save(); g.beginPath(); g.rect(hx,hy,hw,hh); g.clip();
+    for(var x=-hh;x<hw+step;x+=step){
+      g.beginPath(); g.moveTo(hx+x,hy); g.lineTo(hx+x+step*0.55,hy);
+      g.lineTo(hx+x+step*0.55-hh,hy+hh); g.lineTo(hx+x-hh,hy+hh); g.closePath();
+      g.fillStyle="rgba(150,130,40,.55)"; g.fill();
+    }
+    g.fillStyle="rgba(0,0,0,.28)"; g.fillRect(hx,hy,hw,hh); g.restore();
+    g.strokeStyle="rgba(0,0,0,.5)"; g.lineWidth=1; g.strokeRect(hx,hy,hw,hh);
+  }
+  function bolt(g,x,y){
+    var rr=2.6,b=g.createRadialGradient(x-0.8,y-0.8,0,x,y,rr);
+    b.addColorStop(0,"#7d7466"); b.addColorStop(.55,"#3b342a"); b.addColorStop(1,"#14110c");
+    g.fillStyle=b; g.beginPath(); g.arc(x,y,rr,0,7); g.fill();
+    g.strokeStyle="rgba(0,0,0,.55)"; g.lineWidth=.8;
+    g.beginPath(); g.moveTo(x-1.4,y); g.lineTo(x+1.4,y); g.stroke();
+  }
+  function bezelRect(g,x,y,w,h){
+    g.strokeStyle="rgba(0,0,0,.75)"; g.lineWidth=3; g.strokeRect(x-2,y-2,w+4,h+4);
+    g.strokeStyle="rgba(255,235,200,.06)"; g.lineWidth=1; g.strokeRect(x-4,y-4,w+8,h+8);
+  }
+
+  function setupCanvas(cv){
+    var dpr=Math.min(window.devicePixelRatio||1,2), w=cv.clientWidth, h=cv.clientHeight;
+    cv.width=w*dpr; cv.height=h*dpr;
+    var g=cv.getContext("2d"); g.scale(dpr,dpr);
+    return {g:g,w:w,h:h};
+  }
+
+  // ---------- rectangular salvaged panel ----------
+  function paintPanel(cv,opts){
+    opts=opts||{}; var c=setupCanvas(cv), g=c.g, w=c.w, h=c.h, R=6, CH=18;
+    function path(){
+      g.beginPath();
+      g.moveTo(R,0); g.lineTo(w-CH,0); g.lineTo(w,CH);
+      g.lineTo(w,h-R); g.arcTo(w,h,w-R,h,R);
+      g.lineTo(CH,h); g.lineTo(0,h-CH); g.lineTo(0,R); g.arcTo(0,0,R,0,R); g.closePath();
+    }
+    path();
+    var grad=g.createLinearGradient(0,0,w,h);
+    grad.addColorStop(0,"#443d33"); grad.addColorStop(.5,"#2c2820"); grad.addColorStop(1,"#1a1712");
+    g.fillStyle=grad; g.fill();
+    g.save(); path(); g.clip();
+    texture(g,w,h);
+    if(opts.hazard) hazardStripe(g,w);
+    bezelRect(g,12,12,w-24,h-24);
+    bolt(g,8,10); bolt(g,8,h-8); bolt(g,w-8,10); bolt(g,w-8,h-8);
+    if(w>220){ bolt(g,w*0.5,6); bolt(g,w*0.5,h-6); }
+    g.restore();
+    path(); g.strokeStyle="rgba(0,0,0,.6)"; g.lineWidth=1.5; g.stroke();
+  }
+
+  // ---------- L-shaped salvaged panel (bottom-left cluster) ----------
+  function paintLPanel(cv){
+    var c=setupCanvas(cv), g=c.g, w=c.w, h=c.h, R=6, CH=18;
+    var Wt=150, Ht=84;           // narrow-top width / top-block height (matches CSS clip-path)
+    function path(){
+      g.beginPath();
+      g.moveTo(R,0); g.lineTo(Wt-CH,0); g.lineTo(Wt,CH);   // chamfer top-right of narrow block
+      g.lineTo(Wt,Ht); g.lineTo(w,Ht);                     // inner step out to full width
+      g.lineTo(w,h-R); g.arcTo(w,h,w-R,h,R);
+      g.lineTo(CH,h); g.lineTo(0,h-CH); g.lineTo(0,R); g.arcTo(0,0,R,0,R); g.closePath();
+    }
+    path();
+    var grad=g.createLinearGradient(0,0,w,h);
+    grad.addColorStop(0,"#443d33"); grad.addColorStop(.5,"#2c2820"); grad.addColorStop(1,"#1a1712");
+    g.fillStyle=grad; g.fill();
+    g.save(); path(); g.clip();
+    texture(g,w,h);
+    hazardStripe(g,Wt);
+    // bezel around the L screen region
+    g.strokeStyle="rgba(0,0,0,.75)"; g.lineWidth=3;
+    lPath(g,10,10,Wt+2,Ht+2,w-10,h-10); g.stroke();
+    g.strokeStyle="rgba(255,235,200,.06)"; g.lineWidth=1;
+    lPath(g,8,8,Wt+4,Ht+4,w-8,h-8); g.stroke();
+    // bolts at the L's outer corners + inner elbow
+    bolt(g,8,10); bolt(g,Wt-8,10); bolt(g,8,h-8); bolt(g,w-8,h-8);
+    bolt(g,w-8,Ht+8); bolt(g,Wt+8,Ht-6);
+    g.restore();
+    path(); g.strokeStyle="rgba(0,0,0,.6)"; g.lineWidth=1.5; g.stroke();
+  }
+  // trace the L screen outline for bezel strokes
+  function lPath(g,x0,y0,xtop,ytop,x1,y1){
+    g.beginPath();
+    g.moveTo(x0,y0); g.lineTo(xtop,y0); g.lineTo(xtop,ytop);
+    g.lineTo(x1,ytop); g.lineTo(x1,y1); g.lineTo(x0,y1); g.closePath();
+  }
+
+  function placeDeadPixels(screen,specs){
+    screen.querySelectorAll(".deadpx").forEach(function(n){n.remove();});
+    specs.forEach(function(p){
+      var d=document.createElement("div"); d.className="deadpx";
+      d.style.left=(p.x*100)+"%"; d.style.top=(p.y*100)+"%"; d.style.background=p.c;
+      screen.appendChild(d);
+    });
+  }
+
+  // ============== DYNAMIC ==============
+  var TUBE_COUNT=4;
+  function buildTubes(n){
+    var row=document.getElementById("tubes"); row.innerHTML="";
+    for(var i=0;i<n;i++){ var t=document.createElement("div"); t.className="tube empty";
+      t.innerHTML='<div class="tfill"></div><div class="tg">--</div>'; row.appendChild(t); }
+  }
+  var C=2*Math.PI*18;
+  function initGauges(){
+    ["port","stbd","warp"].forEach(function(id){
+      var a=document.querySelector("#"+id+" .arc"); a.style.strokeDasharray=C+" "+C; a.style.strokeDashoffset=C;
+    });
+  }
+  function fmt(n){ n=Math.round(n||0); return (n<0?"-":"+")+String(Math.abs(n)).padStart(5,"0"); }
+  function clamp01(v){ return v<0?0:v>1?1:v; }
+  function pct(v){ return Math.round(clamp01(v)*100)+"%"; }
+
+  var el={};
+  function cache(){
+    el.cx=document.getElementById("cx"); el.cy=document.getElementById("cy");
+    el.hullBar=document.getElementById("hullBar"); el.hullFill=el.hullBar.querySelector(".fill"); el.hullPct=document.getElementById("hullPct");
+    el.boostBar=document.getElementById("boostBar"); el.boostFill=el.boostBar.querySelector(".fill"); el.boostPct=document.getElementById("boostPct");
+    el.port=document.getElementById("port"); el.portArc=el.port.querySelector(".arc"); el.portCore=el.port.querySelector(".core");
+    el.stbd=document.getElementById("stbd"); el.stbdArc=el.stbd.querySelector(".arc"); el.stbdCore=el.stbd.querySelector(".core");
+    el.warp=document.getElementById("warp"); el.warpArc=el.warp.querySelector(".arc"); el.warpCore=el.warp.querySelector(".core");
+    el.tubes=document.getElementById("tubes");
+  }
+
+  window.updateHud=function(state){
+    if(!state) return;
+    if(state.coords){
+      if(typeof state.coords.x==="number") el.cx.textContent=fmt(state.coords.x);
+      if(typeof state.coords.y==="number") el.cy.textContent=fmt(state.coords.y);
+    }
+    if(typeof state.hull==="number"){
+      var h=clamp01(state.hull);
+      el.hullFill.style.transform="scaleX("+h+")"; el.hullPct.textContent=pct(h);
+      el.hullBar.classList.toggle("warn", h<=0.5 && h>0.25);
+      el.hullBar.classList.toggle("crit", h<=0.25);
+    }
+    if(typeof state.boostBattery==="number"){
+      var b=clamp01(state.boostBattery);
+      el.boostFill.style.transform="scaleX("+b+")"; el.boostPct.textContent=pct(b);
+      el.boostBar.classList.toggle("warn", b<=0.2);
+    }
+    if(state.portCd!=null)      setGauge(el.port,el.portArc,el.portCore,state.portCd);
+    if(state.starboardCd!=null) setGauge(el.stbd,el.stbdArc,el.stbdCore,state.starboardCd);
+    if(state.microwarpCd!=null) setGauge(el.warp,el.warpArc,el.warpCore,state.microwarpCd);
+    if(Array.isArray(state.torpedoes)) setTubes(state.torpedoes);
+  };
+
+  // cd may be { remaining, duration } (seconds) or a bare 0..1 fraction (legacy).
+  function setGauge(box,arc,core,cd){
+    var frac, secs=null;
+    if(cd && typeof cd==="object"){
+      secs=Math.max(0, cd.remaining||0);
+      var dur=cd.duration>0?cd.duration:1;
+      frac=clamp01(secs/dur);
+    } else {
+      frac=clamp01(cd||0);
+    }
+    arc.style.strokeDashoffset=(C*(1-frac)).toFixed(2);
+    var ready=frac<=0.001; box.classList.toggle("ready",ready);
+    core.textContent = ready ? "RDY" : (secs!=null ? fmtSecs(secs) : Math.ceil(frac*9)+"");
+  }
+  // Compact seconds readout: one decimal under 10s ("1.4"), whole seconds above.
+  function fmtSecs(s){ return s>=10 ? Math.ceil(s)+"" : s.toFixed(1); }
+  function setTubes(list){
+    var nodes=el.tubes.children;
+    if(nodes.length!==list.length){ buildTubes(list.length); nodes=el.tubes.children; }
+    for(var i=0;i<list.length;i++){
+      var t=nodes[i], d=list[i]||{}, fill=t.querySelector(".tfill"), g=t.querySelector(".tg");
+      t.classList.remove("ready","loading","empty");
+      if(d.state==="ready"){ t.classList.add("ready"); fill.style.transform="scaleY(1)"; g.textContent="RDY"; }
+      else if(d.state==="loading"){ t.classList.add("loading"); var p=clamp01(d.progress||0);
+        fill.style.transform="scaleY("+p+")"; g.textContent=Math.round(p*100)+"%"; }
+      else{ t.classList.add("empty"); fill.style.transform="scaleY(0)"; g.textContent="--"; }
+    }
+  }
+
+  function scheduleGlitch(){
+    setTimeout(function(){
+      var dx=(Math.random()*4-2).toFixed(1), sk=(Math.random()*1.2-0.6).toFixed(2);
+      document.querySelectorAll(".glow").forEach(function(g){
+        g.style.transform="translate("+dx+"px,0) skewX("+sk+"deg)";
+        setTimeout(function(){ g.style.transform=""; }, 70+Math.random()*90);
+      });
+      scheduleGlitch();
+    }, 2500+Math.random()*6000);
+  }
+
+  function startDemo(){
+    var s={ coords:{x:-1423,y:8821}, hull:0.86, boostBattery:0.62,
+      portCd:{remaining:0,duration:1.5}, starboardCd:{remaining:0.9,duration:1.5}, microwarpCd:{remaining:0,duration:2.0},
+      torpedoes:[{state:"ready"},{state:"ready"},{state:"loading",progress:0.4},{state:"empty"}] };
+    // Count a cooldown down by dt; occasionally re-fire it back to full duration.
+    function demoCd(cd,dt,refire){
+      if(cd.remaining<=0){ if(Math.random()<refire) cd.remaining=cd.duration; }
+      else cd.remaining=Math.max(0,cd.remaining-dt);
+    }
+    var vx=3, vy=-2, boosting=false;
+    setInterval(function(){
+      if(Math.random()<.05) vx=Math.random()*8-4;
+      if(Math.random()<.05) vy=Math.random()*8-4;
+      s.coords.x+=Math.round(vx); s.coords.y+=Math.round(vy);
+      s.hull=Math.min(1,s.hull+0.004);
+      if(Math.random()<.045) s.hull=Math.max(0,s.hull-(0.05+Math.random()*0.22));
+      if(s.hull<=0.02) s.hull=0.9;
+      if(!boosting && s.boostBattery>0.3 && Math.random()<.02) boosting=true;
+      if(boosting){ s.boostBattery-=0.05; if(s.boostBattery<=0.05) boosting=false; }
+      else s.boostBattery=Math.min(1,s.boostBattery+0.012);
+      demoCd(s.portCd,0.1,.05); demoCd(s.starboardCd,0.1,.05); demoCd(s.microwarpCd,0.1,.02);
+      s.torpedoes.forEach(function(t){
+        if(t.state==="ready"){ if(Math.random()<.03) t.state="empty"; }
+        else if(t.state==="empty"){ if(Math.random()<.06){ t.state="loading"; t.progress=0; } }
+        else if(t.state==="loading"){ t.progress=(t.progress||0)+0.03; if(t.progress>=1){ t.state="ready"; t.progress=1; } }
+      });
+      window.updateHud(s);
+    },100);
+  }
+
+  function boot(){
+    if(location.hash.indexOf("bg")!==-1) document.getElementById("devbg").classList.add("on");
+    cache(); buildTubes(TUBE_COUNT); initGauges();
+    paintPanel(document.querySelector("#pTop .art"),   {hazard:true});
+    paintPanel(document.querySelector("#pCoords .art"),{hazard:false});
+    paintLPanel(document.querySelector("#pLeft .art"));
+    paintPanel(document.querySelector("#pRight .art"), {hazard:true});
+    placeDeadPixels(document.querySelector("#pTop .screen"),   [{x:.4,y:.6,c:"#000"}]);
+    placeDeadPixels(document.querySelector("#pCoords .screen"),[{x:.7,y:.35,c:"var(--amb)"}]);
+    placeDeadPixels(document.querySelector("#pLeft .screen"),  [{x:.22,y:.8,c:"#000"},{x:.6,y:.85,c:"#000"}]);
+    placeDeadPixels(document.querySelector("#pRight .screen"), [{x:.5,y:.7,c:"var(--amb)"}]);
+    window.updateHud({ coords:{x:-1423,y:8821}, hull:0.72, boostBattery:0.45,
+      portCd:{remaining:0,duration:1.5}, starboardCd:{remaining:0.9,duration:1.5}, microwarpCd:{remaining:1.2,duration:2.0},
+      torpedoes:[{state:"ready"},{state:"loading",progress:0.4},{state:"ready"},{state:"empty"}] });
+    scheduleGlitch();
+    if(!window.__hosted) startDemo();  // demo only in standalone preview; host drives updateHud live
+  }
+
+  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",boot);
+  else boot();
+})();
+</script>
+</body>
+</html>
