@@ -160,9 +160,9 @@ pub fn director_system(
     let hull = director.base_hull + (director.wave - 1) as f32 * 25.0;
     let jitter = director.next_seed();
     let stats = ShipStats {
-        thrust: 120.0,
-        turn_rate: 1.4,
-        max_speed: 200.0,
+        thrust: 60.0,
+        turn_rate: 0.35,
+        max_speed: 100.0,
         ..Default::default()
     };
     // Enemy broadsides fire slower and telegraph a 0.5s charge, so the player

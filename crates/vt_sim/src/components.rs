@@ -82,11 +82,12 @@ pub struct ShipStats {
 
 impl Default for ShipStats {
     fn default() -> Self {
-        // A nimble corsair sloop.
+        // A corsair sloop. Tuned slow and stately after playtesting: turn at 25%
+        // and top speed at 50% of the original snappy values.
         Self {
-            thrust: 260.0,
-            turn_rate: 2.2,
-            max_speed: 340.0,
+            thrust: 130.0,
+            turn_rate: 0.55,
+            max_speed: 170.0,
             linear_drag: 0.6,
         }
     }
@@ -159,7 +160,7 @@ impl Default for Broadside {
             cooldown: 1.5,
             timer: 0.0,
             damage: 12.0,
-            muzzle_speed: 520.0,
+            muzzle_speed: 260.0,
             guns: 3,
             arc: 0.6, // ~34°
             charge_time: 0.0,
@@ -322,7 +323,7 @@ impl Default for EmpWeapon {
             aim: 0.0,
             cooldown: 0.4,
             timer: 0.0,
-            bolt_speed: 720.0,
+            bolt_speed: 360.0,
             bolt_damage_frac: 0.25,
             range: 620.0,
         }
@@ -377,7 +378,7 @@ impl Default for TorpedoBay {
             lock_interval: 0.5,
             lock_radius: 150.0,
             turn_rate: 3.2,
-            speed: 520.0,
+            speed: 260.0,
             damage: 22.0,
             arc_height: 90.0,
             hold_elapsed: 0.0,

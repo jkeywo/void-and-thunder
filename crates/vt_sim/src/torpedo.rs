@@ -85,7 +85,12 @@ pub fn torpedo_aim_system(
             // Release edge: fire the locked volley.
             if bay.was_holding && bay.locks > 0 {
                 if let Some(target) = bay.target {
-                    fire_volley(&mut commands, pos, *faction, &bay, target);
+                    // Launch toward the target's current position.
+                    let target_pos = targets
+                        .get(target)
+                        .map(|(_, tf, _)| tf.translation.truncate())
+                        .unwrap_or(intent.aim_point);
+                    fire_volley(&mut commands, pos, target_pos, *faction, &bay, target);
                     bay.loaded = (bay.loaded - bay.locks as f32).max(0.0);
                 }
             }
@@ -97,20 +102,24 @@ pub fn torpedo_aim_system(
     }
 }
 
-/// Spawn `bay.locks` torpedoes from alternating top/bottom of the ship.
+/// Spawn `bay.locks` torpedoes from alternating top/bottom of the ship, launched
+/// toward the target with a slight fan.
 fn fire_volley(
     commands: &mut Commands,
     pos: Vec2,
+    target_pos: Vec2,
     faction: Faction,
     bay: &TorpedoBay,
     target: Entity,
 ) {
+    let toward = (target_pos - pos).normalize_or(Vec2::X);
+    let base_angle = toward.to_angle();
     for i in 0..bay.locks {
         let side = if i % 2 == 0 { 1.0 } else { -1.0 };
         let z = side * bay.arc_height;
         // Fan the launch headings slightly so a volley spreads then converges.
         let spread = (i as f32 - (bay.locks as f32 - 1.0) * 0.5) * 0.12;
-        let dir = Vec2::from_angle(spread);
+        let dir = Vec2::from_angle(base_angle + spread);
         commands.spawn((
             Torpedo {
                 faction,

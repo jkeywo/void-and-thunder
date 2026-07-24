@@ -48,19 +48,20 @@ const CAM_HEIGHT: f32 = 170.0;
 /// How quickly the camera yaw catches up to the ship's heading.
 const CAM_YAW_LERP: f32 = 2.5;
 /// Camera pitch (radians above horizontal): resting, minimum, maximum, and the
-/// value it eases to while aiming a broadside.
-const CAM_PITCH_BASE: f32 = 0.55;
-const CAM_PITCH_MIN: f32 = 0.28;
-const CAM_PITCH_MAX: f32 = 1.15;
+/// value it eases to while aiming a broadside. As pitch rises the camera is
+/// raised and pulled in toward the ship (see `camera_orbit`).
+const CAM_PITCH_BASE: f32 = 0.85;
+const CAM_PITCH_MIN: f32 = 0.35;
+const CAM_PITCH_MAX: f32 = 1.2;
 const CAM_AIM_PITCH: f32 = 0.72;
+/// How much the camera pulls in toward the ship at maximum pitch (0 = none).
+const CAM_PITCH_ZOOM: f32 = 0.4;
 /// Spacing between grid lines on the plane.
 const GRID_SPACING: f32 = 200.0;
 /// Grid cells each way.
 const GRID_CELLS: u32 = 30;
 /// The grid sits just below the plane so hulls float above it.
 const GRID_Z: f32 = -9.0;
-/// Deadzone below which stick input is ignored.
-const STICK_DEADZONE: f32 = 0.15;
 /// Length of the drawn aim beam while holding a broadside.
 const AIM_BEAM_LEN: f32 = 620.0;
 /// Size of the pool of off-screen enemy markers (max shown at once).
@@ -151,6 +152,14 @@ impl Default for AimBattery {
     }
 }
 
+/// The most recently used input device, so the HUD can show matching hints.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Default)]
+enum InputMethod {
+    #[default]
+    KeyboardMouse,
+    Gamepad,
+}
+
 /// Marker for the boost-battery gauge fill.
 #[derive(Component)]
 struct BoostBarFill;
@@ -219,6 +228,18 @@ fn wrap_angle(angle: f32) -> f32 {
     }
 }
 
+/// Radial deadzone below which the stick reads zero, above which it is rescaled
+/// so motion starts smoothly just past the edge (5% → ~0, 100% → 100%).
+fn deadzone(v: f32) -> f32 {
+    const DZ: f32 = 0.05;
+    let a = v.abs();
+    if a < DZ {
+        0.0
+    } else {
+        v.signum() * (a - DZ) / (1.0 - DZ)
+    }
+}
+
 /// Base display colour for a faction's ships (before damage tinting).
 fn faction_color(faction: &Faction) -> Color {
     match faction {
@@ -256,6 +277,7 @@ fn main() {
         .init_resource::<CameraRig>()
         .init_resource::<Aiming>()
         .init_resource::<AimBattery>()
+        .init_resource::<InputMethod>()
         .add_systems(Startup, setup)
         // Presentation runs in every state.
         .add_systems(
@@ -295,6 +317,7 @@ fn main() {
             Update,
             (player_input, watch_outcome).run_if(in_state(GameState::Playing)),
         )
+        .add_systems(Update, track_input_method)
         // Game over: wait for a restart.
         .add_systems(Update, restart.run_if(in_state(GameState::GameOver)))
         .run();
@@ -677,29 +700,21 @@ fn player_input(
             }
         }
         if let Some(pad) = gamepads.iter().next() {
-            let stick = Vec2::new(
-                pad.get(GamepadAxis::RightStickX).unwrap_or(0.0),
-                pad.get(GamepadAxis::RightStickY).unwrap_or(0.0),
-            );
-            if stick.length() > STICK_DEADZONE {
+            let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
+            let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
+            if sx != 0.0 || sy != 0.0 {
                 let right = cam_gt.right().truncate().normalize_or_zero();
                 let up = cam_gt.up().truncate().normalize_or_zero();
-                aim_point = ship + (right * stick.x + up * stick.y) * 520.0;
+                aim_point = ship + (right * sx + up * sy) * 520.0;
             }
         }
     }
 
     // --- Gamepad (first connected pad): the final scheme ---
     if let Some(pad) = gamepads.iter().next() {
-        let ly = pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0);
-        if ly.abs() > STICK_DEADZONE {
-            throttle += ly;
-        }
-        let lx = pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0);
-        if lx.abs() > STICK_DEADZONE {
-            // Stick right (+X) steers starboard (negative turn).
-            turn -= lx;
-        }
+        throttle += deadzone(pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0));
+        // Stick right (+X) steers starboard (negative turn).
+        turn -= deadzone(pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0));
 
         aim_port |= pad.pressed(GamepadButton::LeftTrigger2); // LT
         aim_starboard |= pad.pressed(GamepadButton::RightTrigger2); // RT
@@ -903,12 +918,12 @@ fn camera_orbit(
         }
     }
     if let Some(pad) = gamepads.iter().next() {
-        let sx = pad.get(GamepadAxis::RightStickX).unwrap_or(0.0);
-        let sy = pad.get(GamepadAxis::RightStickY).unwrap_or(0.0);
-        if sx.abs() > STICK_DEADZONE {
+        let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
+        let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
+        if sx != 0.0 {
             look_x = sx;
         }
-        if sy.abs() > STICK_DEADZONE {
+        if sy != 0.0 {
             look_y = -sy;
         }
     }
@@ -930,9 +945,9 @@ fn camera_orbit(
             target_yaw = dir.to_angle();
             target_pitch = CAM_AIM_PITCH;
         } else {
-            // Follow the heading, offset by free-look.
-            target_yaw = heading.0 + look_x * 0.9;
-            target_pitch = (CAM_PITCH_BASE - look_y * 0.5).clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
+            // Follow the heading, offset by free-look (yaw not inverted).
+            target_yaw = heading.0 - look_x * 0.9;
+            target_pitch = (CAM_PITCH_BASE + look_y * 0.5).clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
         }
     }
 
@@ -948,10 +963,15 @@ fn camera_orbit(
     let Ok(mut camera) = camera.single_mut() else {
         return;
     };
+    // As pitch rises the camera lifts (sin) and pulls in toward the ship (the
+    // shorter horizontal reach of cos, plus a distance zoom).
+    let pitch_norm =
+        ((rig.pitch - CAM_PITCH_MIN) / (CAM_PITCH_MAX - CAM_PITCH_MIN)).clamp(0.0, 1.0);
+    let dist = CAM_DISTANCE * (1.0 - CAM_PITCH_ZOOM * pitch_norm);
     let look = Vec2::from_angle(rig.yaw);
     let back = Vec3::new(-look.x, -look.y, 0.0);
     let focus = rig.target.extend(0.0);
-    let eye = focus + (back * rig.pitch.cos() + Vec3::Z * rig.pitch.sin()) * CAM_DISTANCE + shake;
+    let eye = focus + (back * rig.pitch.cos() + Vec3::Z * rig.pitch.sin()) * dist + shake;
     *camera = Transform::from_translation(eye).looking_at(focus, Vec3::Z);
 }
 
@@ -1324,6 +1344,41 @@ fn update_battery_bars(
     }
 }
 
+/// Track the last-used input device so the HUD shows matching control hints.
+fn track_input_method(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    gamepads: Query<&Gamepad>,
+    mut method: ResMut<InputMethod>,
+) {
+    let axes = [
+        GamepadAxis::LeftStickX,
+        GamepadAxis::LeftStickY,
+        GamepadAxis::RightStickX,
+        GamepadAxis::RightStickY,
+    ];
+    let buttons = [
+        GamepadButton::South,
+        GamepadButton::East,
+        GamepadButton::West,
+        GamepadButton::North,
+        GamepadButton::LeftTrigger,
+        GamepadButton::RightTrigger,
+        GamepadButton::LeftTrigger2,
+        GamepadButton::RightTrigger2,
+        GamepadButton::Start,
+    ];
+    let pad_active = gamepads.iter().any(|pad| {
+        axes.iter().any(|a| pad.get(*a).unwrap_or(0.0).abs() > 0.3)
+            || buttons.iter().any(|b| pad.pressed(*b))
+    });
+    if pad_active {
+        *method = InputMethod::Gamepad;
+    } else if keys.get_pressed().next().is_some() || mouse.get_pressed().next().is_some() {
+        *method = InputMethod::KeyboardMouse;
+    }
+}
+
 /// Move to the game-over state once the encounter has resolved.
 fn watch_outcome(encounter: Res<Encounter>, mut next: ResMut<NextState<GameState>>) {
     if encounter.outcome != Outcome::InProgress {
@@ -1365,6 +1420,7 @@ fn restart(
 fn update_hud(
     encounter: Res<Encounter>,
     plunder: Res<Plunder>,
+    method: Res<InputMethod>,
     torps: Query<&TorpedoBay, With<Player>>,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
@@ -1384,9 +1440,13 @@ fn update_hud(
             }
         })
         .unwrap_or_default();
+    let hints = match *method {
+        InputMethod::KeyboardMouse => "[LMB/RMB] broadside  [Q] EMP  [Ctrl] torpedoes  [Shift] microwarp  [Space] boost  [C] brace  [B] board",
+        InputMethod::Gamepad => "[LT/RT] broadside  [X] EMP  [LB] torpedoes  [RB] microwarp  [A] boost  [Y] brace  [B] board",
+    };
     text.0 = match encounter.outcome {
         Outcome::InProgress => format!(
-            "Wave {}  ·  enemies: {}  ·  plundered: {}  ·  {torp_line}\n[LMB/RMB] broadside  [Q] EMP  [Ctrl] torpedoes  [Space] boost  [C] brace  [B] board",
+            "Wave {}  ·  enemies: {}  ·  plundered: {}  ·  {torp_line}\n{hints}",
             encounter.wave.max(1),
             encounter.enemies_remaining,
             plunder.ships_boarded,
