@@ -36,10 +36,13 @@ impl Plugin for HudBridgePlugin {
         app.add_systems(Startup, web::init)
             .add_systems(Update, web::push.after(gather_hud_state));
 
-        // Native desktop webview overlay (opt-in).
+        // Native desktop webview overlay (opt-in). `init` runs in Update and
+        // retries until the winit window exists, then builds once.
         #[cfg(all(not(target_arch = "wasm32"), feature = "native-webview-hud"))]
-        app.add_systems(Startup, native::init)
-            .add_systems(Update, (native::push, native::resize).after(gather_hud_state));
+        app.add_systems(Update, native::init).add_systems(
+            Update,
+            (native::push, native::resize).after(gather_hud_state),
+        );
     }
 }
 
@@ -92,7 +95,10 @@ fn gather_hud_state(
     let mut j = String::with_capacity(256);
     j.push('{');
 
-    let (x, y) = (tf.translation.x.round() as i64, tf.translation.y.round() as i64);
+    let (x, y) = (
+        tf.translation.x.round() as i64,
+        tf.translation.y.round() as i64,
+    );
     j.push_str(&format!("\"coords\":{{\"x\":{x},\"y\":{y}}}"));
 
     let hull_frac = (hull.current / hull.max).clamp(0.0, 1.0);
@@ -130,7 +136,9 @@ fn gather_hud_state(
             if i < ready {
                 j.push_str("{\"state\":\"ready\"}");
             } else if i == ready && ready < t.tubes_max {
-                j.push_str(&format!("{{\"state\":\"loading\",\"progress\":{progress:.3}}}"));
+                j.push_str(&format!(
+                    "{{\"state\":\"loading\",\"progress\":{progress:.3}}}"
+                ));
             } else {
                 j.push_str("{\"state\":\"empty\"}");
             }
@@ -218,6 +226,10 @@ mod native {
     /// every system touching it runs on the main thread.
     pub(crate) struct HudWebView(WebView);
 
+    /// Set once a hard build failure has been logged, so `init` stops retrying.
+    #[derive(Resource)]
+    struct HudInitFailed;
+
     /// The HUD page with `bridge.js` inlined (no external file to resolve when
     /// loaded via `with_html`).
     fn hud_document() -> String {
@@ -231,7 +243,19 @@ mod native {
 
     /// Build the child webview from the primary window's handle (exclusive system:
     /// inserting a NonSend resource needs `&mut World`).
+    ///
+    /// Runs every frame but does its work once: it returns quietly while the
+    /// window isn't ready yet (so it retries), builds on the first ready frame,
+    /// and stops after either success or a logged hard failure.
     pub fn init(world: &mut World) {
+        // Already mounted, or gave up after a hard failure.
+        if world.get_non_send::<HudWebView>().is_some()
+            || world.get_resource::<HudInitFailed>().is_some()
+        {
+            return;
+        }
+
+        // Window not created yet — retry next frame (transient, no log).
         let Some(entity) = world
             .query_filtered::<Entity, With<PrimaryWindow>>()
             .iter(world)
@@ -245,12 +269,16 @@ mod native {
         // inserting the resource.
         let webview = {
             let Some(winit_windows) = world.get_non_send::<WinitWindows>() else {
-                return;
+                return; // WinitWindows not inserted yet — retry.
             };
             let Some(window) = winit_windows.get_window(entity) else {
-                return;
+                return; // winit window not mapped yet — retry.
             };
             let size = window.inner_size();
+            info!(
+                "mounting native HUD webview overlay ({}x{})",
+                size.width, size.height
+            );
             WebViewBuilder::new()
                 .with_transparent(true)
                 .with_bounds(Rect {
@@ -263,13 +291,23 @@ mod native {
                 .build_as_child(&**window)
         };
         match webview {
-            Ok(wv) => world.insert_non_send(HudWebView(wv)),
-            Err(e) => error!("failed to build native HUD webview: {e}"),
+            Ok(wv) => {
+                world.insert_non_send(HudWebView(wv));
+                info!("native HUD webview mounted");
+            }
+            Err(e) => {
+                error!("failed to build native HUD webview: {e}");
+                world.insert_resource(HudInitFailed);
+            }
         }
     }
 
     /// Push the latest snapshot when it changes, via `__applyHud`.
-    pub fn push(snap: Res<HudSnapshot>, webview: Option<NonSend<HudWebView>>, mut last: Local<u64>) {
+    pub fn push(
+        snap: Res<HudSnapshot>,
+        webview: Option<NonSend<HudWebView>>,
+        mut last: Local<u64>,
+    ) {
         let (Some(webview), true) = (webview, snap.seq != *last) else {
             return;
         };
@@ -277,16 +315,16 @@ mod native {
         // JSON here is numbers + fixed keys only, but escape defensively for the
         // single-quoted JS string literal.
         let esc = snap.json.replace('\\', "\\\\").replace('\'', "\\'");
-        if let Err(e) = webview.0.evaluate_script(&format!("window.__applyHud('{esc}')")) {
+        if let Err(e) = webview
+            .0
+            .evaluate_script(&format!("window.__applyHud('{esc}')"))
+        {
             warn!("HUD evaluate_script failed: {e}");
         }
     }
 
     /// Keep the overlay sized to the window.
-    pub fn resize(
-        mut resized: MessageReader<WindowResized>,
-        webview: Option<NonSend<HudWebView>>,
-    ) {
+    pub fn resize(mut resized: MessageReader<WindowResized>, webview: Option<NonSend<HudWebView>>) {
         let Some(webview) = webview else {
             return;
         };

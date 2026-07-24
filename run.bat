@@ -3,6 +3,7 @@ REM Build and run the Void & Thunder native client.
 REM
 REM   run.bat            build + run (debug, lightly optimised)
 REM   run.bat fast       build + run with dynamic linking (fastest iterative builds)
+REM   run.bat hud        build + run with the native HTML HUD webview overlay
 REM   run.bat release    build + run an optimised release binary
 REM   run.bat test       run the simulation tests instead of the game
 
@@ -21,6 +22,12 @@ if /i "%1"=="release" (
 
 if /i "%1"=="fast" (
     cargo run -p vt_client --features fast-compile
+    goto :end
+)
+
+if /i "%1"=="hud" (
+    REM Dynamic linking for fast iteration + the raw-wry HTML HUD overlay.
+    cargo run -p vt_client --features "fast-compile native-webview-hud"
     goto :end
 )
 

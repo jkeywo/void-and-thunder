@@ -1618,10 +1618,7 @@ fn aim_time_dilation(
 
 /// Resize the aim-battery (time-dilation charge) gauge. Hull and boost gauges
 /// moved to the HTML HUD (see src/hud.rs).
-fn update_aim_bar(
-    battery: Res<AimBattery>,
-    mut aim_fill: Query<&mut Node, With<AimBarFill>>,
-) {
+fn update_aim_bar(battery: Res<AimBattery>, mut aim_fill: Query<&mut Node, With<AimBarFill>>) {
     let aim_frac = (battery.charge / battery.max).clamp(0.0, 1.0);
     if let Ok(mut node) = aim_fill.single_mut() {
         node.width = Val::Percent(aim_frac * 100.0);
