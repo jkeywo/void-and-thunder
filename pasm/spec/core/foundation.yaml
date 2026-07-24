@@ -15,6 +15,25 @@ entities:
       symbols: [SimPlugin, SimSet]
       tests: [crates/vt_sim/src/ship.rs, crates/vt_sim/src/combat.rs]
 
+  - component: test-harness
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Headless Test Harness
+      summary: >-
+        Ships are one uniform entity shape (base hull + full ShipLoadout +
+        PilotIntent); a player ship and an AI ship differ only in which system
+        writes their intent (the client for a Player, ai_system for an
+        AiController). Harness builds a deterministic headless World + step
+        schedule mirroring SimSet order, so automated tests can AI-pilot a
+        player-shaped ship (Protagonist + AiController) and step the sim.
+      references: [void-and-thunder-simulation, enemy-ai, client-shell]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/harness.rs, crates/vt_sim/src/spawn.rs]
+      symbols: [Harness, ShipLoadout, ship_bundle]
+      tests: [crates/vt_sim/src/harness.rs]
+
   - component: ship-movement
     core:
       status: implemented
@@ -254,7 +273,7 @@ entities:
     implementation:
       status: declared
       paths: [crates/vt_client/src/main.rs]
-      symbols: [player_input, restart, STICK_DEADZONE]
+      symbols: [player_input, restart, deadzone, track_input_method]
 
   - component: client-shell
     core:
