@@ -6,29 +6,40 @@
 //!   * host → HUD: `window.__applyHud('<json>')` parses and calls `updateHud`.
 //!   * HUD → host: `game.send(action, payload)` (no controls on this readout HUD yet).
 //!
-//! This module is deliberately split into two halves:
+//! Two halves, deliberately separated:
 //!   * [`gather_hud_state`] — reads real ECS components (`With<Player>`) and
-//!     writes the JSON into [`HudSnapshot`]. Renderer/transport agnostic, no
-//!     extra dependencies, unit-checkable.
-//!   * a *transport* that pushes [`HudSnapshot`] into the actual web page. That
-//!     half is platform-specific (a DOM/iframe overlay on wasm; a native webview
-//!     otherwise) and is wired separately — see `push_snapshot`.
+//!     writes the JSON into [`HudSnapshot`]. Transport-agnostic, no extra deps.
+//!   * a *transport* that pushes [`HudSnapshot`] into the live page. Delivered per
+//!     target:
+//!       - wasm: `hud.html` mounted as a transparent, click-through iframe over
+//!         the canvas (vtHud* shim in `index.html`), driven via wasm-bindgen.
+//!       - native + `native-webview-hud` feature: a raw `wry` webview overlay
+//!         built off Bevy's winit window handle.
+//!       - native without the feature: no-op (the Bevy-UI HUD carries native).
 
 use bevy::prelude::*;
 use vt_sim::prelude::{BoostDrive, Broadside, Hull, MicrowarpDrive, TorpedoBay};
 
 use crate::Player;
 
-/// Mounts the HUD state-gathering. Transport systems are added on top of this
-/// per platform (see `push_snapshot`).
+/// Mounts HUD state-gathering plus the transport systems for this target.
 pub struct HudBridgePlugin;
 
 impl Plugin for HudBridgePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HudSnapshot>()
             .add_message::<HudAction>()
-            .add_systems(Startup, init_transport)
             .add_systems(Update, gather_hud_state);
+
+        // Web: mount the iframe overlay and push snapshots into it.
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(Startup, web::init)
+            .add_systems(Update, web::push.after(gather_hud_state));
+
+        // Native desktop webview overlay (opt-in).
+        #[cfg(all(not(target_arch = "wasm32"), feature = "native-webview-hud"))]
+        app.add_systems(Startup, native::init)
+            .add_systems(Update, (native::push, native::resize).after(gather_hud_state));
     }
 }
 
@@ -129,12 +140,11 @@ fn gather_hud_state(
 
     j.push('}');
 
-    // Only push when the snapshot actually changed — the HUD retains last-known
-    // values, so identical frames need no transport call.
+    // Only bump when the snapshot actually changed — the HUD retains last-known
+    // values, so identical frames need no transport push.
     if j != snap.json {
         snap.json = j;
         snap.seq = snap.seq.wrapping_add(1);
-        push_snapshot(&snap.json);
     }
 }
 
@@ -148,55 +158,143 @@ fn push_cooldown(j: &mut String, name: &str, timer: f32, duration: f32) {
     ));
 }
 
-// ============================ transport ============================
-//
-// The HUD page is delivered per target, hidden behind `init_transport` (once at
-// startup) and `push_snapshot` (each changed frame):
-//   * wasm — the game is already in a browser, so `hud.html` is mounted as a
-//     transparent, click-through iframe over the canvas (see the vtHud* shim in
-//     index.html) and driven via wasm-bindgen. No webview crate involved.
-//   * native — a raw `wry` webview overlay (the `bevy_wry`/`bevy_webview_wry`
-//     wrappers don't support Bevy 0.19; raw wry is Bevy-version-independent).
-//     Not yet implemented — see the follow-up.
+// ============================ web (wasm) transport ============================
 
-/// Mount the HUD overlay once, at startup.
-#[cfg(target_arch = "wasm32")]
-fn init_transport() {
-    web::vt_hud_init();
-}
-
-/// Push the latest JSON snapshot into the live HUD page.
-#[cfg(target_arch = "wasm32")]
-fn push_snapshot(json: &str) {
-    web::vt_hud_apply(json);
-}
-
+/// The game is already in a browser, so `hud.html` is mounted as a transparent,
+/// click-through iframe over the canvas (see the vtHud* shim in `index.html`)
+/// and driven via wasm-bindgen. No webview crate involved.
 #[cfg(target_arch = "wasm32")]
 mod web {
+    use super::HudSnapshot;
+    use bevy::prelude::*;
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen]
     extern "C" {
         /// Create the transparent HUD iframe over the canvas (idempotent).
         #[wasm_bindgen(js_namespace = window, js_name = vtHudInit)]
-        pub fn vt_hud_init();
+        fn vt_hud_init();
 
         /// Hand a JSON snapshot to the iframe's `__applyHud` (no-op until it loads).
         #[wasm_bindgen(js_namespace = window, js_name = vtHudApply)]
-        pub fn vt_hud_apply(json: &str);
+        fn vt_hud_apply(json: &str);
+    }
+
+    /// Mount the overlay once, at startup.
+    pub fn init() {
+        vt_hud_init();
+    }
+
+    /// Push the latest snapshot when it changes.
+    pub fn push(snap: Res<HudSnapshot>, mut last: Local<u64>) {
+        if snap.seq != *last {
+            *last = snap.seq;
+            vt_hud_apply(&snap.json);
+        }
     }
 }
 
-/// Native transport — a raw `wry` webview overlay. Not yet wired; `HudSnapshot`
-/// is fully maintained so this is a drop-in when added.
-#[cfg(not(target_arch = "wasm32"))]
-fn init_transport() {
-    // TODO(native): create a transparent child wry WebView from Bevy's winit
-    // window handle, load assets/ui/hud.html, inject bridge.js.
-}
+// ========================= native (raw wry) transport ========================
 
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(unused_variables)]
-fn push_snapshot(json: &str) {
-    // TODO(native): webview.evaluate_script(&format!("window.__applyHud('{}')", esc));
+/// A transparent `wry` webview overlay built as a child of Bevy's winit window.
+///
+/// NOTE (unverified in CI): `build_as_child` supports Windows, macOS and Linux
+/// **X11 only** (not Wayland). Also, a full-window child webview will capture
+/// pointer/keyboard events over the whole window — for a game HUD it must be made
+/// hit-test-transparent per platform (WS_EX_TRANSPARENT on Windows, input shape
+/// on X11, `setIgnoresMouseEvents` on macOS) using the webview's native handle.
+/// That platform pass is the remaining work before this is playable; the overlay
+/// renders and updates without it.
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-webview-hud"))]
+mod native {
+    use super::HudSnapshot;
+    use bevy::prelude::*;
+    use bevy::window::{PrimaryWindow, WindowResized};
+    use bevy::winit::WinitWindows;
+    use wry::dpi::{LogicalPosition, LogicalSize};
+    use wry::{Rect, WebView, WebViewBuilder};
+
+    /// Owns the overlay webview. `!Send`, so it lives as a NonSend resource and
+    /// every system touching it runs on the main thread.
+    pub(crate) struct HudWebView(WebView);
+
+    /// The HUD page with `bridge.js` inlined (no external file to resolve when
+    /// loaded via `with_html`).
+    fn hud_document() -> String {
+        const HTML: &str = include_str!("../assets/ui/hud.html");
+        const BRIDGE: &str = include_str!("../assets/ui/bridge.js");
+        HTML.replace(
+            "<script src=\"bridge.js\"></script>",
+            &format!("<script>{BRIDGE}</script>"),
+        )
+    }
+
+    /// Build the child webview from the primary window's handle (exclusive system:
+    /// inserting a NonSend resource needs `&mut World`).
+    pub fn init(world: &mut World) {
+        let Some(entity) = world
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .iter(world)
+            .next()
+        else {
+            return;
+        };
+
+        let html = hud_document();
+        // Build while borrowing the winit window, then drop the borrow before
+        // inserting the resource.
+        let webview = {
+            let Some(winit_windows) = world.get_non_send::<WinitWindows>() else {
+                return;
+            };
+            let Some(window) = winit_windows.get_window(entity) else {
+                return;
+            };
+            let size = window.inner_size();
+            WebViewBuilder::new()
+                .with_transparent(true)
+                .with_bounds(Rect {
+                    position: LogicalPosition::new(0.0, 0.0).into(),
+                    size: LogicalSize::new(size.width as f64, size.height as f64).into(),
+                })
+                .with_html(html)
+                // `window` is a WindowWrapper; deref to the winit Window, which
+                // implements HasWindowHandle.
+                .build_as_child(&**window)
+        };
+        match webview {
+            Ok(wv) => world.insert_non_send(HudWebView(wv)),
+            Err(e) => error!("failed to build native HUD webview: {e}"),
+        }
+    }
+
+    /// Push the latest snapshot when it changes, via `__applyHud`.
+    pub fn push(snap: Res<HudSnapshot>, webview: Option<NonSend<HudWebView>>, mut last: Local<u64>) {
+        let (Some(webview), true) = (webview, snap.seq != *last) else {
+            return;
+        };
+        *last = snap.seq;
+        // JSON here is numbers + fixed keys only, but escape defensively for the
+        // single-quoted JS string literal.
+        let esc = snap.json.replace('\\', "\\\\").replace('\'', "\\'");
+        if let Err(e) = webview.0.evaluate_script(&format!("window.__applyHud('{esc}')")) {
+            warn!("HUD evaluate_script failed: {e}");
+        }
+    }
+
+    /// Keep the overlay sized to the window.
+    pub fn resize(
+        mut resized: MessageReader<WindowResized>,
+        webview: Option<NonSend<HudWebView>>,
+    ) {
+        let Some(webview) = webview else {
+            return;
+        };
+        for ev in resized.read() {
+            let _ = webview.0.set_bounds(Rect {
+                position: LogicalPosition::new(0.0, 0.0).into(),
+                size: LogicalSize::new(ev.width as f64, ev.height as f64).into(),
+            });
+        }
+    }
 }

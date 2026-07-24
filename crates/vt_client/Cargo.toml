@@ -18,7 +18,17 @@ vt_sim.workspace = true
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 
+# Native-only: raw wry powers the desktop HUD overlay (behind the
+# `native-webview-hud` feature). The bevy_wry/bevy_webview_wry wrappers don't
+# support Bevy 0.19, so we drive wry directly off Bevy's winit window handle.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wry = { version = "0.55", optional = true }
+
 # Native-only: dynamic linking makes iterative debug builds much faster.
 # Enable with `cargo run --features fast-compile`. Never enabled for wasm.
 [features]
 fast-compile = ["bevy/dynamic_linking"]
+# Render the HTML HUD on native desktop via a raw wry webview overlay. Off by
+# default: it needs a system webview (WebView2 on Windows, libwebkit2gtk on
+# Linux/X11) and is experimental. Without it, native uses the Bevy-UI HUD.
+native-webview-hud = ["dep:wry"]
