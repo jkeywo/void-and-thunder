@@ -9,9 +9,11 @@
 //! unit-tested without a `World`.
 
 use bevy_ecs::prelude::*;
+use bevy_math::Vec2;
 use bevy_time::Time;
+use bevy_transform::components::Transform;
 
-use crate::components::{BoostDrive, EmpDefense, Ship, SpeedScale};
+use crate::components::{BoostDrive, EmpDefense, MicrowarpDrive, PilotIntent, Ship, SpeedScale};
 
 /// The speed multiplier for a ship given its EMP load and (optional) boost.
 pub fn speed_scale(emp: &EmpDefense, boost: Option<&BoostDrive>) -> f32 {
@@ -47,6 +49,38 @@ pub fn speed_scale_system(
 ) {
     for (mut scale, emp, boost) in &mut ships {
         scale.0 = speed_scale(emp, boost);
+    }
+}
+
+/// Clamp `point` to lie within `range` of `origin`.
+pub fn clamp_to_range(origin: Vec2, point: Vec2, range: f32) -> Vec2 {
+    let delta = point - origin;
+    if delta.length() > range {
+        origin + delta.normalize_or_zero() * range
+    } else {
+        point
+    }
+}
+
+/// Bevy system: teleport a microwarp ship to the aim point (clamped to range)
+/// when the pilot releases, if the drive has cooled down.
+pub fn microwarp_system(
+    time: Res<Time>,
+    intent: Res<PilotIntent>,
+    mut ships: Query<(&mut Transform, &mut MicrowarpDrive)>,
+) {
+    let dt = time.delta_secs();
+    for (mut transform, mut drive) in &mut ships {
+        drive.timer = (drive.timer - dt).max(0.0);
+        let hold = intent.microwarp_hold;
+        if drive.was_holding && !hold && drive.timer <= 0.0 {
+            let origin = transform.translation.truncate();
+            let dest = clamp_to_range(origin, intent.aim_point, drive.range);
+            transform.translation.x = dest.x;
+            transform.translation.y = dest.y;
+            drive.timer = drive.cooldown;
+        }
+        drive.was_holding = hold;
     }
 }
 
@@ -106,5 +140,15 @@ mod tests {
             ..Default::default()
         };
         assert!((speed_scale(&emp, Some(&boost)) - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn microwarp_clamps_to_range() {
+        // A point 1000 out with a 900 range lands on the edge.
+        let dest = clamp_to_range(Vec2::ZERO, Vec2::new(1000.0, 0.0), 900.0);
+        assert!((dest.x - 900.0).abs() < 1e-3);
+        // A point inside range is unchanged.
+        let near = clamp_to_range(Vec2::ZERO, Vec2::new(100.0, 0.0), 900.0);
+        assert!((near.x - 100.0).abs() < 1e-6);
     }
 }

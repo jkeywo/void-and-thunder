@@ -388,6 +388,27 @@ impl Default for TorpedoBay {
     }
 }
 
+/// A short-range teleport drive. Holding aim previews a destination within
+/// `range`; releasing warps there (gated by `cooldown`). Player-only.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MicrowarpDrive {
+    pub range: f32,
+    pub cooldown: f32,
+    pub timer: f32,
+    pub was_holding: bool,
+}
+
+impl Default for MicrowarpDrive {
+    fn default() -> Self {
+        Self {
+            range: 900.0,
+            cooldown: 2.0,
+            timer: 0.0,
+            was_holding: false,
+        }
+    }
+}
+
 /// A homing torpedo in flight, chasing `target`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Torpedo {
@@ -410,6 +431,8 @@ pub struct PilotIntent {
     pub emp_fire: bool,
     /// Holding torpedo aim (accruing locks; fires on release).
     pub torpedo_hold: bool,
+    /// Holding microwarp aim (previews destination; warps on release).
+    pub microwarp_hold: bool,
 }
 
 /// Marks a ship as AI-controlled and carries its combat tuning. The AI system

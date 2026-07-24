@@ -11,7 +11,7 @@ use bevy_ecs::prelude::*;
 use crate::ai::ai_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::components::PilotIntent;
-use crate::drive::{battery_system, speed_scale_system};
+use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
 use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Plunder};
@@ -78,7 +78,12 @@ impl Plugin for SimPlugin {
             .add_systems(FixedUpdate, ai_system.in_set(SimSet::Ai))
             .add_systems(
                 FixedUpdate,
-                (battery_system, torpedo_reload_system, speed_scale_system)
+                (
+                    battery_system,
+                    torpedo_reload_system,
+                    microwarp_system,
+                    speed_scale_system,
+                )
                     .chain()
                     .in_set(SimSet::Systems),
             )

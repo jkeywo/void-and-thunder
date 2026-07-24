@@ -101,7 +101,12 @@ struct GameMaterials {
     star: Handle<StandardMaterial>,
     emp: Handle<StandardMaterial>,
     torpedo: Handle<StandardMaterial>,
+    ghost: Handle<StandardMaterial>,
 }
+
+/// The translucent preview of where a microwarp will drop the player.
+#[derive(Component)]
+struct MicrowarpGhost;
 
 /// Render radius of a cannonball / EMP bolt (the shared sphere is unit-sized).
 const SHOT_RADIUS: f32 = 7.0;
@@ -261,6 +266,7 @@ fn main() {
                 draw_grid,
                 draw_aim_beams,
                 draw_charge_telegraph,
+                microwarp_ghost,
                 update_hud,
                 update_hull_bar,
                 update_battery_bars,
@@ -315,6 +321,7 @@ fn spawn_player(commands: &mut Commands) {
         BoostDrive::default(),
         EmpWeapon::default(),
         TorpedoBay::default(),
+        MicrowarpDrive::default(),
     ));
 }
 
@@ -348,6 +355,12 @@ fn setup(
         torpedo: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.55, 0.25),
             unlit: true,
+            ..default()
+        }),
+        ghost: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.4, 0.9, 0.7, 0.35),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
             ..default()
         }),
     };
@@ -425,6 +438,15 @@ fn setup(
             Transform::from_translation(dir * dist).with_scale(Vec3::splat(size)),
         ));
     }
+
+    // Microwarp destination preview, hidden until the pilot aims a warp.
+    commands.spawn((
+        Mesh3d(game_meshes.ship.clone()),
+        MeshMaterial3d(game_materials.ghost.clone()),
+        Transform::default(),
+        Visibility::Hidden,
+        MicrowarpGhost,
+    ));
 
     commands.insert_resource(game_meshes);
     commands.insert_resource(game_materials);
@@ -632,7 +654,8 @@ fn player_input(
     let mut fire_port = mouse.just_released(MouseButton::Left);
     let mut fire_starboard = mouse.just_released(MouseButton::Right);
     let mut emp_fire = keys.pressed(KeyCode::KeyQ);
-    let torpedo_hold = keys.pressed(KeyCode::ControlLeft);
+    let mut torpedo_hold = keys.pressed(KeyCode::ControlLeft);
+    let mut microwarp_hold = keys.pressed(KeyCode::ShiftLeft);
     let mut bracing = keys.pressed(KeyCode::KeyC);
     let mut boosting = keys.pressed(KeyCode::Space);
     let mut board_now = keys.just_pressed(KeyCode::KeyB);
@@ -661,22 +684,24 @@ fn player_input(
         }
     }
 
-    // --- Gamepad (first connected pad) ---
+    // --- Gamepad (first connected pad): the final scheme ---
     if let Some(pad) = gamepads.iter().next() {
-        let rt = pad.get(GamepadButton::RightTrigger2).unwrap_or(0.0);
-        let lt = pad.get(GamepadButton::LeftTrigger2).unwrap_or(0.0);
-        throttle += rt - lt;
-
-        let stick_x = pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0);
-        if stick_x.abs() > STICK_DEADZONE {
+        let ly = pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0);
+        if ly.abs() > STICK_DEADZONE {
+            throttle += ly;
+        }
+        let lx = pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0);
+        if lx.abs() > STICK_DEADZONE {
             // Stick right (+X) steers starboard (negative turn).
-            turn -= stick_x;
+            turn -= lx;
         }
 
-        aim_port |= pad.pressed(GamepadButton::LeftTrigger); // LB
-        aim_starboard |= pad.pressed(GamepadButton::RightTrigger); // RB
-        fire_port |= pad.just_released(GamepadButton::LeftTrigger);
-        fire_starboard |= pad.just_released(GamepadButton::RightTrigger);
+        aim_port |= pad.pressed(GamepadButton::LeftTrigger2); // LT
+        aim_starboard |= pad.pressed(GamepadButton::RightTrigger2); // RT
+        fire_port |= pad.just_released(GamepadButton::LeftTrigger2);
+        fire_starboard |= pad.just_released(GamepadButton::RightTrigger2);
+        torpedo_hold |= pad.pressed(GamepadButton::LeftTrigger); // LB
+        microwarp_hold |= pad.pressed(GamepadButton::RightTrigger); // RB
         emp_fire |= pad.pressed(GamepadButton::West); // X / Square
         bracing |= pad.pressed(GamepadButton::North); // Y / Triangle
         boosting |= pad.pressed(GamepadButton::South); // A / Cross
@@ -704,6 +729,7 @@ fn player_input(
     pilot.aim_point = aim_point;
     pilot.emp_fire = emp_fire;
     pilot.torpedo_hold = torpedo_hold;
+    pilot.microwarp_hold = microwarp_hold;
     if board_now {
         board.active = true;
     }
@@ -887,7 +913,11 @@ fn camera_orbit(
         rig.target = transform.translation.truncate();
         let pos = transform.translation.truncate();
         let aiming_broadside = aiming.port || aiming.starboard;
-        if aiming_broadside {
+        if pilot.microwarp_hold {
+            // Swoop up to a near-top-down view to place the warp.
+            target_yaw = heading.0;
+            target_pitch = CAM_PITCH_MAX;
+        } else if aiming_broadside {
             // Snap toward where the broadside points.
             let is_port = aiming.port;
             let aim_dir = (pilot.aim_point - pos).normalize_or_zero();
@@ -968,6 +998,29 @@ fn draw_aim_beams(
             let end = (shot.position + beam * AIM_BEAM_LEN).extend(0.0);
             gizmos.line(start, end, color);
         }
+    }
+}
+
+/// Show the microwarp ghost at the clamped destination while the pilot aims a
+/// warp, matching the player's heading; hide it otherwise.
+fn microwarp_ghost(
+    pilot: Res<PilotIntent>,
+    player: Query<(&Transform, &Heading, &MicrowarpDrive), (With<Player>, Without<MicrowarpGhost>)>,
+    mut ghost: Query<(&mut Transform, &mut Visibility), With<MicrowarpGhost>>,
+) {
+    let Ok((mut ghost_tf, mut visibility)) = ghost.single_mut() else {
+        return;
+    };
+    if pilot.microwarp_hold {
+        if let Ok((transform, heading, drive)) = player.single() {
+            let origin = transform.translation.truncate();
+            let dest = clamp_to_range(origin, pilot.aim_point, drive.range);
+            ghost_tf.translation = dest.extend(0.0);
+            ghost_tf.rotation = Quat::from_rotation_z(heading.0);
+            *visibility = Visibility::Visible;
+        }
+    } else {
+        *visibility = Visibility::Hidden;
     }
 }
 
@@ -1223,8 +1276,8 @@ fn aim_time_dilation(
     mut battery: ResMut<AimBattery>,
 ) {
     let dt = real.delta_secs();
-    // Extended in a later phase to include microwarp aiming.
-    let wants_dilation = aiming.port || aiming.starboard || pilot.torpedo_hold;
+    let wants_dilation =
+        aiming.port || aiming.starboard || pilot.torpedo_hold || pilot.microwarp_hold;
     let target = if wants_dilation && battery.charge > 0.0 {
         battery.charge = (battery.charge - battery.drain_per_sec * dt).max(0.0);
         AIM_TIMESCALE
