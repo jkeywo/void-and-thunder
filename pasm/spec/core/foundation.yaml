@@ -118,7 +118,9 @@ entities:
         into hit sparks, expanding explosions and screen shake (CameraRig
         trauma), plus muzzle flashes on new cannonballs. A hull gauge and the
         wave/outcome HUD text read the encounter. Effects scale-and-fade via the
-        Effect component; ship sprites tint darker as their hull drops.
+        Effect component; ship materials tint darker as their hull drops.
+        Off-screen enemies are called out by pooled UI markers pinned to the
+        window edge in their on-screen direction (update_offscreen_markers).
       references: [ship-combat, spawn-director, client-shell]
     implementation:
       status: declared
@@ -133,6 +135,8 @@ entities:
           update_effects,
           damage_tint,
           update_hull_bar,
+          update_offscreen_markers,
+          EdgeMarker,
         ]
 
   - component: sound-effects

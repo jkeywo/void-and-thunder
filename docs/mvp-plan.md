@@ -116,7 +116,8 @@ scheme) also supported.
   banner.
 - **Juice:** muzzle flash, hit spark, ship-death flash/particles, brief screen
   shake on hits; broadside/hit/explosion SFX.
-- **Readability:** health tint on enemy hulls; off-screen enemy markers.
+- **Readability:** health tint on enemy hulls; off-screen enemy markers. ✅ both
+  done (`damage_tint`, `update_offscreen_markers`).
 - **Done when:** a new player understands the fight without instructions.
 
 ### M5 — Piracy finisher (optional for MVP, defines the game) ✅ DONE
