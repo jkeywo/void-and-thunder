@@ -11,18 +11,21 @@
 //! around the player's ship. So the gameplay stays a Black-Flag naval duel while
 //! the view is fully 3D — boxes for hulls, spheres for shot and worlds.
 //!
-//! Controls:
+//! Controls (kit is being rolled out phase by phase — see the plan):
 //!   W / S   — throttle forward / reverse
 //!   A / D   — turn to port / starboard
 //!   Q / E   — **hold** to aim the port / starboard broadside, **release** to fire
-//!   Space   — brace (cut incoming damage)
+//!             (aiming dilates time — bullet-time — from the aim battery)
+//!   Space   — boost (rechargeable battery)
+//!   C       — brace (cut incoming damage)
 //!   B       — board a crippled enemy alongside (loot it)
 //!   R       — restart after a run ends
 //!
-//! Gamepad (Black-Flag scheme): RT/LT throttle & reverse, left stick steer,
-//! LB/RB hold-aim/release-fire the broadsides, X brace, A board, Start restart.
+//! Gamepad: RT/LT throttle & reverse, left stick steer, LB/RB hold-aim/
+//! release-fire broadsides, A boost, Y brace, B board, Start restart.
 
 use bevy::prelude::*;
+use bevy::time::{Real, Virtual};
 use std::f32::consts::{PI, TAU};
 use vt_sim::prelude::*;
 
@@ -99,6 +102,42 @@ struct Aiming {
     port: bool,
     starboard: bool,
 }
+
+/// Fraction of normal time while aiming (bullet-time).
+const AIM_TIMESCALE: f32 = 0.25;
+
+/// The aim battery: aiming a weapon dilates global time toward
+/// [`AIM_TIMESCALE`] while this has charge, then eases back. Charge is spent in
+/// real seconds (so the window is a real ~5s regardless of the dilation) and
+/// recovers when not aiming. `dilation` is the current eased timescale.
+#[derive(Resource)]
+struct AimBattery {
+    charge: f32,
+    max: f32,
+    drain_per_sec: f32,
+    recharge_per_sec: f32,
+    dilation: f32,
+}
+
+impl Default for AimBattery {
+    fn default() -> Self {
+        Self {
+            charge: 5.0,
+            max: 5.0,
+            drain_per_sec: 1.0,
+            recharge_per_sec: 1.0,
+            dilation: 1.0,
+        }
+    }
+}
+
+/// Marker for the boost-battery gauge fill.
+#[derive(Component)]
+struct BoostBarFill;
+
+/// Marker for the aim-battery gauge fill.
+#[derive(Component)]
+struct AimBarFill;
 
 /// Camera orbit + screen-shake state. `yaw` chases the ship's heading; `trauma`
 /// decays each frame and is added to by hits and explosions.
@@ -182,6 +221,7 @@ fn main() {
         .init_state::<GameState>()
         .init_resource::<CameraRig>()
         .init_resource::<Aiming>()
+        .init_resource::<AimBattery>()
         .add_systems(Startup, setup)
         // Presentation runs in every state.
         .add_systems(
@@ -195,7 +235,9 @@ fn main() {
                 draw_aim_beams,
                 update_hud,
                 update_hull_bar,
+                update_battery_bars,
                 update_offscreen_markers,
+                aim_time_dilation,
             ),
         )
         // Juice: muzzle flashes, hit sparks, explosions, screen shake.
@@ -235,6 +277,7 @@ fn spawn_player(commands: &mut Commands) {
         ship_bundle(Faction::Corsairs, ShipStats::default(), 100.0, PLAYER_START),
         Player,
         Protagonist,
+        BoostDrive::default(),
     ));
 }
 
@@ -385,6 +428,20 @@ fn setup(
             ));
         });
 
+    // Boost battery (cyan) and aim battery (amber), stacked above the hull bar.
+    spawn_bar(
+        &mut commands,
+        40.0,
+        Color::srgb(0.35, 0.75, 0.95),
+        BoostBarFill,
+    );
+    spawn_bar(
+        &mut commands,
+        60.0,
+        Color::srgb(0.95, 0.8, 0.35),
+        AimBarFill,
+    );
+
     // A pool of off-screen enemy markers, hidden until needed.
     for _ in 0..EDGE_MARKER_COUNT {
         commands.spawn((
@@ -401,6 +458,35 @@ fn setup(
     }
 
     let _ = bounds;
+}
+
+/// Spawn a thin framed gauge in the bottom-left with a coloured fill, tagged
+/// with a marker component so a system can resize it.
+fn spawn_bar(commands: &mut Commands, bottom: f32, fill: Color, marker: impl Component) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(bottom),
+                left: Val::Px(16.0),
+                width: Val::Px(180.0),
+                height: Val::Px(12.0),
+                padding: UiRect::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.20, 0.22, 0.28)),
+        ))
+        .with_children(|frame| {
+            frame.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(fill),
+                marker,
+            ));
+        });
 }
 
 /// Spawn a spherical landmark (star/station/planet).
@@ -454,9 +540,9 @@ fn player_input(
     gamepads: Query<&Gamepad>,
     mut board: ResMut<BoardIntent>,
     mut aiming: ResMut<Aiming>,
-    mut player: Query<(&mut Helm, &mut FireOrders, &mut Brace), With<Player>>,
+    mut player: Query<(&mut Helm, &mut FireOrders, &mut Brace, &mut BoostDrive), With<Player>>,
 ) {
-    let Ok((mut helm, mut orders, mut brace)) = player.single_mut() else {
+    let Ok((mut helm, mut orders, mut brace, mut boost)) = player.single_mut() else {
         return;
     };
 
@@ -481,10 +567,11 @@ fn player_input(
     let mut aim_starboard = keys.pressed(KeyCode::KeyE);
     let mut fire_port = keys.just_released(KeyCode::KeyQ);
     let mut fire_starboard = keys.just_released(KeyCode::KeyE);
-    let mut bracing = keys.pressed(KeyCode::Space);
+    let mut bracing = keys.pressed(KeyCode::KeyC);
+    let mut boosting = keys.pressed(KeyCode::Space);
     let mut board_now = keys.just_pressed(KeyCode::KeyB);
 
-    // --- Gamepad (first connected pad), Black-Flag scheme ---
+    // --- Gamepad (first connected pad) ---
     if let Some(pad) = gamepads.iter().next() {
         let rt = pad.get(GamepadButton::RightTrigger2).unwrap_or(0.0);
         let lt = pad.get(GamepadButton::LeftTrigger2).unwrap_or(0.0);
@@ -500,8 +587,9 @@ fn player_input(
         aim_starboard |= pad.pressed(GamepadButton::RightTrigger); // RB
         fire_port |= pad.just_released(GamepadButton::LeftTrigger);
         fire_starboard |= pad.just_released(GamepadButton::RightTrigger);
-        bracing |= pad.pressed(GamepadButton::West); // X / Square
-        board_now |= pad.just_pressed(GamepadButton::South); // A / Cross
+        bracing |= pad.pressed(GamepadButton::North); // Y / Triangle
+        boosting |= pad.pressed(GamepadButton::South); // A / Cross
+        board_now |= pad.just_pressed(GamepadButton::East); // B / Circle
     }
 
     helm.throttle = throttle.clamp(-1.0, 1.0);
@@ -517,6 +605,7 @@ fn player_input(
         orders.starboard = true;
     }
     brace.active = bracing;
+    boost.active = boosting;
     if board_now {
         board.active = true;
     }
@@ -892,6 +981,50 @@ fn update_offscreen_markers(
     // Hide any markers left unused this frame.
     for (mut node, _) in pool {
         node.display = Display::None;
+    }
+}
+
+/// Dilate global time toward [`AIM_TIMESCALE`] while the player is aiming and the
+/// aim battery has charge; ease back otherwise. Battery + easing run on real
+/// time so the window is a real ~5s and stays smooth under dilation.
+fn aim_time_dilation(
+    real: Res<Time<Real>>,
+    mut virt: ResMut<Time<Virtual>>,
+    aiming: Res<Aiming>,
+    mut battery: ResMut<AimBattery>,
+) {
+    let dt = real.delta_secs();
+    // Extended in later phases to include torpedo + microwarp aiming.
+    let wants_dilation = aiming.port || aiming.starboard;
+    let target = if wants_dilation && battery.charge > 0.0 {
+        battery.charge = (battery.charge - battery.drain_per_sec * dt).max(0.0);
+        AIM_TIMESCALE
+    } else {
+        battery.charge = (battery.charge + battery.recharge_per_sec * dt).min(battery.max);
+        1.0
+    };
+    let k = 1.0 - (-10.0 * dt).exp();
+    battery.dilation += (target - battery.dilation) * k;
+    virt.set_relative_speed(battery.dilation.max(0.02));
+}
+
+/// Resize the boost and aim battery gauges.
+fn update_battery_bars(
+    battery: Res<AimBattery>,
+    player: Query<&BoostDrive, With<Player>>,
+    mut boost_fill: Query<&mut Node, (With<BoostBarFill>, Without<AimBarFill>)>,
+    mut aim_fill: Query<&mut Node, (With<AimBarFill>, Without<BoostBarFill>)>,
+) {
+    let boost_frac = player
+        .single()
+        .map(|b| (b.battery / b.battery_max).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    if let Ok(mut node) = boost_fill.single_mut() {
+        node.width = Val::Percent(boost_frac * 100.0);
+    }
+    let aim_frac = (battery.charge / battery.max).clamp(0.0, 1.0);
+    if let Ok(mut node) = aim_fill.single_mut() {
+        node.width = Val::Percent(aim_frac * 100.0);
     }
 }
 

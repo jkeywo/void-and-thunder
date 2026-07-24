@@ -197,6 +197,83 @@ pub struct Landmark {
     pub radius: f32,
 }
 
+/// Per-frame multiplier on a ship's speed, recomputed each step from its EMP
+/// state and boost. `1.0` is normal; `<1` slowed (EMP), `>1` boosting. The
+/// movement system reads this; nothing else should write ship velocity scaling.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct SpeedScale(pub f32);
+
+impl Default for SpeedScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// A ship's resistance to EMP and how much it has soaked. As `damage`
+/// approaches `resist` the ship's speed is inverse-lerped to zero; `damage`
+/// bleeds off at `recovery_per_sec`. All ships carry one so the player's EMP can
+/// slow anything.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct EmpDefense {
+    /// EMP points to fully disable this ship's drive.
+    pub resist: f32,
+    /// EMP points currently soaked (`0..=resist`).
+    pub damage: f32,
+    /// Points recovered per second.
+    pub recovery_per_sec: f32,
+}
+
+impl Default for EmpDefense {
+    fn default() -> Self {
+        Self {
+            resist: 100.0,
+            damage: 0.0,
+            recovery_per_sec: 14.0,
+        }
+    }
+}
+
+impl EmpDefense {
+    /// Speed multiplier from the current EMP load (1 at rest, 0 fully EMP'd).
+    pub fn speed_factor(&self) -> f32 {
+        1.0 - (self.damage / self.resist).clamp(0.0, 1.0)
+    }
+}
+
+/// A rechargeable overdrive. While `active` and `battery > 0`, the ship's speed
+/// is multiplied by `multiplier`. Config + live state live together so the
+/// client just flips `active`. Player-only for now.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BoostDrive {
+    pub multiplier: f32,
+    pub battery: f32,
+    pub battery_max: f32,
+    pub drain_per_sec: f32,
+    pub recharge_per_sec: f32,
+    /// Set by the controller each frame — is the pilot holding boost?
+    pub active: bool,
+}
+
+impl Default for BoostDrive {
+    fn default() -> Self {
+        Self {
+            multiplier: 1.6,
+            battery: 3.0,
+            battery_max: 3.0,
+            drain_per_sec: 1.0,
+            recharge_per_sec: 0.6,
+            active: false,
+        }
+    }
+}
+
+impl BoostDrive {
+    /// True when boost is actually contributing thrust this frame.
+    pub fn engaged(&self) -> bool {
+        self.active && self.battery > 0.0
+    }
+}
+
 /// Marks a ship as AI-controlled and carries its combat tuning. The AI system
 /// writes this ship's [`Helm`] and [`FireOrders`]; a ship without it (the
 /// player) is driven by the client instead. This keeps the sim ignorant of who

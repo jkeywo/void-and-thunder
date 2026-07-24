@@ -10,6 +10,7 @@ use bevy_ecs::prelude::*;
 
 use crate::ai::ai_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
+use crate::drive::{battery_system, speed_scale_system};
 use crate::events::{ShipDestroyed, ShipHit};
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Plunder};
 use crate::ship::movement_system;
@@ -23,6 +24,8 @@ pub enum SimSet {
     Director,
     /// AI controllers decide their ships' helm and fire orders.
     Ai,
+    /// Ship systems: batteries, EMP recovery, speed scaling.
+    Systems,
     /// Turn hulls and integrate positions.
     Movement,
     /// Keep ships inside the star system's soft boundary.
@@ -52,6 +55,7 @@ impl Plugin for SimPlugin {
                 (
                     SimSet::Director,
                     SimSet::Ai,
+                    SimSet::Systems,
                     SimSet::Movement,
                     SimSet::Bounds,
                     SimSet::Weapons,
@@ -62,6 +66,12 @@ impl Plugin for SimPlugin {
             )
             .add_systems(FixedUpdate, director_system.in_set(SimSet::Director))
             .add_systems(FixedUpdate, ai_system.in_set(SimSet::Ai))
+            .add_systems(
+                FixedUpdate,
+                (battery_system, speed_scale_system)
+                    .chain()
+                    .in_set(SimSet::Systems),
+            )
             .add_systems(FixedUpdate, movement_system.in_set(SimSet::Movement))
             .add_systems(FixedUpdate, bounds_system.in_set(SimSet::Bounds))
             .add_systems(

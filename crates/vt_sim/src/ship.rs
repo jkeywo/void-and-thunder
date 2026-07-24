@@ -11,7 +11,7 @@ use bevy_math::{Quat, Vec2};
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 
-use crate::components::{Heading, Helm, ShipStats, Velocity};
+use crate::components::{Heading, Helm, ShipStats, SpeedScale, Velocity};
 
 /// Advance one ship's heading and velocity by `dt` seconds.
 ///
@@ -42,6 +42,10 @@ pub fn helm_step(
 }
 
 /// Bevy system: apply [`helm_step`] to every ship and integrate its position.
+///
+/// The ship's [`SpeedScale`] (set by the drive systems from EMP + boost) scales
+/// its top speed and thrust for this step, so `helm_step` itself stays pure and
+/// unaware of the modifiers.
 pub fn movement_system(
     time: Res<Time>,
     mut ships: Query<(
@@ -50,14 +54,20 @@ pub fn movement_system(
         &mut Velocity,
         &ShipStats,
         &Helm,
+        &SpeedScale,
     )>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
     }
-    for (mut transform, mut heading, mut velocity, stats, helm) in &mut ships {
-        let (new_heading, new_velocity) = helm_step(heading.0, velocity.0, stats, helm, dt);
+    for (mut transform, mut heading, mut velocity, stats, helm, scale) in &mut ships {
+        let scaled = ShipStats {
+            max_speed: stats.max_speed * scale.0,
+            thrust: stats.thrust * scale.0,
+            ..*stats
+        };
+        let (new_heading, new_velocity) = helm_step(heading.0, velocity.0, &scaled, helm, dt);
         heading.0 = new_heading;
         velocity.0 = new_velocity;
         transform.translation += (new_velocity * dt).extend(0.0);
