@@ -18,17 +18,19 @@ vt_sim.workspace = true
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 
-# Native-only: raw wry powers the desktop HUD overlay (behind the
-# `native-webview-hud` feature). The bevy_wry/bevy_webview_wry wrappers don't
-# support Bevy 0.19, so we drive wry directly off Bevy's winit window handle.
+# Native-only: Ultralight renders the HTML HUD (assets/ui/hud.html) to a pixel
+# buffer that we upload to a Bevy texture and composite as a UI node — full
+# native perf, proper alpha, no OS-window overlay. Behind `native-html-hud`.
+# ul-next downloads the Ultralight SDK at build time; Ultralight is proprietary
+# but free for indies under their revenue/funding thresholds.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-wry = { version = "0.55", optional = true }
+ul-next = { version = "0.5", optional = true }
 
 # Native-only: dynamic linking makes iterative debug builds much faster.
 # Enable with `cargo run --features fast-compile`. Never enabled for wasm.
 [features]
 fast-compile = ["bevy/dynamic_linking"]
-# Render the HTML HUD on native desktop via a raw wry webview overlay. Off by
-# default: it needs a system webview (WebView2 on Windows, libwebkit2gtk on
-# Linux/X11) and is experimental. Without it, native uses the Bevy-UI HUD.
-native-webview-hud = ["dep:wry"]
+# Render the HTML HUD on native desktop via Ultralight → Bevy texture. Off by
+# default: it downloads/links the Ultralight SDK and needs its `resources/`
+# folder at runtime. Without it, native uses the Bevy-UI HUD.
+native-html-hud = ["dep:ul-next"]

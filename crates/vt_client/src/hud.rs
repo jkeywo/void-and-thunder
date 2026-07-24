@@ -36,13 +36,15 @@ impl Plugin for HudBridgePlugin {
         app.add_systems(Startup, web::init)
             .add_systems(Update, web::push.after(gather_hud_state));
 
-        // Native desktop webview overlay (opt-in). `init` runs in Update and
-        // retries until the winit window exists, then builds once.
-        #[cfg(all(not(target_arch = "wasm32"), feature = "native-webview-hud"))]
-        app.add_systems(Update, native::init).add_systems(
-            Update,
-            (native::push, native::resize).after(gather_hud_state),
-        );
+        // Native desktop: render the HTML HUD with Ultralight into a Bevy texture
+        // (opt-in). `init` retries until the window exists, then builds once;
+        // `render_hud` pushes state + repaints each frame.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "native-html-hud"))]
+        {
+            info!("HUD: native Ultralight transport ENABLED (native-html-hud feature)");
+            app.add_systems(Update, native::init)
+                .add_systems(Update, native::render_hud.after(gather_hud_state));
+        }
     }
 }
 
@@ -202,36 +204,51 @@ mod web {
     }
 }
 
-// ========================= native (raw wry) transport ========================
+// ================== native (Ultralight → Bevy texture) transport ==================
 
-/// A transparent `wry` webview overlay built as a child of Bevy's winit window.
+/// Renders the HTML HUD with Ultralight to a CPU pixel buffer, uploads it to a
+/// Bevy texture, and draws it as a fullscreen UI node — so Bevy composites the
+/// HUD over the game with proper alpha at native performance. No OS-window
+/// overlay, no compositing hacks.
 ///
-/// NOTE (unverified in CI): `build_as_child` supports Windows, macOS and Linux
-/// **X11 only** (not Wayland). Also, a full-window child webview will capture
-/// pointer/keyboard events over the whole window — for a game HUD it must be made
-/// hit-test-transparent per platform (WS_EX_TRANSPARENT on Windows, input shape
-/// on X11, `setIgnoresMouseEvents` on macOS) using the webview's native handle.
-/// That platform pass is the remaining work before this is playable; the overlay
-/// renders and updates without it.
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-webview-hud"))]
+/// Runtime needs: `ul-next` links the downloaded Ultralight SDK, and Ultralight
+/// expects its SDK `resources/` folder in the working directory.
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-html-hud"))]
 mod native {
     use super::HudSnapshot;
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::Image;
     use bevy::prelude::*;
-    use bevy::window::{PrimaryWindow, WindowResized};
-    use bevy::winit::WinitWindows;
-    use wry::dpi::{LogicalPosition, LogicalSize};
-    use wry::{Rect, WebView, WebViewBuilder};
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    use bevy::window::PrimaryWindow;
+    use ul_next::{
+        config::Config,
+        platform,
+        renderer::Renderer,
+        view::{View, ViewConfig},
+        Library,
+    };
 
-    /// Owns the overlay webview. `!Send`, so it lives as a NonSend resource and
-    /// every system touching it runs on the main thread.
-    pub(crate) struct HudWebView(WebView);
+    /// Ultralight renderer + view + the target texture. `!Send`, so it lives as a
+    /// NonSend resource and only main-thread systems touch it.
+    pub(crate) struct HudUl {
+        renderer: Renderer,
+        view: View,
+        image: Handle<Image>,
+        width: usize,
+        height: usize,
+        last_seq: u64,
+    }
 
-    /// Set once a hard build failure has been logged, so `init` stops retrying.
+    /// Set once init has hard-failed, so it stops retrying.
     #[derive(Resource)]
     struct HudInitFailed;
 
-    /// The HUD page with `bridge.js` inlined (no external file to resolve when
-    /// loaded via `with_html`).
+    /// Marks the fullscreen UI node showing the HUD texture.
+    #[derive(Component)]
+    struct HudCanvas;
+
+    /// The HUD page with `bridge.js` inlined (no external file to resolve).
     fn hud_document() -> String {
         const HTML: &str = include_str!("../assets/ui/hud.html");
         const BRIDGE: &str = include_str!("../assets/ui/bridge.js");
@@ -241,98 +258,166 @@ mod native {
         )
     }
 
-    /// Build the child webview from the primary window's handle (exclusive system:
-    /// inserting a NonSend resource needs `&mut World`).
-    ///
-    /// Runs every frame but does its work once: it returns quietly while the
-    /// window isn't ready yet (so it retries), builds on the first ready frame,
-    /// and stops after either success or a logged hard failure.
+    /// Create the Ultralight renderer/view + target texture once the window
+    /// exists. Exclusive system: it spawns UI and inserts a NonSend resource.
+    /// Runs every frame but does its work once (retries while the window is not
+    /// ready, then stops on success or a logged hard failure).
     pub fn init(world: &mut World) {
-        // Already mounted, or gave up after a hard failure.
-        if world.get_non_send::<HudWebView>().is_some()
+        if world.get_non_send::<HudUl>().is_some()
             || world.get_resource::<HudInitFailed>().is_some()
         {
             return;
         }
 
-        // Window not created yet — retry next frame (transient, no log).
-        let Some(entity) = world
-            .query_filtered::<Entity, With<PrimaryWindow>>()
+        // Size the HUD to the window; wait for it to exist.
+        let Some((w, h)) = world
+            .query_filtered::<&Window, With<PrimaryWindow>>()
             .iter(world)
             .next()
+            .map(|win| {
+                (
+                    win.physical_width().max(1) as usize,
+                    win.physical_height().max(1) as usize,
+                )
+            })
         else {
             return;
         };
 
-        let html = hud_document();
-        // Build while borrowing the winit window, then drop the borrow before
-        // inserting the resource.
-        let webview = {
-            let Some(winit_windows) = world.get_non_send::<WinitWindows>() else {
-                return; // WinitWindows not inserted yet — retry.
-            };
-            let Some(window) = winit_windows.get_window(entity) else {
-                return; // winit window not mapped yet — retry.
-            };
-            let size = window.inner_size();
-            info!(
-                "mounting native HUD webview overlay ({}x{})",
-                size.width, size.height
-            );
-            WebViewBuilder::new()
-                .with_transparent(true)
-                .with_bounds(Rect {
-                    position: LogicalPosition::new(0.0, 0.0).into(),
-                    size: LogicalSize::new(size.width as f64, size.height as f64).into(),
-                })
-                .with_html(html)
-                // `window` is a WindowWrapper; deref to the winit Window, which
-                // implements HasWindowHandle.
-                .build_as_child(&**window)
+        let fail = |world: &mut World, msg: &str| {
+            error!("Ultralight HUD init failed: {msg}");
+            world.insert_resource(HudInitFailed);
         };
-        match webview {
-            Ok(wv) => {
-                world.insert_non_send(HudWebView(wv));
-                info!("native HUD webview mounted");
-            }
-            Err(e) => {
-                error!("failed to build native HUD webview: {e}");
-                world.insert_resource(HudInitFailed);
-            }
+
+        // The Ultralight SDK is linked; grab the library handle for the builders
+        // and platform setup (fonts + filesystem for the SDK `resources/`).
+        let lib = Library::linked();
+        platform::enable_platform_fontloader(lib.clone());
+        platform::enable_platform_filesystem(lib.clone(), ".").ok();
+        platform::enable_default_logger(lib.clone(), "./ultralight.log").ok();
+
+        let Some(config) = Config::start().build(lib.clone()) else {
+            return fail(world, "Config::build");
+        };
+        let Ok(renderer) = Renderer::create(config) else {
+            return fail(world, "Renderer::create");
+        };
+        let Some(view_config) = ViewConfig::start()
+            .is_accelerated(false)
+            .is_transparent(true)
+            .build(lib.clone())
+        else {
+            return fail(world, "ViewConfig::build");
+        };
+        let Some(view) = renderer.create_view(w as u32, h as u32, &view_config, None) else {
+            return fail(world, "create_view");
+        };
+        if view.load_html(&hud_document()).is_err() {
+            return fail(world, "load_html");
         }
+
+        // Target texture, transparent to start, CPU-writable + rendered.
+        let image = Image::new_fill(
+            Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[0, 0, 0, 0],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        let handle = world.resource_mut::<Assets<Image>>().add(image);
+
+        // Fullscreen UI node drawing the HUD over the game.
+        world.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            ImageNode::new(handle.clone()),
+            HudCanvas,
+        ));
+
+        info!("Ultralight HUD initialised ({w}x{h})");
+        world.insert_non_send(HudUl {
+            renderer,
+            view,
+            image: handle,
+            width: w,
+            height: h,
+            last_seq: 0,
+        });
     }
 
-    /// Push the latest snapshot when it changes, via `__applyHud`.
-    pub fn push(
+    /// Each frame: push the latest snapshot to JS, render Ultralight, and copy the
+    /// pixel buffer into the Bevy texture (only when the page repainted).
+    pub fn render_hud(
+        hud: Option<NonSendMut<HudUl>>,
         snap: Res<HudSnapshot>,
-        webview: Option<NonSend<HudWebView>>,
-        mut last: Local<u64>,
+        mut images: ResMut<Assets<Image>>,
     ) {
-        let (Some(webview), true) = (webview, snap.seq != *last) else {
+        let Some(mut hud) = hud else {
             return;
         };
-        *last = snap.seq;
-        // JSON here is numbers + fixed keys only, but escape defensively for the
-        // single-quoted JS string literal.
-        let esc = snap.json.replace('\\', "\\\\").replace('\'', "\\'");
-        if let Err(e) = webview
-            .0
-            .evaluate_script(&format!("window.__applyHud('{esc}')"))
-        {
-            warn!("HUD evaluate_script failed: {e}");
-        }
-    }
 
-    /// Keep the overlay sized to the window.
-    pub fn resize(mut resized: MessageReader<WindowResized>, webview: Option<NonSend<HudWebView>>) {
-        let Some(webview) = webview else {
+        hud.renderer.update();
+
+        if snap.seq != hud.last_seq {
+            hud.last_seq = snap.seq;
+            let esc = snap.json.replace('\\', "\\\\").replace('\'', "\\'");
+            let _ = hud
+                .view
+                .evaluate_script(&format!("window.__applyHud('{esc}')"));
+        }
+
+        hud.renderer.render();
+
+        // `render()` consumes the view's paint flag, so gate the re-upload on the
+        // *surface* dirty bounds instead — non-empty means it repainted this frame.
+        let Some(mut surface) = hud.view.surface() else {
             return;
         };
-        for ev in resized.read() {
-            let _ = webview.0.set_bounds(Rect {
-                position: LogicalPosition::new(0.0, 0.0).into(),
-                size: LogicalSize::new(ev.width as f64, ev.height as f64).into(),
-            });
+        if surface.dirty_bounds().is_empty() {
+            return;
         }
+        let row_bytes = surface.row_bytes() as usize;
+        let (w, h) = (hud.width, hud.height);
+
+        if let Some(mut image) = images.get_mut(&hud.image) {
+            if let Some(dst) = image.data.as_mut() {
+                if let Some(pixels) = surface.lock_pixels() {
+                    // Ultralight surface is premultiplied BGRA; Bevy UI blends
+                    // straight alpha, so un-premultiply into RGBA as we copy.
+                    for y in 0..h {
+                        let src_row = y * row_bytes;
+                        let dst_row = y * w * 4;
+                        for x in 0..w {
+                            let si = src_row + x * 4;
+                            let di = dst_row + x * 4;
+                            let (b, g, r, a) =
+                                (pixels[si], pixels[si + 1], pixels[si + 2], pixels[si + 3]);
+                            if a == 0 {
+                                dst[di] = 0;
+                                dst[di + 1] = 0;
+                                dst[di + 2] = 0;
+                                dst[di + 3] = 0;
+                            } else {
+                                let un = |c: u8| ((c as u16 * 255) / a as u16).min(255) as u8;
+                                dst[di] = un(r);
+                                dst[di + 1] = un(g);
+                                dst[di + 2] = un(b);
+                                dst[di + 3] = a;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        surface.clear_dirty_bounds();
     }
 }
