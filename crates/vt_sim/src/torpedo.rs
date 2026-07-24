@@ -1,13 +1,14 @@
 //! Torpedoes — a reloading magazine of lock-and-release homing missiles.
 //!
-//! While the pilot holds aim, [`torpedo_aim_system`] locks the hostile nearest
-//! the aim cursor and accrues launch count (1 instantly, then one per
-//! `lock_interval`, capped by loaded tubes). On release it fires that many
-//! [`Torpedo`]s straight up/down off the plane at full speed; their slow
-//! rate-limited turn ([`home_velocity`], a 3D axis-angle rotation — no gravity)
-//! arcs them over onto the target, and [`torpedo_hit_system`] applies hull damage
-//! on a 3D contact. The decidable pieces ([`torpedo_locks`], [`home_velocity`])
-//! are unit-tested.
+//! While the pilot holds aim, [`torpedo_aim_system`] locks the hostiles nearest
+//! the aim cursor (1 instantly, then one per `lock_interval`, capped by loaded
+//! tubes) — a volley spreads across the distinct targets. On release the tubes
+//! launch one at a time ([`TORPEDO_LAUNCH_INTERVAL`] apart), each [`Torpedo`]
+//! rising straight up/down off the plane at full speed; their slow rate-limited
+//! turn ([`home_velocity`], a 3D axis-angle rotation — no gravity) arcs them onto
+//! the target they launched at. Each torpedo keeps that target and self-destructs
+//! if it dies; [`torpedo_hit_system`] applies hull damage on a 3D contact. The
+//! decidable pieces ([`torpedo_locks`], [`home_velocity`]) are unit-tested.
 
 use bevy_ecs::prelude::*;
 use bevy_math::{Quat, Vec2, Vec3};
@@ -16,9 +17,12 @@ use bevy_transform::components::Transform;
 
 use crate::combat::BRACE_DAMAGE_FACTOR;
 use crate::components::{
-    Brace, Collider, Faction, Hull, PilotIntent, Ship, Torpedo, TorpedoBay, Ttl,
+    Brace, Collider, Faction, Hull, PilotIntent, Ship, Torpedo, TorpedoBay, Ttl, TORPEDO_TUBES,
 };
 use crate::events::ShipHit;
+
+/// Seconds between successive tube launches once a volley is released.
+pub const TORPEDO_LAUNCH_INTERVAL: f32 = 0.5;
 
 /// Launch count after holding aim for `elapsed` seconds: one instant lock plus
 /// one per `interval`, capped at `cap`.
@@ -58,8 +62,9 @@ pub fn torpedo_reload_system(time: Res<Time>, mut bays: Query<&mut TorpedoBay>) 
     }
 }
 
-/// Bevy system: accrue locks while aiming; fire a volley on release. Each bay
-/// reads its own [`PilotIntent`], so this drives player and AI ships alike.
+/// Bevy system: accrue locks while aiming, then launch the volley one tube at a
+/// time on release. Each bay reads its own [`PilotIntent`], so this drives player
+/// and AI ships alike.
 pub fn torpedo_aim_system(
     time: Res<Time>,
     mut commands: Commands,
@@ -70,83 +75,102 @@ pub fn torpedo_aim_system(
     for (transform, faction, mut bay, intent) in &mut bays {
         let pos = transform.translation.truncate();
 
+        // --- Staggered launch: fire one queued tube every launch interval, from
+        // the ship's *current* position, so a volley trails out behind it. ---
+        if bay.launch_queue.iter().any(|t| t.is_some()) {
+            bay.launch_timer -= dt;
+            if bay.launch_timer <= 0.0 {
+                let (turn_rate, speed, damage, flip, fac) = (
+                    bay.turn_rate,
+                    bay.speed,
+                    bay.damage,
+                    bay.launch_flip,
+                    *faction,
+                );
+                if let Some(slot) = bay.launch_queue.iter_mut().find(|t| t.is_some()) {
+                    let target = slot.take().unwrap();
+                    let up = if flip { 1.0 } else { -1.0 };
+                    commands.spawn((
+                        Torpedo {
+                            faction: fac,
+                            target,
+                            turn_rate,
+                            speed,
+                            damage,
+                            radius: 12.0,
+                            vel: Vec3::new(0.0, 0.0, up * speed),
+                        },
+                        Transform::from_translation(pos.extend(0.0)),
+                        Ttl(8.0),
+                    ));
+                }
+                bay.launch_flip = !bay.launch_flip;
+                bay.launch_timer = TORPEDO_LAUNCH_INTERVAL;
+            }
+        }
+
         if intent.torpedo_hold {
             bay.hold_elapsed += dt;
-            // Lock the hostile nearest the aim cursor within range.
-            let mut best: Option<(Entity, f32)> = None;
+            // Hostiles within lock range of the cursor, nearest first.
+            let mut near: Vec<(f32, Entity)> = Vec::new();
             for (entity, t_tf, t_fac) in &targets {
                 if !faction.hostile_to(*t_fac) {
                     continue;
                 }
                 let d = t_tf.translation.truncate().distance(intent.aim_point);
-                if d <= bay.lock_radius && best.is_none_or(|(_, bd)| d < bd) {
-                    best = Some((entity, d));
+                if d <= bay.lock_radius {
+                    near.push((d, entity));
                 }
             }
-            bay.target = best.map(|(e, _)| e);
-            bay.locks = if bay.target.is_some() {
-                let cap = (bay.loaded.floor() as u32).min(bay.tubes_max);
-                torpedo_locks(bay.hold_elapsed, bay.lock_interval, cap)
-            } else {
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+            let cap = (bay.loaded.floor() as u32)
+                .min(bay.tubes_max)
+                .min(TORPEDO_TUBES as u32);
+            bay.locks = if near.is_empty() {
                 0
+            } else {
+                torpedo_locks(bay.hold_elapsed, bay.lock_interval, cap)
             };
+            // Spread the volley across the nearest distinct hostiles; extra tubes
+            // wrap round to double up on a lone target.
+            bay.targets = [None; TORPEDO_TUBES];
+            for i in 0..bay.locks as usize {
+                bay.targets[i] = Some(near[i % near.len()].1);
+            }
         } else {
-            // Release edge: fire the locked volley.
+            // Release edge: hand the locked targets to the staggered launcher.
             if bay.was_holding && bay.locks > 0 {
-                if let Some(target) = bay.target {
-                    fire_volley(&mut commands, pos, *faction, &bay, target);
-                    bay.loaded = (bay.loaded - bay.locks as f32).max(0.0);
-                }
+                bay.launch_queue = bay.targets;
+                bay.launch_timer = 0.0; // first tube launches next step
+                bay.loaded = (bay.loaded - bay.locks as f32).max(0.0);
             }
             bay.hold_elapsed = 0.0;
             bay.locks = 0;
-            bay.target = None;
+            bay.targets = [None; TORPEDO_TUBES];
         }
         bay.was_holding = intent.torpedo_hold;
     }
 }
 
-/// Spawn `bay.locks` torpedoes, launched straight up/down off the plane at full
-/// speed. Their slow turn then arcs them over onto the target.
-fn fire_volley(
-    commands: &mut Commands,
-    pos: Vec2,
-    faction: Faction,
-    bay: &TorpedoBay,
-    target: Entity,
-) {
-    for i in 0..bay.locks {
-        let up = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let vel = Vec3::new(0.0, 0.0, up * bay.speed);
-        commands.spawn((
-            Torpedo {
-                faction,
-                target,
-                turn_rate: bay.turn_rate,
-                speed: bay.speed,
-                damage: bay.damage,
-                radius: 12.0,
-                vel,
-            },
-            Transform::from_translation(pos.extend(0.0)),
-            Ttl(8.0),
-        ));
-    }
-}
-
-/// Bevy system: steer torpedoes in 3D toward their target and integrate.
+/// Bevy system: steer torpedoes in 3D toward their target and integrate. A
+/// torpedo keeps the target it launched at; if that ship is gone (destroyed or
+/// boarded) it self-destructs rather than flying on blindly.
 pub fn torpedo_homing_system(
     time: Res<Time>,
+    mut commands: Commands,
     targets: Query<&Transform, With<Ship>>,
-    mut torps: Query<(&mut Transform, &mut Torpedo), Without<Ship>>,
+    mut torps: Query<(Entity, &mut Transform, &mut Torpedo), Without<Ship>>,
 ) {
     let dt = time.delta_secs();
-    for (mut transform, mut torp) in &mut torps {
-        if let Ok(target_tf) = targets.get(torp.target) {
-            let to = target_tf.translation - transform.translation;
-            if to.length_squared() > 1e-3 {
-                torp.vel = home_velocity(torp.vel, to, torp.speed, torp.turn_rate, dt);
-            }
+    for (entity, mut transform, mut torp) in &mut torps {
+        let Ok(target_tf) = targets.get(torp.target) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let to = target_tf.translation - transform.translation;
+        if to.length_squared() > 1e-3 {
+            torp.vel = home_velocity(torp.vel, to, torp.speed, torp.turn_rate, dt);
         }
         transform.translation += torp.vel * dt;
     }
@@ -194,6 +218,88 @@ mod tests {
     #[test]
     fn locks_are_capped_by_loaded_tubes() {
         assert_eq!(torpedo_locks(100.0, 0.5, 4), 4);
+    }
+
+    #[test]
+    fn a_volley_spreads_across_distinct_targets() {
+        use crate::components::PilotIntent;
+        use bevy_ecs::prelude::*;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+
+        // A Corsair bay aiming at (100, 0).
+        let bay = world
+            .spawn((
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Faction::Corsairs,
+                TorpedoBay::default(),
+                PilotIntent {
+                    aim_point: Vec2::new(100.0, 0.0),
+                    torpedo_hold: true,
+                    ..Default::default()
+                },
+            ))
+            .id();
+        // Two House ships within lock range of the cursor.
+        let a = world
+            .spawn((Ship, Faction::Houses, Transform::from_xyz(100.0, 0.0, 0.0)))
+            .id();
+        let b = world
+            .spawn((Ship, Faction::Houses, Transform::from_xyz(120.0, 20.0, 0.0)))
+            .id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(torpedo_aim_system);
+        // 0.6s of holding → one instant lock plus one more (>= lock_interval).
+        world
+            .resource_mut::<Time<()>>()
+            .advance_by(std::time::Duration::from_secs_f32(0.6));
+        schedule.run(&mut world);
+
+        let bay = world.get::<TorpedoBay>(bay).unwrap();
+        assert_eq!(bay.locks, 2, "should have locked two tubes");
+        let locked: Vec<Entity> = bay.targets.iter().flatten().copied().collect();
+        assert!(
+            locked.contains(&a) && locked.contains(&b),
+            "volley should spread across both ships"
+        );
+    }
+
+    #[test]
+    fn a_torpedo_self_destructs_when_its_target_is_gone() {
+        use bevy_ecs::prelude::*;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        // A target id that no longer exists.
+        let ghost = world.spawn_empty().id();
+        world.despawn(ghost);
+
+        let torp = world
+            .spawn((
+                Torpedo {
+                    faction: Faction::Corsairs,
+                    target: ghost,
+                    turn_rate: 2.25,
+                    speed: 260.0,
+                    damage: 22.0,
+                    radius: 12.0,
+                    vel: Vec3::new(0.0, 0.0, 260.0),
+                },
+                Transform::default(),
+                Ttl(8.0),
+            ))
+            .id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(torpedo_homing_system);
+        schedule.run(&mut world);
+
+        assert!(
+            world.get_entity(torp).is_err(),
+            "torpedo should self-destruct when its target is gone"
+        );
     }
 
     #[test]

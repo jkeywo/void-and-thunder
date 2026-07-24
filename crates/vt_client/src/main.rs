@@ -115,9 +115,9 @@ const CAM_PITCH_ZOOM: f32 = 0.4;
 /// Near-top-down pitch used while aiming a torpedo volley or a microwarp — the
 /// camera rises directly over the ship and the aim becomes a top-down pointer.
 const CAM_TOPDOWN_PITCH: f32 = 1.5;
-/// How high the camera pulls out for the top-down (torpedo / microwarp) view, so
-/// the whole tactical area around the ship is visible from overhead.
-const CAM_TOPDOWN_DIST: f32 = 1500.0;
+/// How high the camera pulls out for the top-down (torpedo / microwarp) view —
+/// centred on the ship, tightened to 75% of the old reach.
+const CAM_TOPDOWN_DIST: f32 = 1125.0;
 /// Faster yaw/pitch ease while locked to an aim (broadside / microwarp).
 const CAM_AIM_LERP: f32 = 9.0;
 /// How quickly the eased camera distance catches its target.
@@ -854,8 +854,9 @@ fn player_input(
     };
 
     let aiming_broadside = aim_port || aim_starboard;
-    if !aiming_broadside {
-        // Each fresh broadside aim starts centred on the beam.
+    if !aiming_broadside && !fire_port && !fire_starboard {
+        // Each fresh aim starts centred on the beam — but hold the offset through
+        // the release frame so the shots fire along where you were pointing.
         broadside_aim.offset = 0.0;
     }
     let aim_point = if aiming_broadside {
@@ -902,17 +903,22 @@ fn player_input(
         aim_cursor.world
     };
 
-    // Only ever raise the request — the sim clears it once consumed, so a
-    // release is never lost between fixed steps. The aim direction is already
-    // within the arc, so the sim's clamp leaves it be.
-    let aim_dir = (aim_point - ship).normalize_or_zero();
+    // Fire along the *held* arc offset, not the live aim point. On the release
+    // frame the button is already up, so `aim_point` has snapped back to the idle
+    // pointer — firing off that made the shots miss. The offset still holds the
+    // last aimed value here (it's only reset once you're neither aiming nor
+    // firing), so the volley goes where you were pointing.
+    let broadside_fire_dir = |is_port: bool| -> Vec2 {
+        let beam = heading.0 + if is_port { FRAC_PI_2 } else { -FRAC_PI_2 };
+        Vec2::from_angle(beam - broadside_aim.offset * bank.arc)
+    };
     if fire_port {
         orders.port = true;
-        orders.aim = Some(aim_dir);
+        orders.aim = Some(broadside_fire_dir(true));
     }
     if fire_starboard {
         orders.starboard = true;
-        orders.aim = Some(aim_dir);
+        orders.aim = Some(broadside_fire_dir(false));
     }
     brace.active = bracing;
     boost.active = boosting;
@@ -1088,14 +1094,7 @@ fn camera_orbit(
     windows: Query<&Window>,
     gamepads: Query<&Gamepad>,
     player: Query<
-        (
-            &Transform,
-            &Heading,
-            &Velocity,
-            &Broadside,
-            &MicrowarpDrive,
-            &PilotIntent,
-        ),
+        (&Transform, &Heading, &Velocity, &Broadside, &PilotIntent),
         (With<Player>, Without<MainCamera>),
     >,
     mut camera: Query<&mut Transform, With<MainCamera>>,
@@ -1136,7 +1135,7 @@ fn camera_orbit(
         (rig.yaw, CAM_PITCH_BASE, CAM_DISTANCE);
     let mut desired_focus = rig.target;
     let mut locked = false;
-    if let Ok((transform, heading, velocity, bank, drive, pilot)) = player.single() {
+    if let Ok((transform, heading, velocity, bank, pilot)) = player.single() {
         let pos = transform.translation.truncate();
         desired_focus = pos;
         // While the AI flies, the camera stays a free-look — it doesn't snap to
@@ -1144,11 +1143,9 @@ fn camera_orbit(
         let manual = !player_ai.on;
         let aiming_broadside = aiming.port || aiming.starboard;
         if manual && (pilot.microwarp_hold || pilot.torpedo_hold) {
-            // Directly overhead and high up — a top-down pointer view. Microwarp
-            // frames the (range-clamped) destination; torpedoes stay on the ship.
-            if pilot.microwarp_hold {
-                desired_focus = clamp_to_range(pos, pilot.aim_point, drive.range);
-            }
+            // Directly overhead and high up — a top-down pointer view. Both the
+            // torpedo and microwarp modes stay centred on the ship (the aim
+            // reticle moves within the view, the camera doesn't chase it).
             target_yaw = heading.0;
             target_pitch = CAM_TOPDOWN_PITCH;
             target_dist = CAM_TOPDOWN_DIST;

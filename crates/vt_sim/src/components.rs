@@ -377,9 +377,14 @@ pub struct EmpBolt {
     pub damage_frac: f32,
 }
 
+/// Maximum torpedo tubes a bay can hold. Sizes the fixed lock/launch arrays so
+/// [`TorpedoBay`] can stay `Copy`.
+pub const TORPEDO_TUBES: usize = 6;
+
 /// A magazine of homing torpedoes. Tubes reload one at a time; while the pilot
-/// holds aim the bay locks targets (1 instantly, then one per `lock_interval`),
-/// and on release fires that many torpedoes at the locked target. Player-only.
+/// holds aim the bay locks the hostiles nearest the cursor (1 instantly, then one
+/// per `lock_interval`) — a volley spreads across the distinct targets. On
+/// release the tubes launch one at a time, each torpedo keeping its own target.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct TorpedoBay {
     /// Tubes available (magazine size).
@@ -392,7 +397,7 @@ pub struct TorpedoBay {
     pub lock_interval: f32,
     /// How near the aim cursor a hostile must be to be locked.
     pub lock_radius: f32,
-    /// Homing turn rate (radians/s) — kept low so the launch arc is visible.
+    /// Homing turn rate (radians/s) — kept moderate so the launch arc is visible.
     pub turn_rate: f32,
     /// Cruise speed (units/s); torpedoes launch and fly at this the whole way.
     pub speed: f32,
@@ -401,8 +406,17 @@ pub struct TorpedoBay {
     // --- transient aim state ---
     pub hold_elapsed: f32,
     pub was_holding: bool,
+    /// Locks accrued while aiming (also the number of live entries in `targets`).
     pub locks: u32,
-    pub target: Option<Entity>,
+    /// The hostiles locked while aiming — a volley spreads across these.
+    pub targets: [Option<Entity>; TORPEDO_TUBES],
+    // --- staggered launch queue ---
+    /// Targets still waiting to launch; one tube fires each launch interval.
+    pub launch_queue: [Option<Entity>; TORPEDO_TUBES],
+    /// Countdown to the next tube launch.
+    pub launch_timer: f32,
+    /// Alternates each launch so consecutive tubes fire up/down off the plane.
+    pub launch_flip: bool,
 }
 
 impl Default for TorpedoBay {
@@ -412,14 +426,17 @@ impl Default for TorpedoBay {
             loaded: 6.0,
             reload_per_tube: 1.5,
             lock_interval: 0.5,
-            lock_radius: 150.0,
-            turn_rate: 1.5,
+            lock_radius: 112.5, // 75% of the original 150
+            turn_rate: 2.25,    // +50% over the original 1.5
             speed: 260.0,
             damage: 22.0,
             hold_elapsed: 0.0,
             was_holding: false,
             locks: 0,
-            target: None,
+            targets: [None; TORPEDO_TUBES],
+            launch_queue: [None; TORPEDO_TUBES],
+            launch_timer: 0.0,
+            launch_flip: false,
         }
     }
 }
@@ -437,7 +454,7 @@ pub struct MicrowarpDrive {
 impl Default for MicrowarpDrive {
     fn default() -> Self {
         Self {
-            range: 900.0,
+            range: 675.0, // 75% of the original 900
             cooldown: 2.0,
             timer: 0.0,
             was_holding: false,
