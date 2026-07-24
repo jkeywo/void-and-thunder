@@ -29,6 +29,8 @@
 //! Gamepad: left stick throttle/steer, right stick aim/camera, LT/RT broadsides,
 //! LB torpedoes, RB microwarp, X EMP, A boost, Y brace, B board, Start restart.
 
+use bevy::asset::AssetPath;
+use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 use bevy::time::{Real, Virtual};
 use std::f32::consts::{PI, TAU};
@@ -37,10 +39,41 @@ use vt_sim::prelude::*;
 mod audio;
 use audio::SfxPlugin;
 
+mod render;
+use render::{space_skybox, SpaceSkyboxAsset, SpaceSkyboxPlugin};
+
+mod star;
+use star::{spawn_star, StarHaloMaterial, StarPlugin, StarSurfaceMaterial};
+
 // ---- Presentation constants ----
 
-/// Hull box: length along the bow (+X), width, height.
-const SHIP_SIZE: Vec3 = Vec3::new(44.0, 20.0, 13.0);
+// Placeholder ship hulls: CC0 low-poly models from Quaternius's Ultimate
+// Spaceships pack (see assets/CREDITS.md), converted to glb oriented bow-along-+X
+// and normalised to ~44-unit length. Each faction gets a distinct hull plus the
+// pack's matching colour variant, so faction identity comes from the textured
+// paint while `damage_tint` only multiplies in the hull/brace/EMP state.
+const SHIP_MODEL_PLAYER: &str = "models/executioner.glb";
+
+/// The glb + colour-variant texture placeholder for a faction's hull.
+fn ship_model(faction: &Faction) -> (&'static str, &'static str) {
+    match faction {
+        Faction::Corsairs => ("models/executioner.glb", "models/textures/executioner_green.png"),
+        Faction::Houses => ("models/imperial.glb", "models/textures/imperial_red.png"),
+        Faction::Janissariat => ("models/bob.glb", "models/textures/bob_orange.png"),
+        Faction::Guild => ("models/dispatcher.glb", "models/textures/dispatcher_blue.png"),
+        Faction::Freebooters => ("models/challenger.glb", "models/textures/challenger_purple.png"),
+    }
+}
+
+/// The asset path for a ship glb's single mesh primitive (`glb#Mesh0/Primitive0`),
+/// so the label convention lives in one place.
+fn ship_mesh_label(path: &str) -> AssetPath<'static> {
+    GltfAssetLabel::Primitive {
+        mesh: 0,
+        primitive: 0,
+    }
+    .from_asset(path.to_string())
+}
 /// How far behind the ship the camera sits.
 const CAM_DISTANCE: f32 = 430.0;
 /// How high above the plane the camera sits — low, so the view is a shallow
@@ -110,7 +143,6 @@ struct GameMeshes {
 #[derive(Resource)]
 struct GameMaterials {
     shot: Handle<StandardMaterial>,
-    star: Handle<StandardMaterial>,
     emp: Handle<StandardMaterial>,
     torpedo: Handle<StandardMaterial>,
     ghost: Handle<StandardMaterial>,
@@ -287,6 +319,8 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
         .add_plugins(SimPlugin)
         .add_plugins(SfxPlugin)
+        .add_plugins(SpaceSkyboxPlugin)
+        .add_plugins(StarPlugin)
         .init_state::<GameState>()
         .init_resource::<CameraRig>()
         .init_resource::<Aiming>()
@@ -371,12 +405,17 @@ fn spawn_player(commands: &mut Commands) {
 fn setup(
     mut commands: Commands,
     bounds: Res<SystemBounds>,
+    skybox: Res<SpaceSkyboxAsset>,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut star_surface_materials: ResMut<Assets<StarSurfaceMaterial>>,
+    mut star_halo_materials: ResMut<Assets<StarHaloMaterial>>,
 ) {
     // Shared meshes and materials.
     let game_meshes = GameMeshes {
-        ship: meshes.add(Cuboid::new(SHIP_SIZE.x, SHIP_SIZE.y, SHIP_SIZE.z)),
+        // The microwarp ghost borrows the player's hull (the corsair Executioner).
+        ship: asset_server.load(ship_mesh_label(SHIP_MODEL_PLAYER)),
         sphere: meshes.add(Sphere::new(1.0)),
         // Long in local +Z, so orienting +Z along velocity points it forward.
         torpedo: meshes.add(Cuboid::new(5.0, 5.0, 26.0)),
@@ -384,11 +423,6 @@ fn setup(
     let game_materials = GameMaterials {
         shot: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.9, 0.4),
-            unlit: true,
-            ..default()
-        }),
-        star: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.85, 0.88, 1.0),
             unlit: true,
             ..default()
         }),
@@ -425,6 +459,8 @@ fn setup(
             brightness: 320.0,
             ..default()
         },
+        // The starfield cubemap wrapping the scene (see `render.rs`).
+        space_skybox(&skybox),
         MainCamera,
     ));
 
@@ -437,15 +473,15 @@ fn setup(
         Transform::from_xyz(600.0, 400.0, 900.0).looking_at(Vec3::ZERO, Vec3::Z),
     ));
 
-    // The star at the heart of the system, plus a couple of stations, as spheres.
-    spawn_landmark(
+    // The star at the heart of the system: an animated surface + corona (see
+    // `star.rs`). The two stations stay simple spheres.
+    spawn_star(
         &mut commands,
-        &game_meshes,
-        &mut materials,
+        &mut meshes,
+        &mut star_surface_materials,
+        &mut star_halo_materials,
         Vec2::ZERO,
         120.0,
-        Color::srgb(1.0, 0.82, 0.42),
-        true,
     );
     spawn_landmark(
         &mut commands,
@@ -466,23 +502,7 @@ fn setup(
         false,
     );
 
-    // A distant starfield shell. In 2.5D the parallax comes free from the
-    // perspective camera, so these are just points far out in every direction.
-    let mut rng = Lcg::new(0x5EED_C0DE);
-    for _ in 0..400 {
-        // Random direction on a sphere.
-        let theta = rng.unit() * TAU;
-        let z = rng.unit() * 2.0 - 1.0;
-        let r = (1.0 - z * z).max(0.0).sqrt();
-        let dir = Vec3::new(r * theta.cos(), r * theta.sin(), z);
-        let dist = 3_000.0 + rng.unit() * 3_000.0;
-        let size = 10.0 + rng.unit() * 22.0;
-        commands.spawn((
-            Mesh3d(game_meshes.sphere.clone()),
-            MeshMaterial3d(game_materials.star.clone()),
-            Transform::from_translation(dir * dist).with_scale(Vec3::splat(size)),
-        ));
-    }
+    // The distant starfield is now the skybox cubemap (see `render.rs`).
 
     // Microwarp destination preview, hidden until the pilot aims a warp.
     commands.spawn((
@@ -627,22 +647,6 @@ fn spawn_landmark(
     ));
 }
 
-/// A tiny linear-congruential RNG — enough to scatter a starfield without
-/// pulling in a dependency.
-struct Lcg(u32);
-
-impl Lcg {
-    fn new(seed: u32) -> Self {
-        Self(seed | 1)
-    }
-
-    /// Next float in `0.0..1.0`.
-    fn unit(&mut self) -> f32 {
-        self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        (self.0 >> 8) as f32 / (1u32 << 24) as f32
-    }
-}
-
 /// Translate keyboard **and** gamepad into the player ship's helm, fire
 /// requests, brace and boarding intent.
 ///
@@ -779,22 +783,27 @@ fn player_input(
     }
 }
 
-/// Give every ship without one a hull box, coloured by faction.
+/// Give every ship without one its faction hull: a low-poly model textured with
+/// the faction's colour variant. `base_color` starts white so the painted hull
+/// shows through; `damage_tint` then multiplies it for hull/brace/EMP state.
 fn attach_ship_visuals(
     mut commands: Commands,
-    meshes: Res<GameMeshes>,
+    asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     ships: Query<(Entity, &Faction), (With<Ship>, Without<Mesh3d>)>,
 ) {
     for (entity, faction) in &ships {
+        let (mesh_path, tex_path) = ship_model(faction);
+        let mesh: Handle<Mesh> = asset_server.load(ship_mesh_label(mesh_path));
         let material = materials.add(StandardMaterial {
-            base_color: faction_color(faction),
+            base_color: Color::WHITE,
+            base_color_texture: Some(asset_server.load(tex_path.to_string())),
             perceptual_roughness: 0.7,
             ..default()
         });
         commands
             .entity(entity)
-            .insert((Mesh3d(meshes.ship.clone()), MeshMaterial3d(material)));
+            .insert((Mesh3d(mesh), MeshMaterial3d(material)));
     }
 }
 
@@ -855,14 +864,14 @@ fn orient_torpedoes(mut torps: Query<(&Torpedo, &mut Transform)>) {
     }
 }
 
-/// Tint each ship's material: darker as its hull wears down, grey when crippled
-/// (boardable), a blue cast while bracing, and a cyan EMP glow as it is disabled
-/// by EMP.
+/// Tint each ship's material — a multiplier over the faction-painted hull:
+/// darker as its hull wears down, grey when crippled (boardable), a blue cast
+/// while bracing, and a cyan EMP glow as it is disabled by EMP. Faction colour
+/// lives in the texture now, so this only carries the ship's *state*.
 fn damage_tint(
     mut materials: ResMut<Assets<StandardMaterial>>,
     ships: Query<
         (
-            &Faction,
             &Hull,
             &EmpDefense,
             &MeshMaterial3d<StandardMaterial>,
@@ -872,19 +881,19 @@ fn damage_tint(
         With<Ship>,
     >,
 ) {
-    for (faction, hull, emp, material, disabled, brace) in &ships {
+    for (hull, emp, material, disabled, brace) in &ships {
         let Some(mut material) = materials.get_mut(&material.0) else {
             continue;
         };
         if disabled.is_some() {
-            // Crippled hulk — drifting, boardable.
+            // Crippled hulk — drifting, boardable. Washes the hull toward grey.
             material.base_color = Color::srgb(0.42, 0.44, 0.5);
             continue;
         }
         let frac = (hull.current / hull.max).clamp(0.0, 1.0);
         let k = 0.4 + 0.6 * frac;
-        let base = faction_color(faction).to_srgba();
-        let (mut r, mut g, mut b) = (base.red * k, base.green * k, base.blue * k);
+        // Neutral multiplier at full hull (white), darkening with damage.
+        let (mut r, mut g, mut b) = (k, k, k);
         if brace.is_some_and(|brace| brace.active) {
             // Wash toward a cold brace-blue.
             r *= 0.5;
