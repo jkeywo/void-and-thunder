@@ -166,10 +166,6 @@ struct MainCamera;
 #[derive(Component)]
 struct HudText;
 
-/// Marker for the fill bar of the player's hull gauge.
-#[derive(Component)]
-struct HullBarFill;
-
 /// One of the pooled UI markers that point at off-screen enemies.
 #[derive(Component)]
 struct EdgeMarker;
@@ -291,10 +287,6 @@ impl Default for FreeLook {
 struct AimCursor {
     world: Vec2,
 }
-
-/// Marker for the boost-battery gauge fill.
-#[derive(Component)]
-struct BoostBarFill;
 
 /// Marker for the aim-battery gauge fill.
 #[derive(Component)]
@@ -441,8 +433,7 @@ fn main() {
                 draw_microwarp_range,
                 microwarp_ghost,
                 update_hud,
-                update_hull_bar,
-                update_battery_bars,
+                update_aim_bar,
                 update_offscreen_markers,
                 aim_time_dilation,
             ),
@@ -632,42 +623,11 @@ fn setup(
         HudText,
     ));
 
-    // Player hull gauge: a framed bar in the bottom-left whose fill tracks hull.
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(16.0),
-                left: Val::Px(16.0),
-                width: Val::Px(240.0),
-                height: Val::Px(18.0),
-                padding: UiRect::all(Val::Px(2.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.30, 0.34, 0.42)),
-        ))
-        .with_children(|frame| {
-            frame.spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    ..default()
-                },
-                BackgroundColor(Color::srgb(0.35, 0.85, 0.55)),
-                HullBarFill,
-            ));
-        });
-
-    // Boost battery (cyan) and aim battery (amber), stacked above the hull bar.
+    // Aim battery (amber): time-dilation charge gauge in the bottom-left.
+    // (Hull and boost gauges now live in the HTML HUD — see src/hud.rs.)
     spawn_bar(
         &mut commands,
-        40.0,
-        Color::srgb(0.35, 0.75, 0.95),
-        BoostBarFill,
-    );
-    spawn_bar(
-        &mut commands,
-        60.0,
+        16.0,
         Color::srgb(0.95, 0.8, 0.35),
         AimBarFill,
     );
@@ -1541,22 +1501,6 @@ fn update_effects(
     }
 }
 
-/// Resize the hull gauge to the player's remaining hull (and recolour it).
-fn update_hull_bar(
-    player: Query<&Hull, With<Player>>,
-    mut fill: Query<(&mut Node, &mut BackgroundColor), With<HullBarFill>>,
-) {
-    let frac = player
-        .single()
-        .map(|hull| (hull.current / hull.max).clamp(0.0, 1.0))
-        .unwrap_or(0.0);
-    for (mut node, mut color) in &mut fill {
-        node.width = Val::Percent(frac * 100.0);
-        // Green when healthy, sliding to red as it drops.
-        *color = BackgroundColor(Color::srgb(0.9 - 0.55 * frac, 0.3 + 0.55 * frac, 0.35));
-    }
-}
-
 /// Point a pooled marker at each off-screen enemy, pinned to the window edge in
 /// the enemy's on-screen direction. Uses the camera's own basis, so it stays
 /// correct as the camera yaws.
@@ -1672,20 +1616,12 @@ fn aim_time_dilation(
     virt.set_relative_speed(battery.dilation.max(0.02));
 }
 
-/// Resize the boost and aim battery gauges.
-fn update_battery_bars(
+/// Resize the aim-battery (time-dilation charge) gauge. Hull and boost gauges
+/// moved to the HTML HUD (see src/hud.rs).
+fn update_aim_bar(
     battery: Res<AimBattery>,
-    player: Query<&BoostDrive, With<Player>>,
-    mut boost_fill: Query<&mut Node, (With<BoostBarFill>, Without<AimBarFill>)>,
-    mut aim_fill: Query<&mut Node, (With<AimBarFill>, Without<BoostBarFill>)>,
+    mut aim_fill: Query<&mut Node, With<AimBarFill>>,
 ) {
-    let boost_frac = player
-        .single()
-        .map(|b| (b.battery / b.battery_max).clamp(0.0, 1.0))
-        .unwrap_or(0.0);
-    if let Ok(mut node) = boost_fill.single_mut() {
-        node.width = Val::Percent(boost_frac * 100.0);
-    }
     let aim_frac = (battery.charge / battery.max).clamp(0.0, 1.0);
     if let Ok(mut node) = aim_fill.single_mut() {
         node.width = Val::Percent(aim_frac * 100.0);
