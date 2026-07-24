@@ -246,11 +246,17 @@ pub fn decide_abilities(
         }
     }
 
-    // No hostile near -> go loot the nearest crippled ship.
+    // No hostile near -> go loot the nearest crippled ship. Once alongside, cut
+    // the throttle and hold station so the boarding dwell can build.
     if let Some(prize) = nearest(boardable) {
         out.aim_point = prize;
         let dist = prize.distance(ship);
-        out.helm = face(ship, heading, prize, (dist / 300.0).clamp(0.15, 0.6));
+        let throttle = if dist <= board_range {
+            0.0
+        } else {
+            (dist / 300.0).clamp(0.15, 0.6)
+        };
+        out.helm = face(ship, heading, prize, throttle);
         if dist <= board_range {
             out.board = true;
         }

@@ -13,7 +13,7 @@ use crate::combat::{collision_system, destruction_system, projectile_system, wea
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
 use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
-use crate::piracy::{boarding_system, cripple_system, BoardIntent, Plunder};
+use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plunder};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
 use crate::torpedo::{
@@ -54,6 +54,7 @@ impl Plugin for SimPlugin {
             .init_resource::<Encounter>()
             .init_resource::<Plunder>()
             .init_resource::<BoardIntent>()
+            .init_resource::<Boarding>()
             .add_message::<ShipHit>()
             .add_message::<ShipDestroyed>()
             .add_message::<EmpImpact>()

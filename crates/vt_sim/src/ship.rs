@@ -13,6 +13,10 @@ use bevy_transform::components::Transform;
 
 use crate::components::{Heading, Helm, ShipStats, SpeedScale, Velocity};
 
+/// Fraction of forward thrust available in reverse — backing sails only push a
+/// quarter as hard, so reverse tops out at ~25% of forward speed.
+pub const REVERSE_THROTTLE: f32 = 0.25;
+
 /// Advance one ship's heading and velocity by `dt` seconds.
 ///
 /// Returns the new `(heading, velocity)`. Pure and deterministic — the same
@@ -26,13 +30,19 @@ pub fn helm_step(
 ) -> (f32, Vec2) {
     let turn = helm.turn.clamp(-1.0, 1.0);
     let throttle = helm.throttle.clamp(-1.0, 1.0);
+    // Reverse is weak — a quarter of forward thrust.
+    let drive = if throttle < 0.0 {
+        throttle * REVERSE_THROTTLE
+    } else {
+        throttle
+    };
 
     // Rotate the hull.
     let new_heading = heading + turn * stats.turn_rate * dt;
 
     // Thrust along the (new) bow direction, then apply drag, then clamp.
     let forward = Vec2::from_angle(new_heading);
-    let mut vel = velocity + forward * (throttle * stats.thrust * dt);
+    let mut vel = velocity + forward * (drive * stats.thrust * dt);
     vel *= 1.0 - (stats.linear_drag * dt).clamp(0.0, 1.0);
     if vel.length() > stats.max_speed {
         vel = vel.normalize_or_zero() * stats.max_speed;
@@ -104,6 +114,26 @@ mod tests {
         );
         assert!((v.x - 100.0).abs() < 1e-4, "vx was {}", v.x);
         assert!(v.y.abs() < 1e-4, "vy was {}", v.y);
+    }
+
+    #[test]
+    fn reverse_is_a_quarter_of_forward_thrust() {
+        // Facing +X, one second of full reverse => 25% of the forward impulse.
+        let (_h, v) = helm_step(
+            0.0,
+            Vec2::ZERO,
+            &sloop(),
+            &Helm {
+                throttle: -1.0,
+                turn: 0.0,
+            },
+            1.0,
+        );
+        assert!(
+            (v.x + 25.0).abs() < 1e-4,
+            "reverse vx should be -25 (25% of 100), was {}",
+            v.x
+        );
     }
 
     #[test]

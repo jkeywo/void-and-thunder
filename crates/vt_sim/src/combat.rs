@@ -114,43 +114,51 @@ pub fn weapons_system(
 ) {
     let dt = time.delta_secs();
     for (transform, heading, velocity, faction, mut bank, mut orders) in &mut ships {
-        if bank.timer > 0.0 {
-            bank.timer = (bank.timer - dt).max(0.0);
-        }
         let pos = transform.translation.truncate();
+        // A config snapshot for the volley geometry, so we can freely mutate the
+        // two banks' reload/charge state below without aliasing.
+        let cfg = *bank;
 
-        // Resolve an in-progress charge first.
-        if bank.charging > 0.0 {
-            bank.charging = (bank.charging - dt).max(0.0);
-            if bank.charging <= 0.0 {
-                let dir = bank.charge_dir;
-                fire_broadside(&mut commands, pos, velocity.0, dir, &bank, *faction);
-                bank.timer = bank.cooldown;
-            }
-            orders.port = false;
-            orders.starboard = false;
-            continue;
-        }
+        // Tick each side's reload independently.
+        bank.port.timer = (bank.port.timer - dt).max(0.0);
+        bank.starboard.timer = (bank.starboard.timer - dt).max(0.0);
 
-        // Consume the request (a shot asked for mid-reload is dropped, not queued).
+        // Consume this step's request (a shot asked for mid-reload is dropped,
+        // not queued). Both sides fire this step if both are ready and requested.
         let (want_port, want_starboard) = (orders.port, orders.starboard);
         let aim = orders.aim;
         orders.port = false;
         orders.starboard = false;
         orders.aim = None;
 
-        if bank.timer > 0.0 || (!want_port && !want_starboard) {
-            continue;
-        }
-        // One side per volley; prefer port if both were requested.
-        let is_port = want_port;
-        let dir = broadside_direction(heading.0, is_port, aim, bank.arc);
-        if bank.charge_time > 0.0 {
-            bank.charging = bank.charge_time;
-            bank.charge_dir = dir;
-        } else {
-            fire_broadside(&mut commands, pos, velocity.0, dir, &bank, *faction);
-            bank.timer = bank.cooldown;
+        for (port, want) in [(true, want_port), (false, want_starboard)] {
+            // Resolve an in-progress charge on this side first.
+            if bank.side(port).charging > 0.0 {
+                let done = {
+                    let s = bank.side_mut(port);
+                    s.charging = (s.charging - dt).max(0.0);
+                    s.charging <= 0.0
+                };
+                if done {
+                    let dir = bank.side(port).charge_dir;
+                    fire_broadside(&mut commands, pos, velocity.0, dir, &cfg, *faction);
+                    bank.side_mut(port).timer = cfg.cooldown;
+                }
+                continue; // a charging side ignores fresh requests
+            }
+
+            if !want || bank.side(port).timer > 0.0 {
+                continue;
+            }
+            let dir = broadside_direction(heading.0, port, aim, cfg.arc);
+            if cfg.charge_time > 0.0 {
+                let s = bank.side_mut(port);
+                s.charging = cfg.charge_time;
+                s.charge_dir = dir;
+            } else {
+                fire_broadside(&mut commands, pos, velocity.0, dir, &cfg, *faction);
+                bank.side_mut(port).timer = cfg.cooldown;
+            }
         }
     }
 }

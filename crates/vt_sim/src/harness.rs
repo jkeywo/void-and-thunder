@@ -16,7 +16,7 @@ use crate::combat::{collision_system, destruction_system, projectile_system, wea
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
 use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
-use crate::piracy::{boarding_system, cripple_system, BoardIntent, Plunder};
+use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plunder};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
 use crate::torpedo::{
@@ -46,6 +46,7 @@ impl Harness {
         world.init_resource::<Encounter>();
         world.init_resource::<Plunder>();
         world.init_resource::<BoardIntent>();
+        world.init_resource::<Boarding>();
         world.init_resource::<Messages<ShipHit>>();
         world.init_resource::<Messages<ShipDestroyed>>();
         world.init_resource::<Messages<EmpImpact>>();

@@ -129,15 +129,27 @@ pub struct FireOrders {
     pub aim: Option<Vec2>,
 }
 
-/// A bank of side-mounted railguns — the core aimed weapon. The player may steer
-/// the volley within `arc` of the beam; an enemy telegraphs a `charge_time`
-/// wind-up before firing.
+/// Per-side reload + telegraph state for one broadside bank. Port and starboard
+/// each carry their own, so the two sides reload and fire independently.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BankState {
+    /// Remaining reload until this side can fire again (0 = ready).
+    pub timer: f32,
+    /// Remaining wind-up if this side is currently charging (0 = idle). Read by
+    /// the client to draw the enemy telegraph.
+    pub charging: f32,
+    /// World direction captured when this side's charge began.
+    pub charge_dir: Vec2,
+}
+
+/// A pair of side-mounted railgun banks — the core aimed weapon. The player may
+/// steer each volley within `arc` of the beam; an enemy telegraphs a
+/// `charge_time` wind-up before firing. The two sides ([`BankState`]) reload on
+/// independent timers.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Broadside {
-    /// Seconds between volleys.
+    /// Seconds between volleys (per side).
     pub cooldown: f32,
-    /// Remaining time until this bank can fire again.
-    pub timer: f32,
     /// Damage per shot.
     pub damage: f32,
     /// Muzzle speed of each shot (units/s), added to the ship's velocity.
@@ -149,26 +161,50 @@ pub struct Broadside {
     /// Wind-up before firing (seconds). 0 for the player; ~0.5 for a telegraphed
     /// enemy so the shot is dodgeable.
     pub charge_time: f32,
-    /// Remaining wind-up if currently charging (0 = idle). Read by the client to
-    /// draw the telegraph.
-    pub charging: f32,
-    /// World direction captured when the charge began.
-    pub charge_dir: Vec2,
+    /// Port bank (the ship's left, +90° from the bow).
+    pub port: BankState,
+    /// Starboard bank (the ship's right, -90°).
+    pub starboard: BankState,
 }
 
 impl Default for Broadside {
     fn default() -> Self {
         Self {
             cooldown: 1.5,
-            timer: 0.0,
             damage: 12.0,
             muzzle_speed: 260.0,
             guns: 3,
             arc: 0.6, // ~34°
             charge_time: 0.0,
-            charging: 0.0,
-            charge_dir: Vec2::X,
+            port: BankState::default(),
+            starboard: BankState::default(),
         }
+    }
+}
+
+impl Broadside {
+    /// The reload/charge state for one side.
+    pub fn side(&self, port: bool) -> &BankState {
+        if port {
+            &self.port
+        } else {
+            &self.starboard
+        }
+    }
+
+    /// Mutable reload/charge state for one side.
+    pub fn side_mut(&mut self, port: bool) -> &mut BankState {
+        if port {
+            &mut self.port
+        } else {
+            &mut self.starboard
+        }
+    }
+
+    /// True when a side has reloaded and isn't mid wind-up — i.e. it can fire now.
+    pub fn ready(&self, port: bool) -> bool {
+        let s = self.side(port);
+        s.timer <= 0.0 && s.charging <= 0.0
     }
 }
 

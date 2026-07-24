@@ -15,25 +15,34 @@
 //! or microwarp dilates time (bullet-time) from a rechargeable aim battery.
 //!   W / S      — throttle forward / reverse
 //!   A / D      — turn to port / starboard
-//!   LMB / RMB  — hold to aim the port / starboard broadside (within an arc),
-//!                release to fire; the camera snaps to the aim direction
+//!   LMB / RMB  — hold to aim the port / starboard broadside; the horizontal aim
+//!                axis sweeps the volley across the arc and the camera yaw with
+//!                it. Release to fire.
 //!   Q          — EMP: hold to auto-track and drain a target's drive
-//!   Left Ctrl  — torpedoes: hold to lock (1 + 1 per 0.5s), release to volley
-//!   Left Shift — microwarp: hold to place a teleport point, release to warp
+//!   Left Ctrl  — torpedoes: hold to lock (1 + 1 per 0.5s), release to volley.
+//!                The camera lifts directly overhead for a top-down aim.
+//!   Left Shift — microwarp: hold to place a teleport point (top-down), release
+//!                to warp
 //!   Space      — boost (rechargeable battery)
 //!   C          — brace (cut incoming damage)
-//!   B          — board a crippled enemy alongside (loot it)
+//!   Board      — hold position within range of a crippled hulk for 3s to loot it
+//!                (a ring fills to show progress; no key needed)
 //!   T          — toggle AI pilot (the AI flies the ship; you keep the camera)
+//!   P / Esc    — pause / resume
 //!   R          — restart after a run ends
 //!
-//! Gamepad: left stick throttle/steer, right stick aim/camera, LT/RT broadsides,
-//! LB torpedoes, RB microwarp, X EMP, A boost, Y brace, B board, Start restart.
+//! Broadside banks reload independently (port/starboard) and their aim beams glow
+//! amber when loaded, dim red while reloading. Reverse is ~25% of forward speed.
+//!
+//! Gamepad: left stick throttle/steer, right stick aim/camera (rate-based, like a
+//! mouse, outside broadside aiming), LT/RT broadsides, LB torpedoes, RB microwarp,
+//! X EMP, A boost, Y brace, Start pause (restart on the game-over screen).
 
 use bevy::asset::AssetPath;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 use bevy::time::{Real, Virtual};
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use vt_sim::prelude::*;
 
 mod audio;
@@ -57,11 +66,20 @@ const SHIP_MODEL_PLAYER: &str = "models/executioner.glb";
 /// The glb + colour-variant texture placeholder for a faction's hull.
 fn ship_model(faction: &Faction) -> (&'static str, &'static str) {
     match faction {
-        Faction::Corsairs => ("models/executioner.glb", "models/textures/executioner_green.png"),
+        Faction::Corsairs => (
+            "models/executioner.glb",
+            "models/textures/executioner_green.png",
+        ),
         Faction::Houses => ("models/imperial.glb", "models/textures/imperial_red.png"),
         Faction::Janissariat => ("models/bob.glb", "models/textures/bob_orange.png"),
-        Faction::Guild => ("models/dispatcher.glb", "models/textures/dispatcher_blue.png"),
-        Faction::Freebooters => ("models/challenger.glb", "models/textures/challenger_purple.png"),
+        Faction::Guild => (
+            "models/dispatcher.glb",
+            "models/textures/dispatcher_blue.png",
+        ),
+        Faction::Freebooters => (
+            "models/challenger.glb",
+            "models/textures/challenger_purple.png",
+        ),
     }
 }
 
@@ -90,10 +108,34 @@ const CAM_PITCH_MAX: f32 = 1.2;
 const CAM_AIM_PITCH: f32 = 0.72;
 /// How much the camera pulls in toward the ship at maximum pitch (0 = none).
 const CAM_PITCH_ZOOM: f32 = 0.4;
-/// Near-top-down pitch used while placing a microwarp.
-const CAM_MICROWARP_PITCH: f32 = 1.5;
+/// Near-top-down pitch used while aiming a torpedo volley or a microwarp — the
+/// camera rises directly over the ship and the aim becomes a top-down pointer.
+const CAM_TOPDOWN_PITCH: f32 = 1.5;
+/// How high the camera pulls out for the top-down (torpedo / microwarp) view, so
+/// the whole tactical area around the ship is visible from overhead.
+const CAM_TOPDOWN_DIST: f32 = 1500.0;
 /// Faster yaw/pitch ease while locked to an aim (broadside / microwarp).
 const CAM_AIM_LERP: f32 = 9.0;
+/// How quickly the eased camera distance catches its target.
+const CAM_DIST_LERP: f32 = 6.0;
+/// Gamepad free-look rate (radians/sec of yaw, units/sec of pitch, at full
+/// stick). The right stick moves the *view* like a mouse — deflection is a rate,
+/// not an absolute offset — while not aiming a broadside.
+const LOOK_YAW_RATE: f32 = 2.4;
+const LOOK_PITCH_RATE: f32 = 1.8;
+/// How far the gamepad free-look yaw may swing from dead-astern (radians) — a
+/// full half-turn, so the view can be swung all the way to the ship's front.
+const LOOK_YAW_LIMIT: f32 = PI;
+/// Seconds of no look input before the camera eases back to its default trailing
+/// position (behind the ship when moving forward, ahead of it when reversing).
+const RECENTER_DELAY: f32 = 3.0;
+/// How gently the idle camera eases back to its default position.
+const RECENTER_LERP: f32 = 1.6;
+/// Gamepad aim-pointer speed (world units/sec at full stick) for the top-down
+/// torpedo / microwarp pointer and the EMP aim — rate-based, like a mouse.
+const AIM_CURSOR_RATE: f32 = 780.0;
+/// How far from the ship the gamepad aim pointer may stray.
+const AIM_CURSOR_MAX: f32 = 1300.0;
 /// Spacing between grid lines on the plane.
 const GRID_SPACING: f32 = 200.0;
 /// Grid cells each way.
@@ -206,6 +248,47 @@ struct PlayerAi {
     on: bool,
 }
 
+/// Whether the game is paused. Pausing freezes `Time<Virtual>` (and with it the
+/// whole `FixedUpdate` simulation and every virtual-time visual); real-time
+/// input still flows so the pause can be lifted.
+#[derive(Resource, Default)]
+struct Paused(bool);
+
+/// Persistent free-look offset for gamepad camera control. The right stick nudges
+/// these like a mouse (rate, not absolute); the camera yaw sits at
+/// `heading + yaw_offset` and pitch at `pitch`. Mouse look stays absolute and
+/// ignores this.
+#[derive(Resource)]
+struct FreeLook {
+    yaw_offset: f32,
+    pitch: f32,
+    /// Seconds since the player last moved the look control. After
+    /// [`RECENTER_DELAY`] the view eases back to its default trailing position.
+    idle: f32,
+    /// Last cursor position, to detect mouse look movement.
+    last_cursor: Vec2,
+}
+
+impl Default for FreeLook {
+    fn default() -> Self {
+        Self {
+            yaw_offset: 0.0,
+            pitch: CAM_PITCH_BASE,
+            idle: 0.0,
+            last_cursor: Vec2::ZERO,
+        }
+    }
+}
+
+/// The world point the aim reticle sits on for the pointer-aimed kit (EMP,
+/// torpedo, microwarp). The mouse sets it absolutely (plane pick); the gamepad
+/// nudges it at a rate (like a mouse). It rests just ahead of the bow whenever
+/// nothing is being aimed, so each aim starts from a sensible spot.
+#[derive(Resource, Default)]
+struct AimCursor {
+    world: Vec2,
+}
+
 /// Marker for the boost-battery gauge fill.
 #[derive(Component)]
 struct BoostBarFill;
@@ -222,6 +305,9 @@ struct CameraRig {
     target: Vec2,
     yaw: f32,
     pitch: f32,
+    /// Eased eye distance from the focus, so the top-down modes can pull the
+    /// camera smoothly up and out.
+    dist: f32,
     trauma: f32,
     seed: u32,
 }
@@ -232,6 +318,7 @@ impl Default for CameraRig {
             target: Vec2::ZERO,
             yaw: 0.0,
             pitch: CAM_PITCH_BASE,
+            dist: CAM_DISTANCE,
             trauma: 0.0,
             seed: 0,
         }
@@ -327,6 +414,9 @@ fn main() {
         .init_resource::<AimBattery>()
         .init_resource::<InputMethod>()
         .init_resource::<PlayerAi>()
+        .init_resource::<Paused>()
+        .init_resource::<FreeLook>()
+        .init_resource::<AimCursor>()
         .add_systems(Startup, setup)
         // Presentation runs in every state.
         .add_systems(
@@ -343,6 +433,7 @@ fn main() {
                 draw_aim_beams,
                 draw_charge_telegraph,
                 draw_reticle,
+                draw_boarding,
                 draw_microwarp_range,
                 microwarp_ghost,
                 update_hud,
@@ -366,7 +457,8 @@ fn main() {
         // Playing: take input and watch for win/lose.
         .add_systems(
             Update,
-            (player_input, watch_outcome, toggle_player_ai).run_if(in_state(GameState::Playing)),
+            (player_input, watch_outcome, toggle_player_ai, toggle_pause)
+                .run_if(in_state(GameState::Playing)),
         )
         .add_systems(Update, track_input_method)
         // Game over: wait for a restart.
@@ -660,9 +752,13 @@ fn player_input(
     gamepads: Query<&Gamepad>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    real: Res<Time<Real>>,
+    method: Res<InputMethod>,
+    paused: Res<Paused>,
     player_ai: Res<PlayerAi>,
     mut board: ResMut<BoardIntent>,
     mut aiming: ResMut<Aiming>,
+    mut aim_cursor: ResMut<AimCursor>,
     mut player: Query<
         (
             &mut Helm,
@@ -672,16 +768,17 @@ fn player_input(
             &mut PilotIntent,
             &Transform,
             &Heading,
+            &Broadside,
         ),
         With<Player>,
     >,
 ) {
-    // When the AI is flying, the sim writes the player ship's intent — the client
-    // stays hands-off (the camera is handled separately).
-    if player_ai.on {
+    // Paused, or the AI is flying — the client stays hands-off (the camera is
+    // handled separately). When the AI flies, the sim writes the ship's intent.
+    if paused.0 || player_ai.on {
         return;
     }
-    let Ok((mut helm, mut orders, mut brace, mut boost, mut pilot, transform, heading)) =
+    let Ok((mut helm, mut orders, mut brace, mut boost, mut pilot, transform, heading, bank)) =
         player.single_mut()
     else {
         return;
@@ -716,30 +813,9 @@ fn player_input(
     let mut boosting = keys.pressed(KeyCode::Space);
     let mut board_now = keys.just_pressed(KeyCode::KeyB);
 
-    // Aim cursor: mouse → plane (desktop), overridden by right stick when deflected.
-    let ship = transform.translation.truncate();
-    let mut aim_point = ship + heading.forward() * 320.0;
-    if let (Ok((camera, cam_gt)), Ok(window)) = (camera_q.single(), windows.single()) {
-        if let Some(cursor) = window.cursor_position() {
-            if let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) {
-                if let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Dir3::Z)) {
-                    aim_point = ray.get_point(dist).truncate();
-                }
-            }
-        }
-        if let Some(pad) = gamepads.iter().next() {
-            let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
-            let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
-            if sx != 0.0 || sy != 0.0 {
-                let right = cam_gt.right().truncate().normalize_or_zero();
-                let up = cam_gt.up().truncate().normalize_or_zero();
-                aim_point = ship + (right * sx + up * sy) * 520.0;
-            }
-        }
-    }
-
     // --- Gamepad (first connected pad): the final scheme ---
-    if let Some(pad) = gamepads.iter().next() {
+    let pad = gamepads.iter().next();
+    if let Some(pad) = pad {
         throttle += deadzone(pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0));
         // Stick right (+X) steers starboard (negative turn).
         turn -= deadzone(pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0));
@@ -760,9 +836,79 @@ fn player_input(
     helm.turn = turn.clamp(-1.0, 1.0);
     aiming.port = aim_port;
     aiming.starboard = aim_starboard;
+
+    // --- Aim ---
+    let ship = transform.translation.truncate();
+    let dt = real.delta_secs();
+    let use_pad = *method == InputMethod::Gamepad;
+    let right_stick = |axis: GamepadAxis| pad.map_or(0.0, |p| deadzone(p.get(axis).unwrap_or(0.0)));
+    // The mouse's plane pick, or `default` when the ray misses / off-screen.
+    let mouse_plane = |default: Vec2| -> Vec2 {
+        if let (Ok((camera, cam_gt)), Ok(window)) = (camera_q.single(), windows.single()) {
+            if let Some(cursor) = window.cursor_position() {
+                if let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) {
+                    if let Some(d) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Dir3::Z))
+                    {
+                        return ray.get_point(d).truncate();
+                    }
+                }
+            }
+        }
+        default
+    };
+
+    let aiming_broadside = aim_port || aim_starboard;
+    let aim_point = if aiming_broadside {
+        // The yaw axis drives the aim *directly* across the bank's arc — full
+        // deflection reaches the arc's edge, centre points straight out the beam.
+        // (The camera yaw follows this, so you steer the whole view.) Prefer port
+        // when both sides are held, matching the sim's volley choice.
+        let axis = if use_pad {
+            right_stick(GamepadAxis::RightStickX)
+        } else if let Ok(window) = windows.single() {
+            window
+                .cursor_position()
+                .map(|c| (c.x / window.width().max(1.0) * 2.0 - 1.0).clamp(-1.0, 1.0))
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let is_port = aim_port;
+        let beam = heading.0 + if is_port { PI * 0.5 } else { -PI * 0.5 };
+        // Right (+axis) sweeps the aim clockwise (toward the bow on starboard,
+        // toward the stern on port) — a consistent "push right, swing right".
+        let angle = beam - axis * bank.arc;
+        ship + Vec2::from_angle(angle) * 320.0
+    } else if emp_fire || torpedo_hold || microwarp_hold {
+        // Pointer aim for the kit. Mouse sets it absolutely (plane pick); the
+        // gamepad nudges the persistent cursor at a rate, like a mouse.
+        if use_pad {
+            if let Ok((_, cam_gt)) = camera_q.single() {
+                let right = cam_gt.right().truncate().normalize_or_zero();
+                let up = cam_gt.up().truncate().normalize_or_zero();
+                let sx = right_stick(GamepadAxis::RightStickX);
+                let sy = right_stick(GamepadAxis::RightStickY);
+                aim_cursor.world += (right * sx + up * sy) * AIM_CURSOR_RATE * dt;
+            }
+            let off = aim_cursor.world - ship;
+            if off.length() > AIM_CURSOR_MAX {
+                aim_cursor.world = ship + off.normalize_or_zero() * AIM_CURSOR_MAX;
+            }
+        } else {
+            aim_cursor.world = mouse_plane(ship + heading.forward() * 320.0);
+        }
+        aim_cursor.world
+    } else {
+        // Idle: rest the pointer just ahead of the bow (the mouse still tracks the
+        // plane on desktop so the reticle sits under the cursor).
+        let rest = ship + heading.forward() * 320.0;
+        aim_cursor.world = if use_pad { rest } else { mouse_plane(rest) };
+        aim_cursor.world
+    };
+
     // Only ever raise the request — the sim clears it once consumed, so a
-    // release is never lost between fixed steps. The aim direction (toward the
-    // cursor) is clamped to the bank's arc by the sim.
+    // release is never lost between fixed steps. The aim direction is already
+    // within the arc, so the sim's clamp leaves it be.
     let aim_dir = (aim_point - ship).normalize_or_zero();
     if fire_port {
         orders.port = true;
@@ -936,8 +1082,11 @@ fn spawn_emp_effects(
 /// looking down at it and near-horizontal. Screen shake is added to the eye.
 #[allow(clippy::too_many_arguments)]
 fn camera_orbit(
-    time: Res<Time>,
+    real: Res<Time<Real>>,
+    paused: Res<Paused>,
+    method: Res<InputMethod>,
     mut rig: ResMut<CameraRig>,
+    mut freelook: ResMut<FreeLook>,
     aiming: Res<Aiming>,
     player_ai: Res<PlayerAi>,
     windows: Query<&Window>,
@@ -946,6 +1095,7 @@ fn camera_orbit(
         (
             &Transform,
             &Heading,
+            &Velocity,
             &Broadside,
             &MicrowarpDrive,
             &PilotIntent,
@@ -954,58 +1104,106 @@ fn camera_orbit(
     >,
     mut camera: Query<&mut Transform, With<MainCamera>>,
 ) {
-    let dt = time.delta_secs();
+    // Camera runs on real time so it stays responsive during bullet-time; a pause
+    // freezes it by zeroing the step.
+    let dt = if paused.0 { 0.0 } else { real.delta_secs() };
+    let use_pad = *method == InputMethod::Gamepad;
 
-    // Free-look offsets from the mouse (offset from centre) and right stick.
+    // Mouse free-look is absolute (cursor offset from centre); gamepad free-look
+    // is rate-based (the stick nudges a persistent offset, like a mouse) and is
+    // integrated only in the free-look branch below, so it never drifts while the
+    // same stick is steering an aim.
     let (mut look_x, mut look_y) = (0.0f32, 0.0f32);
+    let mut look_active = false;
     if let Ok(window) = windows.single() {
         if let (Some(cursor), (w, h)) =
             (window.cursor_position(), (window.width(), window.height()))
         {
             look_x = ((cursor.x / w) * 2.0 - 1.0).clamp(-1.0, 1.0);
             look_y = ((cursor.y / h) * 2.0 - 1.0).clamp(-1.0, 1.0);
+            // The mouse counts as look input only while it's actually moving.
+            if !use_pad && cursor.distance(freelook.last_cursor) > 1.0 {
+                look_active = true;
+            }
+            freelook.last_cursor = cursor;
         }
     }
-    if let Some(pad) = gamepads.iter().next() {
-        let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
-        let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
-        if sx != 0.0 {
-            look_x = sx;
-        }
-        if sy != 0.0 {
-            look_y = -sy;
+    if use_pad {
+        if let Some(pad) = gamepads.iter().next() {
+            let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
+            let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
+            look_active = sx != 0.0 || sy != 0.0;
         }
     }
 
-    let (mut target_yaw, mut target_pitch) = (rig.yaw, CAM_PITCH_BASE);
+    let (mut target_yaw, mut target_pitch, mut target_dist) =
+        (rig.yaw, CAM_PITCH_BASE, CAM_DISTANCE);
     let mut desired_focus = rig.target;
     let mut locked = false;
-    if let Ok((transform, heading, bank, drive, pilot)) = player.single() {
+    if let Ok((transform, heading, velocity, bank, drive, pilot)) = player.single() {
         let pos = transform.translation.truncate();
         desired_focus = pos;
         // While the AI flies, the camera stays a free-look — it doesn't snap to
         // the AI's aiming.
         let manual = !player_ai.on;
         let aiming_broadside = aiming.port || aiming.starboard;
-        if manual && pilot.microwarp_hold {
-            // Top-down, framed on the (range-clamped) warp destination.
-            let dest = clamp_to_range(pos, pilot.aim_point, drive.range);
-            desired_focus = dest;
+        if manual && (pilot.microwarp_hold || pilot.torpedo_hold) {
+            // Directly overhead and high up — a top-down pointer view. Microwarp
+            // frames the (range-clamped) destination; torpedoes stay on the ship.
+            if pilot.microwarp_hold {
+                desired_focus = clamp_to_range(pos, pilot.aim_point, drive.range);
+            }
             target_yaw = heading.0;
-            target_pitch = CAM_MICROWARP_PITCH;
+            target_pitch = CAM_TOPDOWN_PITCH;
+            target_dist = CAM_TOPDOWN_DIST;
             locked = true;
         } else if manual && aiming_broadside {
-            // Lock the yaw along where the broadside points.
+            // Lock the yaw along where the broadside points; the aim axis steers
+            // it across the arc (see `player_input`).
             let is_port = aiming.port;
             let aim_dir = (pilot.aim_point - pos).normalize_or_zero();
             let dir = broadside_direction(heading.0, is_port, Some(aim_dir), bank.arc);
             target_yaw = dir.to_angle();
             target_pitch = CAM_AIM_PITCH;
+            target_dist = CAM_DISTANCE * (1.0 - CAM_PITCH_ZOOM);
             locked = true;
+        } else if use_pad {
+            // Gamepad free-look: integrate the right stick into a persistent
+            // offset (rate, like a mouse), then sit the view at heading + offset.
+            if let Some(pad) = gamepads.iter().next() {
+                let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
+                let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
+                freelook.yaw_offset = (freelook.yaw_offset - sx * LOOK_YAW_RATE * dt)
+                    .clamp(-LOOK_YAW_LIMIT, LOOK_YAW_LIMIT);
+                freelook.pitch = (freelook.pitch - sy * LOOK_PITCH_RATE * dt)
+                    .clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
+            }
+            target_yaw = heading.0 + freelook.yaw_offset;
+            target_pitch = freelook.pitch;
         } else {
-            // Follow the heading, offset by free-look (yaw not inverted).
+            // Mouse free-look: absolute offset from the heading (yaw not inverted).
             target_yaw = heading.0 - look_x * 0.9;
             target_pitch = (CAM_PITCH_BASE + look_y * 0.5).clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
+        }
+
+        // Idle auto-recenter: after a few seconds without look input, ease the
+        // view back to its default trailing position — behind the ship when
+        // making way ahead, ahead of it (looking back) when reversing. Aiming
+        // counts as activity, so the timer restarts once an aim ends.
+        if locked || look_active {
+            freelook.idle = 0.0;
+        } else {
+            freelook.idle += dt;
+        }
+        if !locked && freelook.idle > RECENTER_DELAY {
+            let forward = heading.forward();
+            let reversing = velocity.0.dot(forward) < -5.0;
+            let default_off = if reversing { PI } else { 0.0 };
+            let rk = 1.0 - (-RECENTER_LERP * dt).exp();
+            freelook.yaw_offset += wrap_angle(default_off - freelook.yaw_offset) * rk;
+            freelook.pitch += (CAM_PITCH_BASE - freelook.pitch) * rk;
+            target_yaw = heading.0 + freelook.yaw_offset;
+            target_pitch = freelook.pitch;
         }
     }
 
@@ -1013,6 +1211,8 @@ fn camera_orbit(
     let k = 1.0 - (-lerp * dt).exp();
     rig.yaw = wrap_angle(rig.yaw + wrap_angle(target_yaw - rig.yaw) * k);
     rig.pitch += (target_pitch - rig.pitch) * k;
+    let dk = 1.0 - (-CAM_DIST_LERP * dt).exp();
+    rig.dist += (target_dist - rig.dist) * dk;
     // Ease the focus toward the ship (or the warp point) tightly.
     let fk = 1.0 - (-10.0 * dt).exp();
     let focus_step = (desired_focus - rig.target) * fk;
@@ -1026,15 +1226,12 @@ fn camera_orbit(
     let Ok(mut camera) = camera.single_mut() else {
         return;
     };
-    // As pitch rises the camera lifts (sin) and pulls in toward the ship (the
-    // shorter horizontal reach of cos, plus a distance zoom).
-    let pitch_norm =
-        ((rig.pitch - CAM_PITCH_MIN) / (CAM_PITCH_MAX - CAM_PITCH_MIN)).clamp(0.0, 1.0);
-    let dist = CAM_DISTANCE * (1.0 - CAM_PITCH_ZOOM * pitch_norm);
+    // As pitch rises the camera lifts (sin) and swings overhead (cos shrinks the
+    // horizontal reach); the eased distance sets how far out the eye sits.
     let look = Vec2::from_angle(rig.yaw);
     let back = Vec3::new(-look.x, -look.y, 0.0);
     let focus = rig.target.extend(0.0);
-    let eye = focus + (back * rig.pitch.cos() + Vec3::Z * rig.pitch.sin()) * dist + shake;
+    let eye = focus + (back * rig.pitch.cos() + Vec3::Z * rig.pitch.sin()) * rig.dist + shake;
     *camera = Transform::from_translation(eye).looking_at(focus, Vec3::Z);
 }
 
@@ -1061,7 +1258,9 @@ fn draw_grid(mut gizmos: Gizmos, bounds: Res<SystemBounds>) {
 
 /// While a broadside is held, draw where its volley would go — one beam per
 /// gun, using the sim's own volley geometry so the preview cannot drift from
-/// what actually fires.
+/// what actually fires. The beams glow **amber when the side is loaded** and go
+/// **dim red while it's still reloading**, so you can see at a glance whether a
+/// release will actually fire.
 fn draw_aim_beams(
     mut gizmos: Gizmos,
     aiming: Res<Aiming>,
@@ -1072,12 +1271,16 @@ fn draw_aim_beams(
     };
     let pos = transform.translation.truncate();
     let aim_dir = (pilot.aim_point - pos).normalize_or_zero();
-    let color = Color::srgba(1.0, 0.85, 0.4, 0.5);
 
     for (active, is_port) in [(aiming.port, true), (aiming.starboard, false)] {
         if !active {
             continue;
         }
+        let color = if bank.ready(is_port) {
+            Color::srgba(1.0, 0.85, 0.4, 0.6) // loaded — amber
+        } else {
+            Color::srgba(1.0, 0.30, 0.25, 0.35) // reloading — dim red
+        };
         let dir = broadside_direction(heading.0, is_port, Some(aim_dir), bank.arc);
         for shot in broadside_volley(pos, velocity.0, dir, bank) {
             let beam = shot.velocity.normalize_or_zero();
@@ -1085,6 +1288,42 @@ fn draw_aim_beams(
             let end = (shot.position + beam * AIM_BEAM_LEN).extend(0.0);
             gizmos.line(start, end, color);
         }
+    }
+}
+
+/// Draw the boarding prompt: a ring around the crippled ship you're holding
+/// alongside, filling clockwise as the dwell completes. It appears only while
+/// the protagonist is in range (the sim sets [`Boarding::target`] then), giving
+/// the "close enough to board" cue.
+fn draw_boarding(mut gizmos: Gizmos, boarding: Res<Boarding>, ships: Query<&Transform>) {
+    let Some(target) = boarding.target else {
+        return;
+    };
+    let Ok(tf) = ships.get(target) else {
+        return;
+    };
+    let pos = tf.translation.truncate();
+    let frac = (boarding.progress / BOARD_DWELL).clamp(0.0, 1.0);
+    let r = 46.0;
+    // Dim base ring the moment you're in range.
+    gizmos.circle(
+        Isometry3d::from_translation(pos.extend(5.0)),
+        r,
+        Color::srgba(0.4, 0.9, 0.7, 0.4),
+    );
+    // Bright progress arc, sweeping clockwise from the top.
+    let segs = 48usize;
+    let filled = (frac * segs as f32).round() as usize;
+    for i in 0..filled {
+        let a0 = FRAC_PI_2 - (i as f32 / segs as f32) * TAU;
+        let a1 = FRAC_PI_2 - ((i + 1) as f32 / segs as f32) * TAU;
+        let p0 = pos + Vec2::from_angle(a0) * r;
+        let p1 = pos + Vec2::from_angle(a1) * r;
+        gizmos.line(
+            p0.extend(5.0),
+            p1.extend(5.0),
+            Color::srgba(0.5, 1.0, 0.8, 0.95),
+        );
     }
 }
 
@@ -1149,20 +1388,26 @@ fn microwarp_ghost(
 }
 
 /// Draw the enemy fire telegraph: a red ring that closes in as a charging
-/// broadside nears firing, plus a line along where the volley will go.
+/// broadside nears firing, plus a line along where the volley will go. Each side
+/// charges independently, so both banks are drawn.
 fn draw_charge_telegraph(mut gizmos: Gizmos, ships: Query<(&Transform, &Broadside)>) {
     for (transform, bank) in &ships {
-        if bank.charging <= 0.0 || bank.charge_time <= 0.0 {
+        if bank.charge_time <= 0.0 {
             continue;
         }
         let pos = transform.translation.truncate();
-        // 1 at the start of the wind-up, 0 the instant it fires.
-        let t = (bank.charging / bank.charge_time).clamp(0.0, 1.0);
-        let radius = 20.0 + t * 70.0;
-        let color = Color::srgba(1.0, 0.3, 0.25, 0.85);
-        gizmos.circle(Isometry3d::from_translation(pos.extend(3.0)), radius, color);
-        let end = pos + bank.charge_dir.normalize_or_zero() * 130.0;
-        gizmos.line(pos.extend(3.0), end.extend(3.0), color);
+        for state in [bank.port, bank.starboard] {
+            if state.charging <= 0.0 {
+                continue;
+            }
+            // 1 at the start of the wind-up, 0 the instant it fires.
+            let t = (state.charging / bank.charge_time).clamp(0.0, 1.0);
+            let radius = 20.0 + t * 70.0;
+            let color = Color::srgba(1.0, 0.3, 0.25, 0.85);
+            gizmos.circle(Isometry3d::from_translation(pos.extend(3.0)), radius, color);
+            let end = pos + state.charge_dir.normalize_or_zero() * 130.0;
+            gizmos.line(pos.extend(3.0), end.extend(3.0), color);
+        }
     }
 }
 
@@ -1395,10 +1640,16 @@ fn update_offscreen_markers(
 fn aim_time_dilation(
     real: Res<Time<Real>>,
     mut virt: ResMut<Time<Virtual>>,
+    paused: Res<Paused>,
     aiming: Res<Aiming>,
     player: Query<&PilotIntent, With<Player>>,
     mut battery: ResMut<AimBattery>,
 ) {
+    // While paused the virtual clock is frozen; leave the battery untouched and
+    // don't fight the pause with a speed change.
+    if paused.0 {
+        return;
+    }
     let dt = real.delta_secs();
     let (torpedo_hold, microwarp_hold) = player
         .single()
@@ -1460,6 +1711,30 @@ fn toggle_player_ai(
         *aiming = Aiming::default(); // clear any held broadside aim
     } else {
         commands.entity(entity).remove::<AiController>();
+    }
+}
+
+/// Toggle pause with `P` / `Escape` (or the pad's Start). Pausing freezes
+/// `Time<Virtual>`, which halts the whole `FixedUpdate` simulation and every
+/// virtual-time visual at once; real-time input keeps flowing so the pause can
+/// be lifted.
+fn toggle_pause(
+    keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<&Gamepad>,
+    mut paused: ResMut<Paused>,
+    mut virt: ResMut<Time<Virtual>>,
+) {
+    let pad_toggle = gamepads
+        .iter()
+        .any(|pad| pad.just_pressed(GamepadButton::Start));
+    if !keys.just_pressed(KeyCode::KeyP) && !keys.just_pressed(KeyCode::Escape) && !pad_toggle {
+        return;
+    }
+    paused.0 = !paused.0;
+    if paused.0 {
+        virt.pause();
+    } else {
+        virt.unpause();
     }
 }
 
@@ -1541,11 +1816,24 @@ fn update_hud(
     plunder: Res<Plunder>,
     method: Res<InputMethod>,
     player_ai: Res<PlayerAi>,
+    paused: Res<Paused>,
+    boarding: Res<Boarding>,
     torps: Query<&TorpedoBay, With<Player>>,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
     let Ok(mut text) = hud.single_mut() else {
         return;
+    };
+    let pause_line = if paused.0 {
+        "‖ PAUSED — press P / Start to resume\n"
+    } else {
+        ""
+    };
+    let boarding_line = if boarding.target.is_some() {
+        let pct = (boarding.progress / BOARD_DWELL * 100.0).clamp(0.0, 100.0) as u32;
+        format!("◎ BOARDING {pct}% — hold position alongside the hulk\n")
+    } else {
+        String::new()
     };
     let ai_line = if player_ai.on {
         "◆ AI PILOT ENGAGED — you keep the camera · [T] resume control\n"
@@ -1566,12 +1854,12 @@ fn update_hud(
         })
         .unwrap_or_default();
     let hints = match *method {
-        InputMethod::KeyboardMouse => "[LMB/RMB] broadside  [Q] EMP  [Ctrl] torpedoes  [Shift] microwarp  [Space] boost  [C] brace  [B] board",
-        InputMethod::Gamepad => "[LT/RT] broadside  [X] EMP  [LB] torpedoes  [RB] microwarp  [A] boost  [Y] brace  [B] board",
+        InputMethod::KeyboardMouse => "[LMB/RMB] broadside  [Q] EMP  [Ctrl] torpedoes  [Shift] microwarp  [Space] boost  [C] brace  [P] pause  ·  board: hold alongside a hulk",
+        InputMethod::Gamepad => "[LT/RT] broadside  [X] EMP  [LB] torpedoes  [RB] microwarp  [A] boost  [Y] brace  [Start] pause  ·  board: hold alongside a hulk",
     };
     text.0 = match encounter.outcome {
         Outcome::InProgress => format!(
-            "{ai_line}Wave {}  ·  enemies: {}  ·  plundered: {}  ·  {torp_line}\n{hints}  ·  [T] AI pilot",
+            "{pause_line}{ai_line}{boarding_line}Wave {}  ·  enemies: {}  ·  plundered: {}  ·  {torp_line}\n{hints}  ·  [T] AI pilot",
             encounter.wave.max(1),
             encounter.enemies_remaining,
             plunder.ships_boarded,
