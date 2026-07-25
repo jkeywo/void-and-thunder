@@ -209,6 +209,18 @@ impl SpawnDirector {
         }
     }
 
+    /// A director with authored waves and a caller-chosen jitter seed — the
+    /// corpus seam: the same scenario driven under different seeds spawns its
+    /// waves at different angles, which is what makes a batch of runs a
+    /// measurement rather than one run repeated.
+    pub fn seeded(settings: Option<DirectorSettings>, seed: u32) -> Self {
+        Self {
+            wave: 0,
+            settings,
+            seed,
+        }
+    }
+
     fn next_seed(&mut self) -> f32 {
         crate::util::lcg_next(&mut self.seed)
     }

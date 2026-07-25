@@ -129,3 +129,30 @@ entities:
           respect a DevPanelFocus run condition or dragging a slider also aims
           and fires.
       references: [dev-panel, hud-bridge, controller-input]
+
+  - decision: scenario-corpus-on-vellum-corpus
+    core:
+      status: accepted
+      confidence: confirmed
+      title: The scenario corpus runs on vellum-corpus, and this repo drives that crate
+      summary: >-
+        The authored scenarios are proven playable by driving them headlessly —
+        an AI-piloted player ship (uniform entity shape) through the Harness,
+        one case per scenario per director seed — with the batch/report
+        machinery consumed from vellum-corpus as a dev-dependency pinned by
+        rev. Records, expectations and outcome vocabulary stay in this repo.
+      rationale:
+        - >-
+          The fleet rule is that every new shared crate lands with a driving
+          consumer, and this repo is the designated one for the testing,
+          profiling and composition crates: small, active, and with all three
+          needs on its roadmap. The corpus API was designed against this
+          game's scenarios, not extracted speculation.
+        - >-
+          The corpus measures rather than flatters: its first report showed
+          the AI-piloted player losing the Skirmish's opening wave on every
+          seed, which is a balance/AI baseline, not a test failure. The
+          assertions therefore accept any decisive outcome and fail only on
+          a stalled encounter — except the Test Range, whose steady-state
+          stall is exactly what it is for.
+      references: [scenarios, test-harness, spawn-director]

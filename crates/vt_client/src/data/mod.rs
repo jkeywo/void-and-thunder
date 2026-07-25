@@ -34,6 +34,11 @@ pub mod feel;
 pub mod scenario;
 pub mod ships;
 
+// The scenario corpus is a test instrument: authored scenarios driven
+// headlessly by the AI pilot, batched and reported via vellum-corpus.
+#[cfg(test)]
+mod corpus;
+
 pub use feel::FeelTuning;
 pub use scenario::{director_for, spawn_scenario, Scenario};
 pub use ships::{set_director, ShipTable};
