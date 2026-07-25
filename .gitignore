@@ -37,3 +37,16 @@ __pycache__/
 
 # Local trunk dev-server log
 /trunk-serve.log
+
+# Runtime debris — logs, saves, scratch output (fleet canon: vellum
+# templates/gitignore-snippets.md)
+*.log
+hud-log.txt
+target-verify/
+
+# Local vellum override — NEVER committed: a leaked override builds CI
+# against whatever happened to be on disk instead of the pinned rev.
+.cargo/config.toml
+
+# uv caches
+.uv-cache*/
