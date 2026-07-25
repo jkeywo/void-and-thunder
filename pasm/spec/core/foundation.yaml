@@ -12,7 +12,7 @@ entities:
     implementation:
       status: declared
       paths: [crates/vt_sim/src]
-      symbols: [SimPlugin, SimSet]
+      symbols: [SimPlugin, SimSet, wrap_angle, lcg_next]
       tests: [crates/vt_sim/src/ship.rs, crates/vt_sim/src/combat.rs]
 
   - component: test-harness
@@ -74,6 +74,8 @@ entities:
           broadside_volley,
           broadside_direction,
           circles_overlap,
+          spheres_overlap,
+          braced_damage,
           weapons_system,
           projectile_system,
           collision_system,
@@ -145,12 +147,7 @@ entities:
       references: [ship-movement, emp-weapon]
     implementation:
       status: declared
-      paths:
-        [
-          crates/vt_sim/src/drive.rs,
-          crates/vt_sim/src/components.rs,
-          crates/vt_client/src/main.rs,
-        ]
+      paths: [crates/vt_sim/src/drive.rs, crates/vt_sim/src/components.rs]
       symbols:
         [
           speed_scale,
@@ -165,6 +162,22 @@ entities:
         ]
       tests: [crates/vt_sim/src/drive.rs]
 
+  - component: bullet-time
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Bullet-Time (Aim Battery)
+      summary: >-
+        Aiming a weapon dilates global time toward AIM_TIMESCALE while a
+        rechargeable AimBattery has charge, then eases back. Charge is spent in
+        real seconds (Time<Real>) so the window is a real ~5s regardless of the
+        dilation; aim_time_dilation sets Time<Virtual>'s relative speed.
+      references: [ship-drives]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/bullet_time.rs]
+      symbols: [AimBattery, aim_time_dilation]
+
   - component: emp-weapon
     core:
       status: implemented
@@ -178,7 +191,7 @@ entities:
       references: [ship-drives, ship-combat]
     implementation:
       status: declared
-      paths: [crates/vt_sim/src/emp.rs, crates/vt_sim/src/components.rs]
+      paths: [crates/vt_sim/src/emp.rs]
       symbols:
         [emp_system, emp_bolt_system, lead_angle, swivel_toward, EmpWeapon, EmpBolt]
       tests: [crates/vt_sim/src/emp.rs]
@@ -191,22 +204,28 @@ entities:
       summary: >-
         A reloading magazine (player-only). Holding aim locks the hostile nearest
         the cursor and accrues launch count (1 + 1 per 0.5s, capped by loaded
-        tubes / 10); release fires that many homing torpedoes from alternating
-        top/bottom, arcing back to the plane. torpedo_homing_system steers them,
+        tubes / 10) in TorpedoLock; release hands the locked targets to a
+        TorpedoLaunchQueue, independently drained by torpedo_launch_system one
+        tube at a time (alternating top/bottom, arcing back to the plane) —
+        separate from the aim/lock lifecycle since a volley can still be
+        launching while a fresh aim starts. torpedo_homing_system steers them,
         torpedo_hit_system applies hull damage, tubes reload one at a time.
       references: [ship-combat]
     implementation:
       status: declared
-      paths: [crates/vt_sim/src/torpedo.rs, crates/vt_sim/src/components.rs]
+      paths: [crates/vt_sim/src/torpedo.rs]
       symbols:
         [
-          torpedo_aim_system,
+          torpedo_lock_system,
+          torpedo_launch_system,
           torpedo_homing_system,
           torpedo_hit_system,
           torpedo_reload_system,
           torpedo_locks,
           home_velocity,
           TorpedoBay,
+          TorpedoLock,
+          TorpedoLaunchQueue,
           Torpedo,
         ]
       tests: [crates/vt_sim/src/torpedo.rs]
@@ -215,29 +234,35 @@ entities:
     core:
       status: implemented
       confidence: confirmed
-      title: Game Feel & HUD
+      title: Game Feel & Camera
       summary: >-
         The sim announces ShipHit/ShipDestroyed messages; the client turns them
         into hit sparks, expanding explosions and screen shake (CameraRig
-        trauma), plus muzzle flashes on new cannonballs. A hull gauge and the
-        wave/outcome HUD text read the encounter. Effects scale-and-fade via the
-        Effect component; ship materials tint darker as their hull drops.
+        trauma), plus muzzle flashes on new cannonballs. Effects scale-and-fade
+        via the Effect component. The orbit camera (camera_orbit) follows the
+        player, snapping to the active aim mode or free-looking otherwise.
         Off-screen enemies are called out by pooled UI markers pinned to the
         window edge in their on-screen direction (update_offscreen_markers).
       references: [ship-combat, spawn-director, client-shell]
     implementation:
       status: declared
-      paths: [crates/vt_sim/src/events.rs, crates/vt_client/src/main.rs]
+      paths:
+        [
+          crates/vt_sim/src/events.rs,
+          crates/vt_client/src/camera.rs,
+          crates/vt_client/src/effects.rs,
+          crates/vt_client/src/edge_markers.rs,
+        ]
       symbols:
         [
           ShipHit,
           ShipDestroyed,
           CameraRig,
+          FreeLook,
+          camera_orbit,
           Effect,
           spawn_effect,
           update_effects,
-          damage_tint,
-          update_hull_bar,
           update_offscreen_markers,
           EdgeMarker,
         ]
@@ -259,6 +284,33 @@ entities:
       paths: [crates/vt_client/src/audio.rs, index.html]
       symbols: [SfxPlugin, Sound, sfx_broadside, sfx_hits, sfx_explosions, sfx_board]
 
+  - component: hud-bridge
+    core:
+      status: implemented
+      confidence: confirmed
+      title: HUD Bridge (canonical HUD)
+      summary: >-
+        gather_hud_state reads the player ship plus encounter/session state
+        each frame into a JSON snapshot (coords, hull, boost, per-weapon
+        cooldowns, torpedo tubes + lock count, bullet-time charge, wave/
+        enemies/plunder, pause/AI-pilot/boarding, input method, outcome, and
+        the controls-panel toggle) consumed by the self-contained hud.html via
+        window.updateHud. Two transports: wasm injects hud.html's style+body
+        into a same-document overlay div; native (native-html-hud feature,
+        default-on) renders it off-screen with Ultralight into a Bevy texture.
+        This superseded the old Bevy-Text HUD and aim-battery gauge, which are
+        deleted.
+      references: [ship-combat, ship-drives, bullet-time, spawn-director, piracy-finisher, controller-input]
+    implementation:
+      status: declared
+      paths:
+        [
+          crates/vt_client/src/hud.rs,
+          crates/vt_client/assets/ui/hud.html,
+          crates/vt_client/assets/ui/bridge.js,
+        ]
+      symbols: [HudBridgePlugin, HudSnapshot, HudAction, gather_hud_state, push_cooldown]
+
   - component: controller-input
     core:
       status: implemented
@@ -268,12 +320,30 @@ entities:
         player_input reads the first Gamepad alongside the keyboard: RT/LT for
         throttle/reverse, left stick to steer, LB/RB for port/starboard
         broadsides, X to brace, A to board; Start restarts on the game-over
-        screen. Inputs are merged with the keyboard and clamped.
+        screen. Inputs are merged with the keyboard and clamped. toggle_player_ai
+        (T) and toggle_pause (P/Esc/Start) are the other input-driven toggles.
       references: [client-shell]
     implementation:
       status: declared
-      paths: [crates/vt_client/src/main.rs]
-      symbols: [player_input, restart, deadzone, track_input_method]
+      paths: [crates/vt_client/src/input.rs]
+      symbols:
+        [
+          player_input,
+          deadzone,
+          decide_aim,
+          broadside_fire_direction,
+          track_input_method,
+          toggle_player_ai,
+          toggle_pause,
+          toggle_controls_panel,
+          InputMethod,
+          PlayerAi,
+          Paused,
+          ControlsPanel,
+          Aiming,
+          BroadsideAim,
+          AimCursor,
+        ]
 
   - component: client-shell
     core:
@@ -281,30 +351,81 @@ entities:
       confidence: confirmed
       title: Client Shell (2.5D renderer, input, window)
       summary: >-
-        The Bevy front end. Mounts SimPlugin, spawns ships as sim entities,
-        writes the player ship's intent components, and renders in 2.5D: the sim's
-        flat XY plane is drawn with +Z as up — Cuboid hulls, Sphere shot/worlds, a
-        gizmo grid, and a player-controlled orbit camera (camera_orbit). T toggles
-        AI control of the player ship (toggle_player_ai drops AiController on it)
-        while the camera stays free-look. Native and wasm from one binary. Owns no
-        game rules.
+        The Bevy front end. Mounts SimPlugin, spawns ships as sim entities, and
+        renders in 2.5D: the sim's flat XY plane is drawn with +Z as up —
+        Cuboid hulls, Sphere shot/worlds. Owns no game rules; the renderer,
+        input, camera, gizmos, effects and HUD are each their own module (see
+        ship-visuals, controller-input, game-feel, hud-gizmos, hud-bridge).
+        Native and wasm from one binary.
       references: [void-and-thunder-simulation, enemy-ai]
     implementation:
       status: declared
       paths: [crates/vt_client/src/main.rs]
+      symbols: [Player, GameMeshes, GameMaterials]
+
+  - component: ship-visuals
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Ship & Projectile Visual Attachment
+      summary: >-
+        Attaches a mesh+material to a sim entity the first time it appears
+        (ship, cannonball, EMP bolt, torpedo), keeps torpedoes oriented along
+        their 3D velocity, and tints a ship's material by its live hull/brace/EMP
+        state (faction colour lives in the texture, not this tint).
+      references: [ship-combat, emp-weapon, torpedoes]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/visuals.rs]
       symbols:
         [
-          player_input,
-          toggle_player_ai,
           attach_ship_visuals,
           attach_projectile_visuals,
-          camera_orbit,
+          attach_empbolt_visuals,
+          attach_torpedo_visuals,
+          orient_torpedoes,
+          damage_tint,
+        ]
+
+  - component: hud-gizmos
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Gizmo Overlays (grid, aim beams, boarding, microwarp)
+      summary: >-
+        Draws the reference grid + system boundary, the broadside aim beams and
+        fire telegraph, the boarding progress ring, and the microwarp range ring
+        + destination ghost — all drawn directly onto the plane with Bevy gizmos.
+      references: [ship-combat, star-system, piracy-finisher, ship-drives]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/gizmos.rs]
+      symbols:
+        [
           draw_grid,
           draw_aim_beams,
-          Player,
-          PlayerAi,
-          GameMeshes,
+          draw_boarding,
+          draw_reticle,
+          draw_microwarp_range,
+          draw_charge_telegraph,
+          microwarp_ghost,
+          MicrowarpGhost,
         ]
+
+  - component: session-lifecycle
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Run Lifecycle (Playing / GameOver)
+      summary: >-
+        A Bevy States enum tracking whether a run is in progress or has ended.
+        watch_outcome moves to GameOver once the sim's Encounter resolves;
+        restart clears the field and starts a fresh run.
+      references: [spawn-director]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/session.rs]
+      symbols: [GameState, watch_outcome, restart]
 
   # ---- Proposed for the MVP (see docs/mvp-plan.md) ----
 

@@ -13,7 +13,62 @@ use bevy_math::Vec2;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 
-use crate::components::{BoostDrive, EmpDefense, MicrowarpDrive, PilotIntent, Ship, SpeedScale};
+use crate::components::{EmpDefense, PilotIntent, Ship, SpeedScale};
+
+/// A rechargeable overdrive. While `active` and `battery > 0`, the ship's speed
+/// is multiplied by `multiplier`. Config + live state live together so the
+/// client just flips `active`. Player-only for now.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BoostDrive {
+    pub multiplier: f32,
+    pub battery: f32,
+    pub battery_max: f32,
+    pub drain_per_sec: f32,
+    pub recharge_per_sec: f32,
+    /// Set by the controller each frame — is the pilot holding boost?
+    pub active: bool,
+}
+
+impl Default for BoostDrive {
+    fn default() -> Self {
+        Self {
+            multiplier: 1.6,
+            battery: 3.0,
+            battery_max: 3.0,
+            drain_per_sec: 1.0,
+            recharge_per_sec: 0.6,
+            active: false,
+        }
+    }
+}
+
+impl BoostDrive {
+    /// True when boost is actually contributing thrust this frame.
+    pub fn engaged(&self) -> bool {
+        self.active && self.battery > 0.0
+    }
+}
+
+/// A short-range teleport drive. Holding aim previews a destination within
+/// `range`; releasing warps there (gated by `cooldown`). Player-only.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MicrowarpDrive {
+    pub range: f32,
+    pub cooldown: f32,
+    pub timer: f32,
+    pub was_holding: bool,
+}
+
+impl Default for MicrowarpDrive {
+    fn default() -> Self {
+        Self {
+            range: 675.0, // 75% of the original 900
+            cooldown: 2.0,
+            timer: 0.0,
+            was_holding: false,
+        }
+    }
+}
 
 /// The speed multiplier for a ship given its EMP load and (optional) boost.
 pub fn speed_scale(emp: &EmpDefense, boost: Option<&BoostDrive>) -> f32 {

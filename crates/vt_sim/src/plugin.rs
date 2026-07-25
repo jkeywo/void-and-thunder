@@ -17,7 +17,8 @@ use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plun
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
 use crate::torpedo::{
-    torpedo_aim_system, torpedo_hit_system, torpedo_homing_system, torpedo_reload_system,
+    torpedo_hit_system, torpedo_homing_system, torpedo_launch_system, torpedo_lock_system,
+    torpedo_reload_system,
 };
 use crate::world::{bounds_system, SystemBounds};
 
@@ -96,7 +97,12 @@ impl Plugin for SimPlugin {
                 (
                     weapons_system,
                     emp_system,
-                    torpedo_aim_system,
+                    // Drain whatever was queued as of last step *before* this
+                    // step's lock/release runs — matches the single-function
+                    // predecessor's per-frame ordering (a release this frame
+                    // queues for next frame's drain, not an immediate one).
+                    torpedo_launch_system,
+                    torpedo_lock_system,
                     projectile_system,
                 )
                     .chain()

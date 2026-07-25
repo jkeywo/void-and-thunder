@@ -14,20 +14,53 @@ use bevy_time::Time;
 use bevy_transform::components::Transform;
 
 use crate::combat::circles_overlap;
-use crate::components::{
-    Collider, EmpBolt, EmpDefense, EmpWeapon, Faction, Heading, PilotIntent, Ship, Ttl, Velocity,
-};
+use crate::components::{Collider, EmpDefense, Faction, Heading, PilotIntent, Ship, Ttl, Velocity};
 use crate::events::EmpImpact;
+use crate::util::wrap_angle as wrap;
 
-/// Wrap an angle to `(-PI, PI]`.
-fn wrap(angle: f32) -> f32 {
-    use std::f32::consts::{PI, TAU};
-    let a = angle.rem_euclid(TAU);
-    if a > PI {
-        a - TAU
-    } else {
-        a
+/// A frontal EMP emitter. While held it swivels within `arc` toward a lead of
+/// the target and fires [`EmpBolt`]s on `cooldown`. Player-only for now.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct EmpWeapon {
+    /// Full width of the firing arc (radians); the emitter aims within ±arc/2 of the bow.
+    pub arc: f32,
+    /// Maximum swivel speed of the emitter (radians/s).
+    pub swivel_rate: f32,
+    /// Current emitter angle relative to the bow (`-arc/2..=arc/2`).
+    pub aim: f32,
+    pub cooldown: f32,
+    pub timer: f32,
+    /// Speed of a fired bolt (units/s).
+    pub bolt_speed: f32,
+    /// EMP dealt per bolt, as a fraction of the *target's* resist (0.25 = 25%).
+    pub bolt_damage_frac: f32,
+    /// Maximum engagement range.
+    pub range: f32,
+}
+
+impl Default for EmpWeapon {
+    fn default() -> Self {
+        use std::f32::consts::FRAC_PI_2;
+        Self {
+            arc: FRAC_PI_2,                     // 90°
+            swivel_rate: 20.0_f32.to_radians(), // ~1s per 20°
+            aim: 0.0,
+            cooldown: 0.4,
+            timer: 0.0,
+            bolt_speed: 360.0,
+            bolt_damage_frac: 0.25,
+            range: 620.0,
+        }
     }
+}
+
+/// An EMP bolt in flight. On hitting a hostile ship it adds
+/// `damage_frac * target.resist` to that ship's [`EmpDefense`].
+#[derive(Component, Clone, Copy, Debug)]
+pub struct EmpBolt {
+    pub faction: Faction,
+    pub radius: f32,
+    pub damage_frac: f32,
 }
 
 /// Predicted intercept point for a bolt of speed `bolt_speed` fired now at a

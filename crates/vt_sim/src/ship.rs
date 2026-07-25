@@ -10,24 +10,13 @@ use bevy_ecs::prelude::*;
 use bevy_math::{Quat, Vec2};
 use bevy_time::Time;
 use bevy_transform::components::Transform;
-use std::f32::consts::{PI, TAU};
 
 use crate::components::{Heading, Helm, ShipStats, SpeedScale, Velocity};
+use crate::util::wrap_angle;
 
 /// Fraction of forward thrust available in reverse — backing sails only push a
 /// quarter as hard, so reverse tops out at ~25% of forward speed.
 pub const REVERSE_THROTTLE: f32 = 0.25;
-
-/// Wrap an angle to `(-PI, PI]`, so a ship's heading never accumulates without
-/// bound as it turns (which otherwise degrades the aiming trigonometry).
-fn wrap_angle(angle: f32) -> f32 {
-    let a = angle.rem_euclid(TAU);
-    if a > PI {
-        a - TAU
-    } else {
-        a
-    }
-}
 
 /// Advance one ship's heading and velocity by `dt` seconds.
 ///

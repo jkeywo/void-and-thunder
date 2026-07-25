@@ -29,8 +29,13 @@ ul-next = { version = "0.5", optional = true }
 # Native-only: dynamic linking makes iterative debug builds much faster.
 # Enable with `cargo run --features fast-compile`. Never enabled for wasm.
 [features]
+default = ["native-html-hud"]
 fast-compile = ["bevy/dynamic_linking"]
-# Render the HTML HUD on native desktop via Ultralight → Bevy texture. Off by
-# default: it downloads/links the Ultralight SDK and needs its `resources/`
-# folder at runtime. Without it, native uses the Bevy-UI HUD.
+# Render the HTML HUD (assets/ui/hud.html) on native desktop via Ultralight →
+# Bevy texture — the canonical HUD, matching the web build. Default-on so
+# plain `cargo run -p vt_client` shows a HUD; it downloads/links the Ultralight
+# SDK and needs its `resources/` folder at runtime. `ul-next` is a target-
+# specific optional dependency (see above), so disabling this feature is a
+# no-op on wasm regardless. Opt out with `--no-default-features` if you don't
+# want the Ultralight dependency — native then runs with no HUD at all.
 native-html-hud = ["dep:ul-next"]

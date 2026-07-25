@@ -18,23 +18,16 @@ use bevy_ecs::prelude::*;
 use bevy_math::Vec2;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI};
 
 use crate::components::{
-    AiController, Disabled, EmpWeapon, Faction, FireOrders, Heading, Helm, Hull, MicrowarpDrive,
-    PilotIntent, Ship, TorpedoBay,
+    AiController, Disabled, Faction, FireOrders, Heading, Helm, Hull, PilotIntent, Ship,
 };
+use crate::drive::MicrowarpDrive;
+use crate::emp::EmpWeapon;
 use crate::piracy::{BoardIntent, BOARD_RANGE};
-
-/// Wrap an angle to the range `(-PI, PI]`.
-fn wrap(angle: f32) -> f32 {
-    let a = angle.rem_euclid(TAU);
-    if a > PI {
-        a - TAU
-    } else {
-        a
-    }
-}
+use crate::torpedo::TorpedoLock;
+use crate::util::wrap_angle as wrap;
 
 /// Proportional gain turning a heading error (radians) into a helm command.
 const TURN_GAIN: f32 = 2.5;
@@ -161,6 +154,11 @@ const TORPEDO_MIN_VOLLEY: u32 = 3;
 pub struct AbilityIntent {
     pub aim_point: Vec2,
     pub helm: Helm,
+    /// `Some(helm)` when the pilot should override the broadside-AI's helm to
+    /// fight bow-on / steer toward a prize; `None` when there's nothing to
+    /// react to (`helm` is then a meaningless default), so the caller should
+    /// leave the regular helm standing.
+    pub helm_override: Option<Helm>,
     pub emp_fire: bool,
     pub torpedo_hold: bool,
     pub microwarp_hold: bool,
@@ -201,9 +199,13 @@ pub fn decide_abilities(
     dt: f32,
 ) -> AbilityIntent {
     let forward = Vec2::from_angle(heading);
+    // Whether there's anything to react to at all — if not, `helm` below stays
+    // a meaningless default and must not override the broadside-AI's helm.
+    let has_target = !hostiles.is_empty() || !boardable.is_empty();
     let mut out = AbilityIntent {
         aim_point: ship + forward * 300.0,
         helm: Helm::default(),
+        helm_override: None,
         emp_fire: false,
         torpedo_hold: false,
         microwarp_hold: false,
@@ -228,6 +230,7 @@ pub fn decide_abilities(
         let away = (ship - centroid).normalize_or(forward);
         out.aim_point = ship + away * microwarp_range;
         out.helm = face(ship, heading, out.aim_point, 1.0);
+        out.helm_override = Some(out.helm);
         let wp = warp_prime + dt;
         if wp < WARP_PRIME {
             out.microwarp_hold = true;
@@ -244,6 +247,7 @@ pub fn decide_abilities(
             out.aim_point = target;
             out.emp_fire = true; // the emitter gates arc/target itself
             out.helm = face(ship, heading, target, 0.35);
+            out.helm_override = Some(out.helm);
             return out;
         }
     }
@@ -259,6 +263,7 @@ pub fn decide_abilities(
             (dist / 300.0).clamp(0.15, 0.6)
         };
         out.helm = face(ship, heading, prize, throttle);
+        out.helm_override = Some(out.helm);
         if dist <= board_range {
             out.board = true;
         }
@@ -271,6 +276,7 @@ pub fn decide_abilities(
         out.torpedo_hold = torpedo_locks < TORPEDO_MIN_VOLLEY;
         out.helm = face(ship, heading, target, 0.2);
     }
+    out.helm_override = has_target.then_some(out.helm);
     out
 }
 
@@ -286,7 +292,7 @@ pub fn ai_abilities_system(
         &Faction,
         &mut AiController,
         &EmpWeapon,
-        &TorpedoBay,
+        &TorpedoLock,
         &MicrowarpDrive,
         &mut PilotIntent,
         &mut Helm,
@@ -299,7 +305,7 @@ pub fn ai_abilities_system(
         .map(|(t, f, disabled)| (t.translation.truncate(), *f, disabled))
         .collect();
 
-    for (transform, heading, faction, mut ai, emp, bay, warp, mut pilot, mut helm) in &mut ships {
+    for (transform, heading, faction, mut ai, emp, lock, warp, mut pilot, mut helm) in &mut ships {
         if !ai.use_abilities {
             continue;
         }
@@ -325,7 +331,7 @@ pub fn ai_abilities_system(
             warp.range,
             warp.timer <= 0.0,
             BOARD_RANGE,
-            bay.locks,
+            lock.locks,
             ai.warp_prime,
             dt,
         );
@@ -338,9 +344,11 @@ pub fn ai_abilities_system(
             board_intent.active = true;
         }
         // Override the broadside helm: this pilot fights bow-on with the kit and
-        // steers itself toward prizes.
-        if !hostiles.is_empty() || !boardable.is_empty() {
-            *helm = d.helm;
+        // steers itself toward prizes. `decide_abilities` itself decides whether
+        // there's anything to react to (`None` when not, leaving the regular
+        // broadside-AI's helm standing).
+        if let Some(h) = d.helm_override {
+            *helm = h;
         }
     }
 }
@@ -638,5 +646,44 @@ mod tests {
         );
         assert!(!far.board, "too far to board yet");
         assert!(far.helm.throttle > 0.0, "should close on the prize");
+    }
+
+    #[test]
+    fn decide_abilities_overrides_helm_only_when_hostiles_or_prizes_exist() {
+        // Nothing to react to — the caller must not override the broadside-AI's helm.
+        let nothing = decide_abilities(Vec2::ZERO, 0.0, &[], &[], 620.0, 900.0, true, 95.0, 0, 0.0, 0.1);
+        assert!(nothing.helm_override.is_none());
+
+        // A hostile in range — the kit takes over steering.
+        let hostile = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &[Vec2::new(300.0, 0.0)],
+            &[],
+            620.0,
+            900.0,
+            true,
+            95.0,
+            0,
+            0.0,
+            0.1,
+        );
+        assert!(hostile.helm_override.is_some());
+
+        // A crippled prize with no active hostile — still overrides to steer toward it.
+        let prize = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &[],
+            &[Vec2::new(400.0, 0.0)],
+            620.0,
+            900.0,
+            true,
+            95.0,
+            0,
+            0.0,
+            0.1,
+        );
+        assert!(prize.helm_override.is_some());
     }
 }

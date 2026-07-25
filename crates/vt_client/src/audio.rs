@@ -174,8 +174,7 @@ mod native {
     struct Noise(u32);
     impl Noise {
         fn next(&mut self) -> f32 {
-            self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (self.0 >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0
+            vt_sim::prelude::lcg_next(&mut self.0) * 2.0 - 1.0
         }
     }
 

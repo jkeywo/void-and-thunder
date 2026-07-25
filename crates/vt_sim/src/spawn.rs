@@ -10,11 +10,14 @@ use bevy_math::Vec2;
 use bevy_transform::components::Transform;
 use std::f32::consts::TAU;
 
+use crate::combat::Broadside;
 use crate::components::{
-    AiController, BoostDrive, Brace, Broadside, Collider, EmpDefense, EmpWeapon, Faction,
-    FireOrders, Heading, Helm, Hull, MicrowarpDrive, PilotIntent, Protagonist, Ship, ShipStats,
-    SpeedScale, TorpedoBay, Velocity,
+    AiController, Brace, Collider, EmpDefense, Faction, FireOrders, Heading, Helm, Hull,
+    PilotIntent, Protagonist, Ship, ShipStats, SpeedScale, Velocity,
 };
+use crate::drive::{BoostDrive, MicrowarpDrive};
+use crate::emp::EmpWeapon;
+use crate::torpedo::{TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
 use crate::world::SystemBounds;
 
 /// A ship's full weapon/drive loadout. Every ship carries the same kit; presets
@@ -95,11 +98,15 @@ pub fn ship_bundle(
         EmpDefense::default(),
         SpeedScale::default(),
         Transform::from_translation(pos.extend(0.0)),
-        // The full kit — identical set on every ship.
+        // The full kit — identical set on every ship. Torpedoes carry three
+        // components: static config/reload (from the loadout) plus the two
+        // always-empty-at-spawn transient lifecycles (aim-lock, launch-queue).
         (
             loadout.broadside,
             loadout.emp,
             loadout.torpedoes,
+            TorpedoLock::default(),
+            TorpedoLaunchQueue::default(),
             loadout.boost,
             loadout.microwarp,
         ),
@@ -158,11 +165,7 @@ impl Default for SpawnDirector {
 
 impl SpawnDirector {
     fn next_seed(&mut self) -> f32 {
-        self.seed = self
-            .seed
-            .wrapping_mul(1_664_525)
-            .wrapping_add(1_013_904_223);
-        (self.seed >> 8) as f32 / (1u32 << 24) as f32
+        crate::util::lcg_next(&mut self.seed)
     }
 }
 

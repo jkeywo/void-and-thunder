@@ -1,5 +1,8 @@
 //! HUD bridge — gathers the player ship's live state each frame and produces the
-//! JSON snapshot the HTML HUD consumes via `window.updateHud`.
+//! JSON snapshot the HTML HUD consumes via `window.updateHud`. This is the
+//! canonical HUD: it also carries the encounter status, pause/AI/boarding
+//! state, and the controls side panel that the legacy Bevy-Text HUD used to
+//! show — see `gather_hud_state`'s doc comment for the full JSON contract.
 //!
 //! The HUD itself is authored as a self-contained web page
 //! ([`assets/ui/hud.html`]) with a stable contract ([`assets/ui/bridge.js`]):
@@ -11,15 +14,22 @@
 //!     writes the JSON into [`HudSnapshot`]. Transport-agnostic, no extra deps.
 //!   * a *transport* that pushes [`HudSnapshot`] into the live page. Delivered per
 //!     target:
-//!       - wasm: `hud.html` mounted as a transparent, click-through iframe over
-//!         the canvas (vtHud* shim in `index.html`), driven via wasm-bindgen.
-//!       - native + `native-webview-hud` feature: a raw `wry` webview overlay
-//!         built off Bevy's winit window handle.
-//!       - native without the feature: no-op (the Bevy-UI HUD carries native).
+//!       - wasm: `hud.html`'s style + body are injected into a same-document
+//!         overlay `<div>` (see the `vtHud*` shim in `index.html` — a
+//!         transparent *iframe* over a WebGL canvas composites opaque in
+//!         Chromium and hides the game, so this isn't an iframe).
+//!       - native + `native-html-hud` feature: Ultralight renders `hud.html`
+//!         off-screen into a Bevy texture, composited as a fullscreen UI node.
+//!       - native without the feature: no-op (no HUD renders).
 
 use bevy::prelude::*;
-use vt_sim::prelude::{BoostDrive, Broadside, Hull, MicrowarpDrive, TorpedoBay};
+use vt_sim::prelude::{
+    Boarding, BoostDrive, Broadside, Encounter, Hull, MicrowarpDrive, Outcome, Plunder,
+    TorpedoBay, TorpedoLock, BOARD_DWELL,
+};
 
+use crate::bullet_time::AimBattery;
+use crate::input::{ControlsPanel, InputMethod, Paused, PlayerAi};
 use crate::Player;
 
 /// Mounts HUD state-gathering plus the transport systems for this target.
@@ -67,13 +77,19 @@ pub enum HudAction {
     Unknown(String),
 }
 
-/// Read the player ship's live components and rebuild the HUD JSON snapshot.
+/// Read the player ship's live components plus the encounter/session state and
+/// rebuild the HUD JSON snapshot.
 ///
 /// Field names and casing here MUST match the `updateHud` schema in `hud.html`:
 /// `coords{x,y}`, `hull` (0..1), `boostBattery` (0..1), `portCd`/`starboardCd`/
-/// `microwarpCd` as `{remaining,duration}` seconds, and `torpedoes[]` of
-/// `{state, progress?}`. All weapon components are optional so a partial loadout
-/// still reports what it has (the HUD retains last-known values for the rest).
+/// `microwarpCd` as `{remaining,duration}` seconds, `torpedoes[]` of
+/// `{state, progress?}`, `torpedoLocks` (u32), `aimBattery` (0..1), `wave`,
+/// `enemiesRemaining`, `plunder`, `paused`/`aiPilot` (bool), `boarding`
+/// `{active,progress}`, `inputMethod` (`"kbm"`/`"gamepad"`), `outcome`
+/// (`"in_progress"`/`"cleared"`/`"destroyed"`), and `controlsOpen` (bool). All
+/// weapon components are optional so a partial loadout still reports what it
+/// has (the HUD retains last-known values for the rest).
+#[allow(clippy::too_many_arguments)]
 fn gather_hud_state(
     player: Query<
         (
@@ -83,18 +99,27 @@ fn gather_hud_state(
             Option<&Broadside>,
             Option<&MicrowarpDrive>,
             Option<&TorpedoBay>,
+            Option<&TorpedoLock>,
         ),
         With<Player>,
     >,
+    encounter: Res<Encounter>,
+    plunder: Res<Plunder>,
+    paused: Res<Paused>,
+    player_ai: Res<PlayerAi>,
+    boarding: Res<Boarding>,
+    method: Res<InputMethod>,
+    battery: Res<AimBattery>,
+    controls_panel: Res<ControlsPanel>,
     mut snap: ResMut<HudSnapshot>,
 ) {
-    let Ok((tf, hull, boost, broadside, warp, torps)) = player.single() else {
+    let Ok((tf, hull, boost, broadside, warp, torps, torp_lock)) = player.single() else {
         return;
     };
 
     // The sim's plane is XY (see `translation.truncate()` uses elsewhere in the
     // client); z is height, ignored by the HUD.
-    let mut j = String::with_capacity(256);
+    let mut j = String::with_capacity(384);
     j.push('{');
 
     let (x, y) = (
@@ -147,6 +172,47 @@ fn gather_hud_state(
         }
         j.push(']');
     }
+    let locks = torp_lock.map_or(0, |l| l.locks);
+    j.push_str(&format!(",\"torpedoLocks\":{locks}"));
+
+    let aim_frac = (battery.charge / battery.max).clamp(0.0, 1.0);
+    j.push_str(&format!(",\"aimBattery\":{aim_frac:.4}"));
+
+    j.push_str(&format!(",\"wave\":{}", encounter.wave.max(1)));
+    j.push_str(&format!(
+        ",\"enemiesRemaining\":{}",
+        encounter.enemies_remaining
+    ));
+    j.push_str(&format!(",\"plunder\":{}", plunder.ships_boarded));
+
+    j.push_str(&format!(",\"paused\":{}", paused.0));
+    j.push_str(&format!(",\"aiPilot\":{}", player_ai.on));
+
+    let boarding_progress = if boarding.target.is_some() {
+        (boarding.progress / BOARD_DWELL).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    j.push_str(&format!(
+        ",\"boarding\":{{\"active\":{},\"progress\":{:.3}}}",
+        boarding.target.is_some(),
+        boarding_progress
+    ));
+
+    let input_method = match *method {
+        InputMethod::KeyboardMouse => "kbm",
+        InputMethod::Gamepad => "gamepad",
+    };
+    j.push_str(&format!(",\"inputMethod\":\"{input_method}\""));
+
+    let outcome = match encounter.outcome {
+        Outcome::InProgress => "in_progress",
+        Outcome::Cleared => "cleared",
+        Outcome::PlayerDestroyed => "destroyed",
+    };
+    j.push_str(&format!(",\"outcome\":\"{outcome}\""));
+
+    j.push_str(&format!(",\"controlsOpen\":{}", controls_panel.open));
 
     j.push('}');
 

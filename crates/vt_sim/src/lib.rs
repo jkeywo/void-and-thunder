@@ -29,6 +29,7 @@ pub mod plugin;
 pub mod ship;
 pub mod spawn;
 pub mod torpedo;
+pub mod util;
 pub mod world;
 
 pub use plugin::{SimPlugin, SimSet};
@@ -36,14 +37,16 @@ pub use plugin::{SimPlugin, SimSet};
 /// Common imports for consumers of the simulation.
 pub mod prelude {
     pub use crate::ai::desired_helm;
-    pub use crate::combat::{broadside_direction, broadside_volley, ProjectileSpawn};
-    pub use crate::components::{
-        AiController, BankState, BoostDrive, Brace, Broadside, Collider, Disabled, EmpBolt,
-        EmpDefense, EmpWeapon, Faction, FireOrders, Heading, Helm, Hull, Landmark, MicrowarpDrive,
-        PilotIntent, Projectile, Protagonist, Ship, ShipStats, SpeedScale, Torpedo, TorpedoBay,
-        Ttl, Velocity,
+    pub use crate::combat::{
+        broadside_direction, broadside_volley, BankState, Broadside, ProjectileSpawn,
     };
-    pub use crate::drive::{clamp_to_range, speed_scale};
+    pub use crate::components::{
+        AiController, Brace, Collider, Disabled, EmpDefense, Faction, FireOrders, Heading, Helm,
+        Hull, Landmark, PilotIntent, Projectile, Protagonist, Ship, ShipStats, SpeedScale, Ttl,
+        Velocity,
+    };
+    pub use crate::drive::{clamp_to_range, speed_scale, BoostDrive, MicrowarpDrive};
+    pub use crate::emp::{EmpBolt, EmpWeapon};
     pub use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
     pub use crate::harness::Harness;
     pub use crate::piracy::{
@@ -53,5 +56,7 @@ pub mod prelude {
     pub use crate::spawn::{
         reset_encounter, ship_bundle, Encounter, Outcome, ShipLoadout, SpawnDirector,
     };
+    pub use crate::torpedo::{Torpedo, TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
+    pub use crate::util::{lcg_next, wrap_angle};
     pub use crate::world::{bounds_return, SystemBounds};
 }

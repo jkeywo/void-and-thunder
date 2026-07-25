@@ -4,14 +4,15 @@
 //! can be tested headlessly; the Bevy systems wrap them and touch the `World`.
 
 use bevy_ecs::prelude::*;
-use bevy_math::Vec2;
+use bevy_math::{Vec2, Vec3};
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 
 use crate::components::{
-    Brace, Broadside, Collider, Faction, FireOrders, Heading, Hull, Projectile, Ttl, Velocity,
+    Brace, Collider, Faction, FireOrders, Heading, Hull, Projectile, Ttl, Velocity,
 };
 use crate::events::{ShipDestroyed, ShipHit};
+use crate::util::wrap_angle;
 
 /// Fraction of damage a braced ship still takes (Black-Flag brace).
 pub const BRACE_DAMAGE_FACTOR: f32 = 0.35;
@@ -20,6 +21,85 @@ pub const BRACE_DAMAGE_FACTOR: f32 = 0.35;
 pub const PROJECTILE_TTL: f32 = 2.5;
 /// Cannonball collision radius.
 pub const PROJECTILE_RADIUS: f32 = 5.0;
+
+/// Per-side reload + telegraph state for one broadside bank. Port and starboard
+/// each carry their own, so the two sides reload and fire independently.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BankState {
+    /// Remaining reload until this side can fire again (0 = ready).
+    pub timer: f32,
+    /// Remaining wind-up if this side is currently charging (0 = idle). Read by
+    /// the client to draw the enemy telegraph.
+    pub charging: f32,
+    /// World direction captured when this side's charge began.
+    pub charge_dir: Vec2,
+}
+
+/// A pair of side-mounted railgun banks — the core aimed weapon. The player may
+/// steer each volley within `arc` of the beam; an enemy telegraphs a
+/// `charge_time` wind-up before firing. The two sides ([`BankState`]) reload on
+/// independent timers.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Broadside {
+    /// Seconds between volleys (per side).
+    pub cooldown: f32,
+    /// Damage per shot.
+    pub damage: f32,
+    /// Muzzle speed of each shot (units/s), added to the ship's velocity.
+    pub muzzle_speed: f32,
+    /// Number of guns per side (shots per volley, spread along the hull).
+    pub guns: u32,
+    /// Half-angle the volley may be steered from the beam (radians).
+    pub arc: f32,
+    /// Wind-up before firing (seconds). 0 for the player; ~0.5 for a telegraphed
+    /// enemy so the shot is dodgeable.
+    pub charge_time: f32,
+    /// Port bank (the ship's left, +90° from the bow).
+    pub port: BankState,
+    /// Starboard bank (the ship's right, -90°).
+    pub starboard: BankState,
+}
+
+impl Default for Broadside {
+    fn default() -> Self {
+        Self {
+            cooldown: 1.5,
+            damage: 12.0,
+            muzzle_speed: 260.0,
+            guns: 3,
+            arc: 0.6, // ~34°
+            charge_time: 0.0,
+            port: BankState::default(),
+            starboard: BankState::default(),
+        }
+    }
+}
+
+impl Broadside {
+    /// The reload/charge state for one side.
+    pub fn side(&self, port: bool) -> &BankState {
+        if port {
+            &self.port
+        } else {
+            &self.starboard
+        }
+    }
+
+    /// Mutable reload/charge state for one side.
+    pub fn side_mut(&mut self, port: bool) -> &mut BankState {
+        if port {
+            &mut self.port
+        } else {
+            &mut self.starboard
+        }
+    }
+
+    /// True when a side has reloaded and isn't mid wind-up — i.e. it can fire now.
+    pub fn ready(&self, port: bool) -> bool {
+        let s = self.side(port);
+        s.timer <= 0.0 && s.charging <= 0.0
+    }
+}
 
 /// One cannonball's spawn state: where it appears and how fast it travels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,23 +112,15 @@ pub struct ProjectileSpawn {
 /// desired `aim` (or `None` to fire straight out the beam), clamped to `±arc` of
 /// the beam. `port` is the ship's left beam (+90° from bow), else starboard.
 pub fn broadside_direction(heading: f32, port: bool, aim: Option<Vec2>, arc: f32) -> Vec2 {
-    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+    use std::f32::consts::FRAC_PI_2;
     let beam = if port {
         heading + FRAC_PI_2
     } else {
         heading - FRAC_PI_2
     };
-    let wrap = |a: f32| {
-        let a = a.rem_euclid(TAU);
-        if a > PI {
-            a - TAU
-        } else {
-            a
-        }
-    };
     let angle = match aim {
         Some(dir) if dir.length_squared() > 1e-6 => {
-            let off = wrap(dir.to_angle() - beam).clamp(-arc, arc);
+            let off = wrap_angle(dir.to_angle() - beam).clamp(-arc, arc);
             beam + off
         }
         _ => beam,
@@ -91,6 +163,18 @@ pub fn broadside_volley(
 /// Circle-vs-circle overlap test used for cannonball hits.
 pub fn circles_overlap(a: Vec2, ra: f32, b: Vec2, rb: f32) -> bool {
     a.distance_squared(b) <= (ra + rb) * (ra + rb)
+}
+
+/// Sphere-vs-sphere overlap test — the 3D sibling of [`circles_overlap`], used
+/// where a weapon's travel isn't confined to the sim's flat plane (torpedoes).
+pub fn spheres_overlap(a: Vec3, ra: f32, b: Vec3, rb: f32) -> bool {
+    a.distance_squared(b) <= (ra + rb) * (ra + rb)
+}
+
+/// Hull damage after brace mitigation — shared by every weapon's hit system so
+/// "how much a brace cuts damage by" has exactly one home.
+pub fn braced_damage(base_damage: f32, braced: bool) -> f32 {
+    base_damage * if braced { BRACE_DAMAGE_FACTOR } else { 1.0 }
 }
 
 /// Bevy system: fire aimed broadsides, with a per-bank charge/telegraph.
@@ -218,9 +302,8 @@ pub fn collision_system(
             }
             let ship_pos = ship_tf.translation.truncate();
             if circles_overlap(proj_pos, projectile.radius, ship_pos, collider.radius) {
-                let braced = brace.is_some_and(|b| b.active);
-                let damage = projectile.damage * if braced { BRACE_DAMAGE_FACTOR } else { 1.0 };
-                hull.current -= damage;
+                hull.current -=
+                    braced_damage(projectile.damage, brace.is_some_and(|b| b.active));
                 hits.write(ShipHit {
                     position: proj_pos,
                     faction: *faction,
@@ -303,6 +386,37 @@ mod tests {
     fn overlap_detects_a_hit() {
         assert!(circles_overlap(Vec2::ZERO, 5.0, Vec2::new(8.0, 0.0), 5.0));
         assert!(!circles_overlap(Vec2::ZERO, 5.0, Vec2::new(20.0, 0.0), 5.0));
+    }
+
+    #[test]
+    fn spheres_overlap_detects_a_hit() {
+        assert!(spheres_overlap(
+            Vec3::ZERO,
+            5.0,
+            Vec3::new(8.0, 0.0, 0.0),
+            5.0
+        ));
+    }
+
+    #[test]
+    fn spheres_overlap_ignores_distant_spheres() {
+        assert!(!spheres_overlap(
+            Vec3::ZERO,
+            5.0,
+            Vec3::new(20.0, 0.0, 0.0),
+            5.0
+        ));
+    }
+
+    #[test]
+    fn braced_damage_applies_the_brace_factor() {
+        let dmg = braced_damage(100.0, true);
+        assert!((dmg - 100.0 * BRACE_DAMAGE_FACTOR).abs() < 1e-4);
+    }
+
+    #[test]
+    fn braced_damage_is_full_when_not_braced() {
+        assert!((braced_damage(100.0, false) - 100.0).abs() < 1e-4);
     }
 
     #[test]

@@ -14,14 +14,20 @@
   Single self-contained file. Transparent body. No external requests.
   Layered on top of a live 3D game inside a transparent webview.
 --------------------------------------------------------------------------------
-  ANCHORED CLUSTERS (center of screen stays clear):
+  ANCHORED CLUSTERS (center of screen stays clear except for the end-of-run
+  overlay, which only appears once the encounter has resolved):
+    - TOP-LEFT    : encounter status — wave / enemies / plundered, plus
+                    paused / AI-pilot / boarding badges
     - TOP-CENTER  : hull integrity
     - TOP-RIGHT   : ship coordinates (X / Y)
     - BOTTOM-LEFT : L-shaped frame — port & starboard broadside cooldowns
                     (left-justified, narrow top of the L) above a wider row of
-                    torpedo tubes (the foot of the L)
-    - BOTTOM-RIGHT: thrusters (boost battery) + warp cooldown on one line,
-                    warp on the far right
+                    torpedo tubes (the foot of the L), with a lock count
+    - BOTTOM-RIGHT: thrusters (boost battery) + bullet-time charge on two
+                    lines, warp cooldown gauge on the far right
+    - RIGHT EDGE (Tab) : a sliding controls panel with the keybind scheme for
+                    the active input method
+    - CENTER (on outcome): a banner announcing the run's win/loss once it ends
 --------------------------------------------------------------------------------
   ENTRY POINT (single global):
 
@@ -41,7 +47,18 @@
         { state: "ready" },
         { state: "loading", progress: 0.4 }, // progress 0..1
         { state: "empty" }
-      ]
+      ],
+      torpedoLocks: 0,       // u32, shown next to the tube row when > 0
+      aimBattery:   1.0,     // 0..1, bullet-time charge -> "BULLET TIME"
+      wave:             1,   // encounter wave number
+      enemiesRemaining: 3,   // hostiles left this wave
+      plunder:          0,   // ships boarded this run
+      paused:       false,   // shows a paused badge
+      aiPilot:      false,   // shows an AI-piloting badge
+      boarding:     { active: false, progress: 0.0 },  // progress 0..1
+      inputMethod:  "kbm",   // "kbm" | "gamepad" -> which control scheme the side panel shows
+      outcome:      "in_progress",  // "in_progress" | "cleared" | "destroyed" -> end-of-run overlay
+      controlsOpen: false    // toggle the keybind side panel (bound to Tab by the host)
     })
 
   IPC / CLICKABLE CONTROLS:
@@ -90,8 +107,9 @@
   .panel{ position:absolute; filter:drop-shadow(0 10px 18px rgba(0,0,0,.6)); }
   #pTop   { top:14px; left:50%; transform:translateX(-50%); width:320px; height:54px; }
   #pCoords{ top:14px; right:18px; width:176px; height:62px; }
+  #pStatus{ top:14px; left:18px; width:210px; height:92px; }
   #pLeft  { bottom:18px; left:18px;  width:262px; height:160px; }
-  #pRight { bottom:18px; right:18px; width:252px; height:96px; }
+  #pRight { bottom:18px; right:18px; width:252px; height:122px; }
 
   .art{ position:absolute; inset:0; width:100%; height:100%; display:block; }
 
@@ -185,12 +203,74 @@
   .tube.loading .tg{ color:var(--warn); }
   .tube.empty{ border-color:rgba(255,178,0,.14); background:rgba(0,0,0,.35); }
   .tube.empty .tg{ color:rgba(255,178,0,.22); }
+
+  /* status panel: wave / enemies / plunder + transient badges */
+  .statrow{ display:flex; align-items:baseline; justify-content:space-between; gap:6px; }
+  .statrow .lbl{ flex:0 0 auto; }
+  .statrow .readout{ font-size:13px; font-weight:bold; }
+  .badges{ display:flex; flex-direction:column; gap:2px; margin-top:3px; }
+  .badge{ font-size:9px; letter-spacing:1px; color:rgba(255,178,0,.25);
+    transition:color .15s linear, text-shadow .15s linear; }
+  .badge.on{ color:var(--amb); text-shadow:0 0 6px var(--amb-glow); }
+  .badge.on.crit{ color:var(--crit); text-shadow:0 0 6px rgba(255,47,20,.6); animation:critblink 1s steps(1,end) infinite; }
+
+  /* torpedo lock count, appended beside the tube-row label */
+  #tubeLocks{ color:var(--crit); text-shadow:0 0 6px rgba(255,47,20,.6); font-weight:bold; }
+  #tubeLocks:empty{ display:none; }
+
+  /* bullet-time (aim battery) row in the bottom-right cluster */
+  .barrow.small{ margin-top:4px; }
+  .barrow.small .bar{ height:7px; }
+
+  /* end-of-run banner, dead center — the one time the screen isn't kept clear */
+  #outcome{ position:fixed; inset:0; z-index:20; display:none;
+    align-items:center; justify-content:center; text-align:center;
+    background:rgba(4,3,1,.55); pointer-events:none; }
+  #outcome.show{ display:flex; }
+  #outcome .box{ padding:26px 44px; border:1px solid rgba(255,178,0,.4);
+    background:rgba(8,6,2,.85); box-shadow:0 0 40px rgba(0,0,0,.7), inset 0 0 30px rgba(255,178,0,.06); }
+  #outcome .headline{ font-size:20px; font-weight:bold; letter-spacing:2px; color:var(--amb);
+    text-shadow:0 0 10px var(--amb-glow); text-transform:uppercase; }
+  #outcome.lost .headline{ color:var(--crit); text-shadow:0 0 10px rgba(255,47,20,.7); }
+  #outcome .sub{ margin-top:8px; font-size:11px; letter-spacing:1px; color:rgba(255,178,0,.7); }
+
+  /* controls side panel — slides in from the right edge on Tab */
+  #controls{ position:fixed; top:0; right:0; bottom:0; z-index:15; width:280px;
+    background:rgba(6,5,2,.88); border-left:1px solid rgba(255,178,0,.3);
+    box-shadow:-14px 0 30px rgba(0,0,0,.5), inset 0 0 30px rgba(0,0,0,.5);
+    padding:20px 18px; box-sizing:border-box; overflow-y:auto;
+    transform:translateX(100%); opacity:0; pointer-events:none;
+    transition:transform .22s ease, opacity .22s ease; }
+  #controls.open{ transform:translateX(0); opacity:1; }
+  #controls h2{ margin:0 0 12px; font-size:12px; letter-spacing:3px; color:var(--amb);
+    text-shadow:0 0 6px var(--amb-glow); text-transform:uppercase; }
+  #controls .row{ display:flex; align-items:baseline; gap:10px; padding:4px 0;
+    border-bottom:1px solid rgba(255,178,0,.08); }
+  #controls .key{ flex:0 0 auto; min-width:64px; font-size:11px; font-weight:bold; color:var(--amb);
+    text-shadow:0 0 4px var(--amb-glow); }
+  #controls .desc{ font-size:11px; color:rgba(255,220,170,.75); letter-spacing:.5px; }
+  #controls .hint{ margin-top:14px; font-size:9px; letter-spacing:1px; color:rgba(255,178,0,.35); }
 </style>
 </head>
 <body>
   <div id="devbg"></div>
 
   <div id="hud">
+    <!-- TOP-LEFT : encounter status -->
+    <div class="panel" id="pStatus">
+      <canvas class="art"></canvas>
+      <div class="screen"><div class="scanband"></div><div class="glow"><div class="ui" style="justify-content:center; gap:4px;">
+        <div class="statrow"><span class="lbl">WAVE</span><span class="readout" id="stWave">1</span></div>
+        <div class="statrow"><span class="lbl">ENEMIES</span><span class="readout" id="stEnemies">0</span></div>
+        <div class="statrow"><span class="lbl">PLUNDER</span><span class="readout" id="stPlunder">0</span></div>
+        <div class="badges">
+          <span class="badge" id="bdgPaused">‖ PAUSED</span>
+          <span class="badge" id="bdgAi">◆ AI PILOT</span>
+          <span class="badge" id="bdgBoard">◎ BOARDING --%</span>
+        </div>
+      </div></div></div>
+    </div>
+
     <!-- TOP-CENTER : hull -->
     <div class="panel" id="pTop">
       <canvas class="art"></canvas>
@@ -227,21 +307,28 @@
           </div>
         </div>
         <div class="torps" style="margin-top:2px;">
-          <span class="lbl">TORPEDO TUBES</span>
+          <span class="lbl">TORPEDO TUBES <span id="tubeLocks"></span></span>
           <div class="tuberow" id="tubes"></div>
         </div>
       </div></div></div>
     </div>
 
-    <!-- BOTTOM-RIGHT : thrusters + warp on one line, warp far right -->
+    <!-- BOTTOM-RIGHT : thrusters + bullet-time on two lines, warp far right -->
     <div class="panel" id="pRight">
       <canvas class="art"></canvas>
       <div class="screen"><div class="scanband"></div><div class="glow"><div class="ui" style="justify-content:center;">
         <div style="display:flex; align-items:center; gap:14px;">
-          <div class="barrow" style="flex:1;">
-            <span class="lbl">THRUST</span>
-            <div class="bar" id="boostBar"><div class="fill"></div><div class="segs"></div></div>
-            <span class="pct readout" id="boostPct">--%</span>
+          <div style="flex:1;">
+            <div class="barrow">
+              <span class="lbl">THRUST</span>
+              <div class="bar" id="boostBar"><div class="fill"></div><div class="segs"></div></div>
+              <span class="pct readout" id="boostPct">--%</span>
+            </div>
+            <div class="barrow small">
+              <span class="lbl">AIM</span>
+              <div class="bar" id="aimBar"><div class="fill"></div><div class="segs"></div></div>
+              <span class="pct readout" id="aimPct">--%</span>
+            </div>
           </div>
           <div class="gauge warp" id="warp" style="flex:0 0 auto;">
             <svg viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="18"></circle><circle class="arc" cx="24" cy="24" r="18"></circle></svg>
@@ -250,6 +337,21 @@
         </div>
       </div></div></div>
     </div>
+  </div>
+
+  <!-- End-of-run banner (center) -->
+  <div id="outcome">
+    <div class="box">
+      <div class="headline" id="outcomeHeadline">All Waves Cleared</div>
+      <div class="sub" id="outcomeSub">Press R to sail again.</div>
+    </div>
+  </div>
+
+  <!-- Controls side panel (Tab to toggle) -->
+  <div id="controls">
+    <h2>Controls</h2>
+    <div id="controlsRows"></div>
+    <div class="hint">[Tab] close</div>
   </div>
 
 <script>
@@ -400,10 +502,15 @@
     el.cx=document.getElementById("cx"); el.cy=document.getElementById("cy");
     el.hullBar=document.getElementById("hullBar"); el.hullFill=el.hullBar.querySelector(".fill"); el.hullPct=document.getElementById("hullPct");
     el.boostBar=document.getElementById("boostBar"); el.boostFill=el.boostBar.querySelector(".fill"); el.boostPct=document.getElementById("boostPct");
+    el.aimBar=document.getElementById("aimBar"); el.aimFill=el.aimBar.querySelector(".fill"); el.aimPct=document.getElementById("aimPct");
     el.port=document.getElementById("port"); el.portArc=el.port.querySelector(".arc"); el.portCore=el.port.querySelector(".core");
     el.stbd=document.getElementById("stbd"); el.stbdArc=el.stbd.querySelector(".arc"); el.stbdCore=el.stbd.querySelector(".core");
     el.warp=document.getElementById("warp"); el.warpArc=el.warp.querySelector(".arc"); el.warpCore=el.warp.querySelector(".core");
-    el.tubes=document.getElementById("tubes");
+    el.tubes=document.getElementById("tubes"); el.tubeLocks=document.getElementById("tubeLocks");
+    el.stWave=document.getElementById("stWave"); el.stEnemies=document.getElementById("stEnemies"); el.stPlunder=document.getElementById("stPlunder");
+    el.bdgPaused=document.getElementById("bdgPaused"); el.bdgAi=document.getElementById("bdgAi"); el.bdgBoard=document.getElementById("bdgBoard");
+    el.outcome=document.getElementById("outcome"); el.outcomeHeadline=document.getElementById("outcomeHeadline"); el.outcomeSub=document.getElementById("outcomeSub");
+    el.controls=document.getElementById("controls"); el.controlsRows=document.getElementById("controlsRows");
   }
 
   window.updateHud=function(state){
@@ -423,11 +530,94 @@
       el.boostFill.style.transform="scaleX("+b+")"; el.boostPct.textContent=pct(b);
       el.boostBar.classList.toggle("warn", b<=0.2);
     }
+    if(typeof state.aimBattery==="number"){
+      var a=clamp01(state.aimBattery);
+      el.aimFill.style.transform="scaleX("+a+")"; el.aimPct.textContent=pct(a);
+      el.aimBar.classList.toggle("warn", a<=0.2);
+    }
     if(state.portCd!=null)      setGauge(el.port,el.portArc,el.portCore,state.portCd);
     if(state.starboardCd!=null) setGauge(el.stbd,el.stbdArc,el.stbdCore,state.starboardCd);
     if(state.microwarpCd!=null) setGauge(el.warp,el.warpArc,el.warpCore,state.microwarpCd);
     if(Array.isArray(state.torpedoes)) setTubes(state.torpedoes);
+    if(typeof state.torpedoLocks==="number")
+      el.tubeLocks.textContent = state.torpedoLocks>0 ? ("· LOCKED x"+state.torpedoLocks) : "";
+
+    if(typeof state.wave==="number") el.stWave.textContent=state.wave;
+    if(typeof state.enemiesRemaining==="number") el.stEnemies.textContent=state.enemiesRemaining;
+    if(typeof state.plunder==="number") el.stPlunder.textContent=state.plunder;
+    if(typeof state.paused==="boolean") el.bdgPaused.classList.toggle("on", state.paused);
+    if(typeof state.aiPilot==="boolean") el.bdgAi.classList.toggle("on", state.aiPilot);
+    if(state.boarding){
+      var active=!!state.boarding.active;
+      el.bdgBoard.classList.toggle("on", active);
+      el.bdgBoard.classList.toggle("crit", active);
+      if(active){
+        var bp=Math.round(clamp01(state.boarding.progress||0)*100);
+        el.bdgBoard.textContent="◎ BOARDING "+bp+"%";
+      } else {
+        el.bdgBoard.textContent="◎ BOARDING --%";
+      }
+    }
+
+    if(typeof state.inputMethod==="string") renderControls(state.inputMethod);
+    if(typeof state.controlsOpen==="boolean") el.controls.classList.toggle("open", state.controlsOpen);
+    if(typeof state.outcome==="string") showOutcome(state.outcome);
   };
+
+  // ---------- encounter outcome banner ----------
+  function showOutcome(outcome){
+    if(outcome==="in_progress"){ el.outcome.classList.remove("show","lost"); return; }
+    el.outcome.classList.add("show");
+    el.outcome.classList.toggle("lost", outcome==="destroyed");
+    if(outcome==="cleared"){
+      el.outcomeHeadline.textContent="All Waves Cleared";
+      el.outcomeSub.textContent="The lanes are yours. Press R to sail again.";
+    } else if(outcome==="destroyed"){
+      el.outcomeHeadline.textContent="Ship Lost To The Void";
+      el.outcomeSub.textContent="Press R to sail again.";
+    }
+  }
+
+  // ---------- controls side panel ----------
+  var CONTROLS={
+    kbm: [
+      ["W / S","Throttle forward / reverse"],
+      ["A / D","Turn to port / starboard"],
+      ["LMB / RMB","Aim & fire port / starboard broadside"],
+      ["Q","EMP — hold to track and drain a target"],
+      ["Ctrl","Torpedoes — hold to lock, release to volley"],
+      ["Shift","Microwarp — hold to place, release to warp"],
+      ["Space","Boost"],
+      ["C","Brace — cut incoming damage"],
+      ["B","Board — hold alongside a crippled hulk"],
+      ["T","Toggle AI pilot"],
+      ["P / Esc","Pause"],
+      ["R","Restart after a run ends"],
+      ["Tab","Toggle this panel"],
+    ],
+    gamepad: [
+      ["Left Stick","Throttle / steer"],
+      ["Right Stick","Aim & camera"],
+      ["LT / RT","Aim & fire port / starboard broadside"],
+      ["X","EMP — hold to track and drain a target"],
+      ["LB","Torpedoes — hold to lock, release to volley"],
+      ["RB","Microwarp — hold to place, release to warp"],
+      ["A","Boost"],
+      ["Y","Brace — cut incoming damage"],
+      ["B","Board — hold alongside a crippled hulk"],
+      ["Start","Pause / restart after a run ends"],
+      ["Tab","Toggle this panel"],
+    ],
+  };
+  var controlsMethod=null;
+  function renderControls(method){
+    if(method===controlsMethod) return;
+    controlsMethod=method;
+    var rows=CONTROLS[method]||CONTROLS.kbm;
+    el.controlsRows.innerHTML=rows.map(function(r){
+      return '<div class="row"><span class="key">'+r[0]+'</span><span class="desc">'+r[1]+'</span></div>';
+    }).join("");
+  }
 
   // cd may be { remaining, duration } (seconds) or a bare 0..1 fraction (legacy).
   function setGauge(box,arc,core,cd){
@@ -470,9 +660,11 @@
   }
 
   function startDemo(){
-    var s={ coords:{x:-1423,y:8821}, hull:0.86, boostBattery:0.62,
+    var s={ coords:{x:-1423,y:8821}, hull:0.86, boostBattery:0.62, aimBattery:1.0,
       portCd:{remaining:0,duration:1.5}, starboardCd:{remaining:0.9,duration:1.5}, microwarpCd:{remaining:0,duration:2.0},
-      torpedoes:[{state:"ready"},{state:"ready"},{state:"loading",progress:0.4},{state:"empty"}] };
+      torpedoes:[{state:"ready"},{state:"ready"},{state:"loading",progress:0.4},{state:"empty"}], torpedoLocks:0,
+      wave:2, enemiesRemaining:3, plunder:1, paused:false, aiPilot:false,
+      boarding:{active:false,progress:0}, inputMethod:"kbm", outcome:"in_progress", controlsOpen:false };
     // Count a cooldown down by dt; occasionally re-fire it back to full duration.
     function demoCd(cd,dt,refire){
       if(cd.remaining<=0){ if(Math.random()<refire) cd.remaining=cd.duration; }
@@ -489,12 +681,14 @@
       if(!boosting && s.boostBattery>0.3 && Math.random()<.02) boosting=true;
       if(boosting){ s.boostBattery-=0.05; if(s.boostBattery<=0.05) boosting=false; }
       else s.boostBattery=Math.min(1,s.boostBattery+0.012);
+      s.aimBattery=Math.max(0,Math.min(1, s.aimBattery + (Math.random()<.3?-0.08:0.03)));
       demoCd(s.portCd,0.1,.05); demoCd(s.starboardCd,0.1,.05); demoCd(s.microwarpCd,0.1,.02);
       s.torpedoes.forEach(function(t){
         if(t.state==="ready"){ if(Math.random()<.03) t.state="empty"; }
         else if(t.state==="empty"){ if(Math.random()<.06){ t.state="loading"; t.progress=0; } }
         else if(t.state==="loading"){ t.progress=(t.progress||0)+0.03; if(t.progress>=1){ t.state="ready"; t.progress=1; } }
       });
+      if(Math.random()<.01) s.enemiesRemaining=Math.max(0,s.enemiesRemaining-1);
       window.updateHud(s);
     },100);
   }
@@ -504,15 +698,18 @@
     cache(); buildTubes(TUBE_COUNT); initGauges();
     paintPanel(document.querySelector("#pTop .art"),   {hazard:true});
     paintPanel(document.querySelector("#pCoords .art"),{hazard:false});
+    paintPanel(document.querySelector("#pStatus .art"),{hazard:false});
     paintLPanel(document.querySelector("#pLeft .art"));
     paintPanel(document.querySelector("#pRight .art"), {hazard:true});
     placeDeadPixels(document.querySelector("#pTop .screen"),   [{x:.4,y:.6,c:"#000"}]);
     placeDeadPixels(document.querySelector("#pCoords .screen"),[{x:.7,y:.35,c:"var(--amb)"}]);
     placeDeadPixels(document.querySelector("#pLeft .screen"),  [{x:.22,y:.8,c:"#000"},{x:.6,y:.85,c:"#000"}]);
     placeDeadPixels(document.querySelector("#pRight .screen"), [{x:.5,y:.7,c:"var(--amb)"}]);
-    window.updateHud({ coords:{x:-1423,y:8821}, hull:0.72, boostBattery:0.45,
+    window.updateHud({ coords:{x:-1423,y:8821}, hull:0.72, boostBattery:0.45, aimBattery:1.0,
       portCd:{remaining:0,duration:1.5}, starboardCd:{remaining:0.9,duration:1.5}, microwarpCd:{remaining:1.2,duration:2.0},
-      torpedoes:[{state:"ready"},{state:"loading",progress:0.4},{state:"ready"},{state:"empty"}] });
+      torpedoes:[{state:"ready"},{state:"loading",progress:0.4},{state:"ready"},{state:"empty"}], torpedoLocks:0,
+      wave:1, enemiesRemaining:3, plunder:0, paused:false, aiPilot:false,
+      boarding:{active:false,progress:0}, inputMethod:"kbm", outcome:"in_progress", controlsOpen:false });
     scheduleGlitch();
     if(!window.__hosted) startDemo();  // demo only in standalone preview; host drives updateHud live
   }
