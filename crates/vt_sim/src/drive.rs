@@ -13,7 +13,7 @@ use bevy_math::Vec2;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 
-use crate::components::{EmpDefense, PilotIntent, Ship, SpeedScale};
+use crate::components::{EmpDefense, PilotIntent, Ship, SpeedScale, ENGAGEMENT_RANGE};
 
 /// A rechargeable overdrive. While `active` and `battery > 0`, the ship's speed
 /// is multiplied by `multiplier`. Config + live state live together so the
@@ -62,7 +62,7 @@ pub struct MicrowarpDrive {
 impl Default for MicrowarpDrive {
     fn default() -> Self {
         Self {
-            range: 675.0, // 75% of the original 900
+            range: ENGAGEMENT_RANGE,
             cooldown: 2.0,
             timer: 0.0,
             was_holding: false,

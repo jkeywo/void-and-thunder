@@ -30,6 +30,7 @@ use vt_sim::prelude::{
 
 use crate::bullet_time::AimBattery;
 use crate::input::{ControlsPanel, InputMethod, Paused, PlayerAi};
+use crate::session::GameState;
 use crate::Player;
 
 /// Mounts HUD state-gathering plus the transport systems for this target.
@@ -86,9 +87,11 @@ pub enum HudAction {
 /// `{state, progress?}`, `torpedoLocks` (u32), `aimBattery` (0..1), `wave`,
 /// `enemiesRemaining`, `plunder`, `paused`/`aiPilot` (bool), `boarding`
 /// `{active,progress}`, `inputMethod` (`"kbm"`/`"gamepad"`), `outcome`
-/// (`"in_progress"`/`"cleared"`/`"destroyed"`), and `controlsOpen` (bool). All
-/// weapon components are optional so a partial loadout still reports what it
-/// has (the HUD retains last-known values for the rest).
+/// (`"in_progress"`/`"cleared"`/`"destroyed"`), `screen`
+/// (`"start"`/`"playing"`/`"gameover"` — which full-screen card, if any, the HUD
+/// shows), and `controlsOpen` (bool). All weapon components are optional so a
+/// partial loadout still reports what it has (the HUD retains last-known values
+/// for the rest).
 #[allow(clippy::too_many_arguments)]
 fn gather_hud_state(
     player: Query<
@@ -111,69 +114,25 @@ fn gather_hud_state(
     method: Res<InputMethod>,
     battery: Res<AimBattery>,
     controls_panel: Res<ControlsPanel>,
+    state: Res<State<GameState>>,
     mut snap: ResMut<HudSnapshot>,
 ) {
-    let Ok((tf, hull, boost, broadside, warp, torps, torp_lock)) = player.single() else {
-        return;
+    let screen = match state.get() {
+        GameState::Menu => "start",
+        GameState::Playing => "playing",
+        GameState::GameOver => "gameover",
     };
 
-    // The sim's plane is XY (see `translation.truncate()` uses elsewhere in the
-    // client); z is height, ignored by the HUD.
     let mut j = String::with_capacity(384);
     j.push('{');
+    j.push_str(&format!("\"screen\":\"{screen}\""));
 
-    let (x, y) = (
-        tf.translation.x.round() as i64,
-        tf.translation.y.round() as i64,
-    );
-    j.push_str(&format!("\"coords\":{{\"x\":{x},\"y\":{y}}}"));
-
-    let hull_frac = (hull.current / hull.max).clamp(0.0, 1.0);
-    j.push_str(&format!(",\"hull\":{hull_frac:.4}"));
-
-    if let Some(b) = boost {
-        let frac = if b.battery_max > 0.0 {
-            (b.battery / b.battery_max).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        j.push_str(&format!(",\"boostBattery\":{frac:.4}"));
-    }
-
-    if let Some(b) = broadside {
-        // Per-side reload timer counts down to 0 (ready); cooldown is the full duration.
-        push_cooldown(&mut j, "portCd", b.port.timer, b.cooldown);
-        push_cooldown(&mut j, "starboardCd", b.starboard.timer, b.cooldown);
-    }
-
-    if let Some(w) = warp {
-        push_cooldown(&mut j, "microwarpCd", w.timer, w.cooldown);
-    }
-
-    if let Some(t) = torps {
-        // `loaded` is fractional: whole part = tubes ready, the fraction is the
-        // one tube currently reloading, the rest are empty.
-        let ready = t.loaded.floor().max(0.0) as u32;
-        let progress = t.loaded.fract().clamp(0.0, 1.0);
-        j.push_str(",\"torpedoes\":[");
-        for i in 0..t.tubes_max {
-            if i > 0 {
-                j.push(',');
-            }
-            if i < ready {
-                j.push_str("{\"state\":\"ready\"}");
-            } else if i == ready && ready < t.tubes_max {
-                j.push_str(&format!(
-                    "{{\"state\":\"loading\",\"progress\":{progress:.3}}}"
-                ));
-            } else {
-                j.push_str("{\"state\":\"empty\"}");
-            }
-        }
-        j.push(']');
-    }
-    let locks = torp_lock.map_or(0, |l| l.locks);
-    j.push_str(&format!(",\"torpedoLocks\":{locks}"));
+    // ---- Session and encounter state, all from resources ----
+    //
+    // These are emitted unconditionally, *before* the ship readouts, precisely
+    // because the ship may be gone: the player's hull is destroyed in the same
+    // sim step that resolves the run, so gating `outcome` on the ship existing
+    // would mean the end-of-run banner never got told the run had ended.
 
     let aim_frac = (battery.charge / battery.max).clamp(0.0, 1.0);
     j.push_str(&format!(",\"aimBattery\":{aim_frac:.4}"));
@@ -213,6 +172,69 @@ fn gather_hud_state(
     j.push_str(&format!(",\"outcome\":\"{outcome}\""));
 
     j.push_str(&format!(",\"controlsOpen\":{}", controls_panel.open));
+
+    // ---- The player ship's own readouts ----
+    //
+    // Absent before the run starts and after it ends. The HUD retains the last
+    // known value for anything missing, so these simply stop updating rather
+    // than blanking out.
+    if let Ok((tf, hull, boost, broadside, warp, torps, torp_lock)) = player.single() {
+        // The sim's plane is XY (see `translation.truncate()` uses elsewhere in
+        // the client); z is height, ignored by the HUD.
+        let (x, y) = (
+            tf.translation.x.round() as i64,
+            tf.translation.y.round() as i64,
+        );
+        j.push_str(&format!(",\"coords\":{{\"x\":{x},\"y\":{y}}}"));
+
+        let hull_frac = (hull.current / hull.max).clamp(0.0, 1.0);
+        j.push_str(&format!(",\"hull\":{hull_frac:.4}"));
+
+        if let Some(b) = boost {
+            let frac = if b.battery_max > 0.0 {
+                (b.battery / b.battery_max).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            j.push_str(&format!(",\"boostBattery\":{frac:.4}"));
+        }
+
+        if let Some(b) = broadside {
+            // Per-side reload timer counts down to 0 (ready); cooldown is the full duration.
+            push_cooldown(&mut j, "portCd", b.port.timer, b.cooldown);
+            push_cooldown(&mut j, "starboardCd", b.starboard.timer, b.cooldown);
+        }
+
+        if let Some(w) = warp {
+            push_cooldown(&mut j, "microwarpCd", w.timer, w.cooldown);
+        }
+
+        if let Some(t) = torps {
+            // `loaded` is fractional: whole part = tubes ready, the fraction is
+            // the one tube currently reloading, the rest are empty.
+            let ready = t.loaded.floor().max(0.0) as u32;
+            let progress = t.loaded.fract().clamp(0.0, 1.0);
+            j.push_str(",\"torpedoes\":[");
+            for i in 0..t.tubes_max {
+                if i > 0 {
+                    j.push(',');
+                }
+                if i < ready {
+                    j.push_str("{\"state\":\"ready\"}");
+                } else if i == ready && ready < t.tubes_max {
+                    j.push_str(&format!(
+                        "{{\"state\":\"loading\",\"progress\":{progress:.3}}}"
+                    ));
+                } else {
+                    j.push_str("{\"state\":\"empty\"}");
+                }
+            }
+            j.push(']');
+        }
+
+        let locks = torp_lock.map_or(0, |l| l.locks);
+        j.push_str(&format!(",\"torpedoLocks\":{locks}"));
+    }
 
     j.push('}');
 

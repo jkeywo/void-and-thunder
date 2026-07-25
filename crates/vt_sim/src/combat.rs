@@ -67,7 +67,9 @@ impl Default for Broadside {
         Self {
             cooldown: 1.5,
             damage: 12.0,
-            muzzle_speed: 260.0,
+            // Flat shots that arrive quickly — with [`PROJECTILE_TTL`] this also
+            // sets the bank's reach (speed × time to live).
+            muzzle_speed: 325.0,
             guns: 3,
             // 67.5° either way — a 135° arc centred straight out the beam.
             arc: std::f32::consts::FRAC_PI_2 * 0.75,
@@ -161,6 +163,82 @@ pub fn broadside_volley(
         });
     }
     out
+}
+
+/// Where a moving target will be when a shot fired now would reach it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lead {
+    /// World point the target will occupy at impact — what to put the volley
+    /// through.
+    pub point: Vec2,
+    /// Seconds of flight until then.
+    pub time: f32,
+}
+
+/// Solve the firing lead against a target moving at constant velocity.
+///
+/// Shots inherit the ship's momentum ([`broadside_volley`]), so the shooter's
+/// own velocity cancels out of the geometry: relative to the ship the shot
+/// always leaves at `muzzle_speed`, and the target closes at
+/// `target_vel - shooter_vel`. Writing that out, a shot fired at time 0 meets
+/// the target when
+///
+/// ```text
+///   (|v|² - s²)·t² + 2(d·v)·t + |d|² = 0
+/// ```
+///
+/// for `d` the offset to the target, `v` the relative velocity and `s` the
+/// muzzle speed — the earliest positive root is the flight time.
+///
+/// Returns `None` when nothing can catch the target: it is outrunning the shot,
+/// or is already on top of the muzzle. The returned `point` is the target's true
+/// world position at impact, so it can be aimed at directly — the drawn aim
+/// beams already carry the ship's momentum, so lining a beam up with this point
+/// *is* the firing solution.
+pub fn intercept_lead(
+    muzzle: Vec2,
+    muzzle_speed: f32,
+    shooter_vel: Vec2,
+    target: Vec2,
+    target_vel: Vec2,
+) -> Option<Lead> {
+    let d = target - muzzle;
+    let v = target_vel - shooter_vel;
+    let a = v.length_squared() - muzzle_speed * muzzle_speed;
+    let b = 2.0 * d.dot(v);
+    let c = d.length_squared();
+
+    // Degenerate: the target is receding at exactly the muzzle speed, so the
+    // quadratic collapses to a line.
+    let time = if a.abs() < 1e-4 {
+        if b.abs() < 1e-6 {
+            return None;
+        }
+        -c / b
+    } else {
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant < 0.0 {
+            return None; // the shot can never reach it
+        }
+        let root = discriminant.sqrt();
+        let (t0, t1) = ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a));
+        // The earliest root that is actually in the future.
+        let earliest = t0.min(t1);
+        let latest = t0.max(t1);
+        if earliest > 0.0 {
+            earliest
+        } else {
+            latest
+        }
+    };
+
+    if time <= 0.0 || !time.is_finite() {
+        return None;
+    }
+    Some(Lead {
+        point: target + target_vel * time,
+        time,
+    })
 }
 
 /// Circle-vs-circle overlap test used for cannonball hits.
@@ -295,11 +373,18 @@ pub fn collision_system(
     mut commands: Commands,
     mut hits: MessageWriter<ShipHit>,
     projectiles: Query<(Entity, &Transform, &Projectile)>,
-    mut ships: Query<(&Transform, &Collider, &Faction, &mut Hull, Option<&Brace>)>,
+    mut ships: Query<(
+        Entity,
+        &Transform,
+        &Collider,
+        &Faction,
+        &mut Hull,
+        Option<&Brace>,
+    )>,
 ) {
     for (proj_entity, proj_tf, projectile) in &projectiles {
         let proj_pos = proj_tf.translation.truncate();
-        for (ship_tf, collider, faction, mut hull, brace) in &mut ships {
+        for (ship_entity, ship_tf, collider, faction, mut hull, brace) in &mut ships {
             if !projectile.faction.hostile_to(*faction) {
                 continue;
             }
@@ -308,7 +393,9 @@ pub fn collision_system(
                 hull.current -= braced_damage(projectile.damage, brace.is_some_and(|b| b.active));
                 hits.write(ShipHit {
                     position: proj_pos,
+                    ship: ship_entity,
                     faction: *faction,
+                    damage: projectile.damage,
                 });
                 commands.entity(proj_entity).despawn();
                 break; // one ball, one hit
@@ -328,6 +415,7 @@ pub fn destruction_system(
         if hull.current <= 0.0 {
             destroyed.write(ShipDestroyed {
                 position: transform.translation.truncate(),
+                ship: entity,
                 faction: *faction,
             });
             commands.entity(entity).despawn();
@@ -458,5 +546,155 @@ mod tests {
         assert!(!Faction::Corsairs.hostile_to(Faction::Corsairs));
         assert!(Faction::Corsairs.hostile_to(Faction::Houses));
         assert!(Faction::Houses.hostile_to(Faction::Freebooters));
+    }
+
+    #[test]
+    fn a_stationary_target_needs_no_lead() {
+        let lead = intercept_lead(
+            Vec2::ZERO,
+            100.0,
+            Vec2::ZERO,
+            Vec2::new(100.0, 0.0),
+            Vec2::ZERO,
+        )
+        .expect("a sitting duck is always reachable");
+        assert!((lead.time - 1.0).abs() < 1e-3, "time was {}", lead.time);
+        assert!(
+            lead.point.distance(Vec2::new(100.0, 0.0)) < 1e-3,
+            "the mark should sit on the target, was {:?}",
+            lead.point
+        );
+    }
+
+    /// The whole point: the mark leads a crossing target, and the shot fired at
+    /// it actually arrives there at the same moment the target does.
+    #[test]
+    fn the_lead_mark_is_where_the_shot_and_the_target_meet() {
+        let muzzle = Vec2::ZERO;
+        let speed = 300.0;
+        let target = Vec2::new(400.0, 0.0);
+        let target_vel = Vec2::new(0.0, 120.0); // crossing left to right
+
+        let lead = intercept_lead(muzzle, speed, Vec2::ZERO, target, target_vel).unwrap();
+        assert!(
+            lead.point.y > 0.0,
+            "the mark should lead the target's travel"
+        );
+
+        // Fly a shot at the mark for `time` seconds and see where it lands.
+        let shot_dir = (lead.point - muzzle).normalize();
+        let shot_at_impact = muzzle + shot_dir * speed * lead.time;
+        let target_at_impact = target + target_vel * lead.time;
+        assert!(
+            shot_at_impact.distance(target_at_impact) < 1e-2,
+            "shot landed at {shot_at_impact:?}, target was at {target_at_impact:?}"
+        );
+    }
+
+    /// Shots inherit the ship's momentum, so a shooter's own velocity must cancel
+    /// out — only motion *relative* to the shooter needs leading. Two ships
+    /// travelling together are stationary with respect to each other.
+    #[test]
+    fn matching_velocities_need_no_lead() {
+        let drift = Vec2::new(90.0, -40.0);
+        let target = Vec2::new(300.0, 0.0);
+        let lead = intercept_lead(Vec2::ZERO, 300.0, drift, target, drift).unwrap();
+        // The mark still travels with the target, but the *relative* solution is
+        // the same as a standing shot: distance over muzzle speed.
+        assert!((lead.time - 1.0).abs() < 1e-3, "time was {}", lead.time);
+        assert!(lead.point.distance(target + drift * lead.time) < 1e-3);
+    }
+
+    #[test]
+    fn a_target_outrunning_the_shot_has_no_solution() {
+        // Fleeing straight down-range faster than the shot can fly.
+        assert!(intercept_lead(
+            Vec2::ZERO,
+            100.0,
+            Vec2::ZERO,
+            Vec2::new(200.0, 0.0),
+            Vec2::new(150.0, 0.0),
+        )
+        .is_none());
+
+        // And the exact-muzzle-speed case, where the quadratic degenerates.
+        assert!(intercept_lead(
+            Vec2::ZERO,
+            100.0,
+            Vec2::ZERO,
+            Vec2::new(200.0, 0.0),
+            Vec2::new(100.0, 0.0),
+        )
+        .is_none());
+    }
+
+    /// A target closing head-on is reached sooner than a standing one.
+    #[test]
+    fn a_closing_target_shortens_the_flight() {
+        let standing = intercept_lead(
+            Vec2::ZERO,
+            100.0,
+            Vec2::ZERO,
+            Vec2::new(100.0, 0.0),
+            Vec2::ZERO,
+        )
+        .unwrap();
+        let closing = intercept_lead(
+            Vec2::ZERO,
+            100.0,
+            Vec2::ZERO,
+            Vec2::new(100.0, 0.0),
+            Vec2::new(-50.0, 0.0),
+        )
+        .unwrap();
+        assert!(
+            closing.time < standing.time,
+            "closing {} should beat standing {}",
+            closing.time,
+            standing.time
+        );
+    }
+
+    /// A hit must name the hull it struck and the blow's weight — that identity
+    /// is what lets the client shake the camera for the *player's* damage only,
+    /// and the damage is what scales the shake with the hit.
+    #[test]
+    fn a_hit_names_the_ship_and_the_damage() {
+        let mut world = World::new();
+        world.init_resource::<Messages<ShipHit>>();
+
+        let ship = world
+            .spawn((
+                Transform::default(),
+                Collider { radius: 10.0 },
+                Faction::Houses,
+                Hull::new(100.0),
+            ))
+            .id();
+        world.spawn((
+            Transform::default(),
+            Projectile {
+                damage: 17.0,
+                faction: Faction::Corsairs,
+                radius: 5.0,
+            },
+        ));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(collision_system);
+        schedule.run(&mut world);
+
+        let messages = world.resource::<Messages<ShipHit>>();
+        let hit = messages
+            .iter_current_update_messages()
+            .next()
+            .copied()
+            .expect("the overlapping shot should have announced a hit");
+        assert_eq!(hit.ship, ship, "the hit should name the ship it struck");
+        assert!(
+            (hit.damage - 17.0).abs() < 1e-4,
+            "the hit should carry the shot's damage, was {}",
+            hit.damage
+        );
     }
 }

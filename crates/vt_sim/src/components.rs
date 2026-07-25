@@ -9,6 +9,15 @@
 use bevy_ecs::prelude::*;
 use bevy_math::Vec2;
 
+/// How far the ship's top-down kit reaches — the microwarp's jump range and the
+/// torpedo bay's engagement range are deliberately the same number.
+///
+/// Both are aimed from the same lifted, top-down camera, so a single reach means
+/// one ring on screen means one mental model: "this is how far I can act". They
+/// share the constant rather than each carrying their own so they cannot drift
+/// apart.
+pub const ENGAGEMENT_RANGE: f32 = 675.0;
+
 /// Which power a ship answers to. Used for friendly-fire filtering and, later,
 /// AI target selection. Names are drawn from the Settled Dark setting.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]

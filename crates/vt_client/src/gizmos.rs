@@ -15,8 +15,16 @@ const GRID_SPACING: f32 = 200.0;
 const GRID_CELLS: u32 = 30;
 /// The grid sits just below the plane so hulls float above it.
 const GRID_Z: f32 = -9.0;
-/// Length of the drawn aim beam while holding a broadside.
-const AIM_BEAM_LEN: f32 = 620.0;
+/// Half-diagonal of the lead diamond marking a predicted intercept.
+const LEAD_MARKER_R: f32 = 20.0;
+
+/// How far a bank's volley actually reaches: muzzle speed × how long a
+/// cannonball lives before it falls into the void. The drawn aim beam runs
+/// exactly this far, so the beam ends where the shots die rather than at an
+/// arbitrary length that has to be re-tuned whenever the guns change.
+fn bank_reach(bank: &Broadside) -> f32 {
+    bank.muzzle_speed * PROJECTILE_TTL
+}
 
 /// The translucent preview of where a microwarp will drop the player.
 #[derive(Component)]
@@ -72,9 +80,99 @@ pub fn draw_aim_beams(
         for shot in broadside_volley(pos, velocity.0, dir, bank) {
             let beam = shot.velocity.normalize_or_zero();
             let start = shot.position.extend(0.0);
-            let end = (shot.position + beam * AIM_BEAM_LEN).extend(0.0);
+            let end = (shot.position + beam * bank_reach(bank)).extend(0.0);
             gizmos.line(start, end, color);
         }
+    }
+}
+
+/// While a broadside is held, mark where each hostile that bank can bear on will
+/// be *when the volley gets there* — the firing lead.
+///
+/// The marker sits on the target's predicted position rather than on some
+/// offset aim point, because the aim beams already carry the ship's own
+/// momentum: putting a beam through the diamond is the firing solution. A short
+/// tail joins each target to its own mark, so the lead reads as "this much
+/// ahead" rather than as a free-floating diamond.
+///
+/// Only targets this bank could actually swing onto are marked (the solution is
+/// run through the sim's own arc clamp), and crippled hulks are left out — they
+/// are prizes to board, not threats to shoot.
+pub fn draw_aim_lead(
+    mut gizmos: Gizmos,
+    aiming: Res<Aiming>,
+    player: Query<(&Transform, &Heading, &Velocity, &Broadside, &Faction), With<Player>>,
+    targets: Query<
+        (&Transform, &Velocity, &Faction),
+        (With<Ship>, Without<Player>, Without<Disabled>),
+    >,
+) {
+    let Ok((transform, heading, velocity, bank, faction)) = player.single() else {
+        return;
+    };
+    let pos = transform.translation.truncate();
+
+    for (active, is_port) in [(aiming.port, true), (aiming.starboard, false)] {
+        if !active {
+            continue;
+        }
+        // Match the beams: bright when this side can actually fire, dim while
+        // it is still reloading.
+        let (mark, tail) = if bank.ready(is_port) {
+            (
+                Color::srgba(1.0, 0.95, 0.7, 0.9),
+                Color::srgba(1.0, 0.85, 0.4, 0.35),
+            )
+        } else {
+            (
+                Color::srgba(1.0, 0.45, 0.35, 0.5),
+                Color::srgba(1.0, 0.30, 0.25, 0.2),
+            )
+        };
+
+        for (target_tf, target_vel, target_faction) in &targets {
+            if !faction.hostile_to(*target_faction) {
+                continue;
+            }
+            let target = target_tf.translation.truncate();
+            let Some(lead) =
+                intercept_lead(pos, bank.muzzle_speed, velocity.0, target, target_vel.0)
+            else {
+                continue; // outrunning the guns
+            };
+            // A shot that would expire before arriving is out of range.
+            if lead.time > PROJECTILE_TTL {
+                continue;
+            }
+            // Where the volley would have to be thrown to make that intercept.
+            // Only mark it if this bank can actually swing that far — checked by
+            // running it through the sim's own clamp and seeing if it moved.
+            let required =
+                ((target - pos) + (target_vel.0 - velocity.0) * lead.time).normalize_or_zero();
+            let clamped = broadside_direction(heading.0, is_port, Some(required), bank.arc);
+            if clamped.dot(required) < 0.999 {
+                continue;
+            }
+
+            gizmos.line(target.extend(2.0), lead.point.extend(2.0), tail);
+            draw_diamond(&mut gizmos, lead.point, LEAD_MARKER_R, mark);
+        }
+    }
+}
+
+/// A diamond lying on the plane — the lead marker's shape, deliberately unlike
+/// the rings used for torpedo locks and boarding.
+fn draw_diamond(gizmos: &mut Gizmos, centre: Vec2, r: f32, color: Color) {
+    let corners = [
+        centre + Vec2::Y * r,
+        centre + Vec2::X * r,
+        centre - Vec2::Y * r,
+        centre - Vec2::X * r,
+    ];
+    for i in 0..corners.len() {
+        let a = corners[i];
+        let b = corners[(i + 1) % corners.len()];
+        gizmos.line(a.extend(2.0), b.extend(2.0), color);
     }
 }
 
@@ -167,6 +265,36 @@ pub fn draw_reticle(mut gizmos: Gizmos, player: Query<&PilotIntent, With<Player>
         Isometry3d::from_translation(pilot.aim_point.extend(1.0)),
         14.0,
         Color::srgba(1.0, 1.0, 1.0, 0.5),
+    );
+}
+
+/// While aiming a torpedo volley, draw the bay's reach and the lock brush under
+/// the cursor.
+///
+/// The reach ring is deliberately the same circle the microwarp draws — both are
+/// [`ENGAGEMENT_RANGE`] — so the two top-down tools read as covering the same
+/// ground rather than each having their own invisible envelope.
+pub fn draw_torpedo_range(
+    mut gizmos: Gizmos,
+    player: Query<(&Transform, &TorpedoBay, &PilotIntent), With<Player>>,
+) {
+    let Ok((transform, bay, pilot)) = player.single() else {
+        return;
+    };
+    if !pilot.torpedo_hold {
+        return;
+    }
+    let ship = transform.translation.truncate();
+    gizmos.circle(
+        Isometry3d::from_translation(ship.extend(1.0)),
+        bay.range,
+        Color::srgba(1.0, 0.55, 0.25, 0.35),
+    );
+    // The brush the cursor sweeps: anything inside it can be locked.
+    gizmos.circle(
+        Isometry3d::from_translation(pilot.aim_point.extend(1.0)),
+        bay.lock_radius,
+        Color::srgba(1.0, 0.65, 0.35, 0.45),
     );
 }
 

@@ -9,9 +9,11 @@ Black Flag*'s naval combat and *Rogue Galaxy*'s roving space pirates.
 
 ## Controls
 
-Aim with the **mouse** (or right stick). **Aiming a broadside, torpedo, or
-microwarp dilates time** — bullet-time — from a rechargeable aim battery, giving
-you a moment to line up the shot.
+Aim with the **mouse** (or right stick). **Aiming a broadside or a microwarp
+dilates time** — bullet-time — from a rechargeable aim battery, giving you a
+moment to line up the shot. Torpedo locking runs at normal speed: its locks
+accrue on their own timer as you sweep the cursor over targets, so there is
+nothing to hurry.
 
 | Key | Action |
 | --- | --- |

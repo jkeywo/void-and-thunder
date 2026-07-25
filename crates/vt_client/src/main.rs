@@ -11,8 +11,10 @@
 //! around the player's ship. So the gameplay stays a Black-Flag naval duel while
 //! the view is fully 3D — boxes for hulls, spheres for shot and worlds.
 //!
-//! Controls — aim with the mouse (or right stick). Aiming a broadside, torpedo
-//! or microwarp dilates time (bullet-time) from a rechargeable aim battery.
+//! Controls — aim with the mouse (or right stick). Aiming a broadside or a
+//! microwarp dilates time (bullet-time) from a rechargeable aim battery.
+//! Torpedo locking does not: its locks accrue on their own timer, so the sweep
+//! is unhurried already.
 //!   W / S      — throttle forward / reverse
 //!   A / D      — turn to port / starboard
 //!   LMB / RMB  — hold to aim the port / starboard broadside; the horizontal aim
@@ -61,7 +63,7 @@ use camera::{camera_orbit, CameraRig, FreeLook, MainCamera, CAM_DISTANCE, CAM_HE
 mod visuals;
 use visuals::{
     attach_empbolt_visuals, attach_projectile_visuals, attach_ship_visuals, attach_torpedo_visuals,
-    damage_tint, orient_torpedoes,
+    bank_ships, damage_tint, orient_torpedoes, tick_hit_flash,
 };
 
 mod input;
@@ -72,8 +74,9 @@ use input::{
 
 mod gizmos;
 use gizmos::{
-    draw_aim_beams, draw_boarding, draw_charge_telegraph, draw_grid, draw_microwarp_range,
-    draw_reticle, draw_torpedo_locks, microwarp_ghost, MicrowarpGhost,
+    draw_aim_beams, draw_aim_lead, draw_boarding, draw_charge_telegraph, draw_grid,
+    draw_microwarp_range, draw_reticle, draw_torpedo_locks, draw_torpedo_range, microwarp_ghost,
+    MicrowarpGhost,
 };
 
 mod effects;
@@ -84,11 +87,14 @@ use effects::{
 mod edge_markers;
 use edge_markers::{update_offscreen_markers, EdgeMarker, EDGE_MARKER_COUNT, EDGE_MARKER_SIZE};
 
+mod trails;
+use trails::TrailPlugin;
+
 mod bullet_time;
-use bullet_time::{aim_time_dilation, AimBattery};
+use bullet_time::{aim_time_dilation, AimBattery, Hitstop};
 
 mod session;
-use session::{restart, watch_outcome, GameState};
+use session::{freeze_for_menu, restart, start_run, unfreeze_for_run, watch_outcome, GameState};
 
 // ---- Presentation constants ----
 
@@ -185,6 +191,7 @@ fn main() {
         .add_plugins(SpaceSkyboxPlugin)
         .add_plugins(StarPlugin)
         .add_plugins(HudBridgePlugin)
+        .add_plugins(TrailPlugin)
         .init_state::<GameState>()
         .init_resource::<CameraRig>()
         .init_resource::<Aiming>()
@@ -196,8 +203,14 @@ fn main() {
         .init_resource::<AimCursor>()
         .init_resource::<BroadsideAim>()
         .init_resource::<ControlsPanel>()
+        .init_resource::<Hitstop>()
         .add_systems(Startup, setup)
-        // Presentation runs in every state.
+        // The start screen freezes the sim; casting off thaws it.
+        .add_systems(OnEnter(GameState::Menu), freeze_for_menu)
+        .add_systems(OnEnter(GameState::Playing), unfreeze_for_run)
+        // Presentation runs in every state. Split in two: giving sim entities
+        // their bodies, then the overlays drawn on top of them. (Bevy's system
+        // tuples top out at 20 elements, so these cannot be one list anyway.)
         .add_systems(
             Update,
             (
@@ -206,18 +219,30 @@ fn main() {
                 attach_empbolt_visuals,
                 attach_torpedo_visuals,
                 orient_torpedoes,
-                damage_tint,
+                // `bank_ships` owns each hull's rotation, so it must land after
+                // the sim's movement (FixedUpdate) has written the flat heading.
+                bank_ships,
+                tick_hit_flash,
+                damage_tint.after(tick_hit_flash),
+                microwarp_ghost,
                 camera_orbit,
+                aim_time_dilation,
+            ),
+        )
+        // Gizmo overlays: aim beams and leads, telegraphs, ranges, markers.
+        .add_systems(
+            Update,
+            (
                 draw_grid,
                 draw_aim_beams,
+                draw_aim_lead,
                 draw_charge_telegraph,
                 draw_reticle,
                 draw_torpedo_locks,
+                draw_torpedo_range,
                 draw_boarding,
                 draw_microwarp_range,
-                microwarp_ghost,
                 update_offscreen_markers,
-                aim_time_dilation,
             ),
         )
         // Juice: muzzle flashes, hit sparks, explosions, screen shake.
@@ -238,6 +263,8 @@ fn main() {
                 .run_if(in_state(GameState::Playing)),
         )
         .add_systems(Update, (track_input_method, toggle_controls_panel))
+        // Start screen: wait for the player to cast off.
+        .add_systems(Update, start_run.run_if(in_state(GameState::Menu)))
         // Game over: wait for a restart.
         .add_systems(Update, restart.run_if(in_state(GameState::GameOver)))
         .run();

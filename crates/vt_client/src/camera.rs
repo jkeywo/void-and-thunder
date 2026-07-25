@@ -7,6 +7,7 @@ use std::f32::consts::PI;
 use vt_sim::prelude::*;
 
 use crate::input::{deadzone, Aiming, InputMethod, Paused, PlayerAi};
+use crate::session::GameState;
 use crate::Player;
 
 /// Marker for the camera so we can make it orbit the player.
@@ -52,6 +53,22 @@ const LOOK_YAW_LIMIT: f32 = PI;
 const RECENTER_DELAY: f32 = 3.0;
 /// How gently the idle camera eases back to its default position.
 const RECENTER_LERP: f32 = 1.6;
+/// How far ahead of the ship the camera looks, in seconds of travel. The focus
+/// leads the hull along its velocity so you see where you are going rather than
+/// where you already are.
+const LEAD_SECS: f32 = 0.25;
+/// Cap on that lead, so a microwarp or a boost can't fling the focus off the ship.
+const LEAD_MAX: f32 = 120.0;
+/// Vertical field of view at rest, and how far it widens at full boost — the
+/// view stretches as the drive bites, then relaxes.
+const BASE_FOV: f32 = std::f32::consts::FRAC_PI_4;
+const BOOST_FOV_GAIN: f32 = 0.14;
+/// How quickly the field of view eases toward its target.
+const FOV_LERP: f32 = 5.0;
+/// How fast the attract-screen camera drifts around the ship (radians/sec).
+const MENU_ORBIT_RATE: f32 = 0.15;
+/// How fast an impact kick decays back to nothing (fraction remaining per sec).
+const KICK_DECAY: f32 = 9.0;
 
 /// Persistent free-look offset for gamepad camera control. The right stick nudges
 /// these like a mouse (rate, not absolute); the camera yaw sits at
@@ -91,6 +108,14 @@ pub struct CameraRig {
     /// camera smoothly up and out.
     dist: f32,
     trauma: f32,
+    /// A directional shove from an impact, decaying back to zero. Unlike
+    /// `trauma` — which is undirected noise — this carries *where* the blow came
+    /// from, so taking a broadside to the flank visibly knocks the view aside.
+    kick: Vec3,
+    /// Eased vertical field of view, widened while boosting.
+    fov: f32,
+    /// Attract-screen orbit angle, advanced only while on the start screen.
+    menu_orbit: f32,
     seed: u32,
 }
 
@@ -102,6 +127,9 @@ impl Default for CameraRig {
             pitch: CAM_PITCH_BASE,
             dist: CAM_DISTANCE,
             trauma: 0.0,
+            kick: Vec3::ZERO,
+            fov: BASE_FOV,
+            menu_orbit: 0.0,
             seed: 0,
         }
     }
@@ -110,6 +138,19 @@ impl Default for CameraRig {
 impl CameraRig {
     pub fn add_trauma(&mut self, amount: f32) {
         self.trauma = (self.trauma + amount).clamp(0.0, 1.0);
+    }
+
+    /// Shove the eye `amount` world units along `dir` — the direction the blow
+    /// was travelling. Kicks accumulate, so a volley of hits piles up.
+    pub fn add_kick(&mut self, dir: Vec2, amount: f32) {
+        self.kick += dir.normalize_or_zero().extend(0.0) * amount;
+        self.kick = self.kick.clamp_length_max(60.0);
+    }
+
+    /// Where the camera is currently looking, in world space. Effects use this
+    /// to fall off shake with distance from the action on screen.
+    pub fn focus(&self) -> Vec2 {
+        self.target
     }
 
     /// Next pseudo-random float in `-1.0..1.0`.
@@ -133,11 +174,19 @@ pub fn camera_orbit(
     player_ai: Res<PlayerAi>,
     windows: Query<&Window>,
     gamepads: Query<&Gamepad>,
+    state: Res<State<GameState>>,
     player: Query<
-        (&Transform, &Heading, &Velocity, &Broadside, &PilotIntent),
+        (
+            &Transform,
+            &Heading,
+            &Velocity,
+            &Broadside,
+            &PilotIntent,
+            Option<&BoostDrive>,
+        ),
         (With<Player>, Without<MainCamera>),
     >,
-    mut camera: Query<&mut Transform, With<MainCamera>>,
+    mut camera: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
 ) {
     // Camera runs on real time so it stays responsive during bullet-time; a pause
     // freezes it by zeroing the step.
@@ -175,14 +224,28 @@ pub fn camera_orbit(
         (rig.yaw, CAM_PITCH_BASE, CAM_DISTANCE);
     let mut desired_focus = rig.target;
     let mut locked = false;
-    if let Ok((transform, heading, velocity, bank, pilot)) = player.single() {
+    let mut boosting = false;
+    let on_menu = *state.get() == GameState::Menu;
+    if let Ok((transform, heading, velocity, bank, pilot, boost)) = player.single() {
         let pos = transform.translation.truncate();
-        desired_focus = pos;
+        boosting = boost.is_some_and(BoostDrive::engaged);
+        // Look where the ship is *going*, not where it is — a short lead along
+        // the velocity, capped so a boost or a warp can't fling the focus off
+        // the hull entirely.
+        desired_focus = pos + (velocity.0 * LEAD_SECS).clamp_length_max(LEAD_MAX);
         // While the AI flies, the camera stays a free-look — it doesn't snap to
         // the AI's aiming.
         let manual = !player_ai.on;
         let aiming_broadside = aiming.port || aiming.starboard;
-        if manual && (pilot.microwarp_hold || pilot.torpedo_hold) {
+        if on_menu {
+            // Attract screen: drift slowly around the parked ship behind the
+            // title card. Focus stays on the hull itself — a lead off a frozen
+            // ship would just sit the camera off-centre for no reason.
+            desired_focus = pos;
+            rig.menu_orbit = wrap_angle(rig.menu_orbit + MENU_ORBIT_RATE * dt);
+            target_yaw = heading.0 + rig.menu_orbit;
+            target_pitch = CAM_PITCH_BASE;
+        } else if manual && (pilot.microwarp_hold || pilot.torpedo_hold) {
             // Directly overhead and high up — a top-down pointer view. Both the
             // torpedo and microwarp modes stay centred on the ship (the aim
             // reticle moves within the view, the camera doesn't chase it).
@@ -228,7 +291,7 @@ pub fn camera_orbit(
         } else {
             freelook.idle += dt;
         }
-        if !locked && freelook.idle > RECENTER_DELAY {
+        if !locked && !on_menu && freelook.idle > RECENTER_DELAY {
             let forward = heading.forward();
             let reversing = velocity.0.dot(forward) < -5.0;
             let default_off = if reversing { PI } else { 0.0 };
@@ -255,15 +318,30 @@ pub fn camera_orbit(
     rig.trauma = (rig.trauma - dt * 1.4).clamp(0.0, 1.0);
     let amount = rig.trauma * rig.trauma;
     let shake = Vec3::new(rig.noise(), rig.noise(), rig.noise() * 0.5) * 26.0 * amount;
+    // Impact kick: a directional shove that springs back, on top of the noise.
+    rig.kick *= (-KICK_DECAY * dt).exp();
+    let kick = rig.kick;
 
-    let Ok(mut camera) = camera.single_mut() else {
+    // Widen the view as the boost drive bites, then relax.
+    let target_fov = if boosting {
+        BASE_FOV + BOOST_FOV_GAIN
+    } else {
+        BASE_FOV
+    };
+    rig.fov += (target_fov - rig.fov) * (1.0 - (-FOV_LERP * dt).exp());
+
+    let Ok((mut camera, mut projection)) = camera.single_mut() else {
         return;
     };
+    if let Projection::Perspective(perspective) = &mut *projection {
+        perspective.fov = rig.fov;
+    }
     // As pitch rises the camera lifts (sin) and swings overhead (cos shrinks the
     // horizontal reach); the eased distance sets how far out the eye sits.
     let look = Vec2::from_angle(rig.yaw);
     let back = Vec3::new(-look.x, -look.y, 0.0);
     let focus = rig.target.extend(0.0);
-    let eye = focus + (back * rig.pitch.cos() + Vec3::Z * rig.pitch.sin()) * rig.dist + shake;
+    let eye =
+        focus + (back * rig.pitch.cos() + Vec3::Z * rig.pitch.sin()) * rig.dist + shake + kick;
     *camera = Transform::from_translation(eye).looking_at(focus, Vec3::Z);
 }

@@ -1,7 +1,7 @@
 //! Turning sim entities into renderable meshes: attaching a mesh+material the
 //! first time a ship/projectile/bolt/torpedo appears, keeping torpedoes oriented
-//! along their flight, and tinting a ship's material by its live hull/brace/EMP
-//! state.
+//! along their flight, heeling hulls into their turns, and tinting a ship's
+//! material by its live hull/brace/EMP state.
 
 use bevy::prelude::*;
 use vt_sim::prelude::*;
@@ -10,6 +10,24 @@ use crate::{ship_mesh_label, ship_model, GameMaterials, GameMeshes};
 
 /// Render radius of a cannonball / EMP bolt (the shared sphere is unit-sized).
 pub const SHOT_RADIUS: f32 = 7.0;
+
+/// How far a hull heels over at full helm.
+const MAX_BANK: f32 = 10.0 * std::f32::consts::PI / 180.0;
+/// How quickly the roll catches up to the helm — loose enough that the hull
+/// leans into a turn and rights itself afterwards rather than snapping.
+const BANK_LERP: f32 = 6.0;
+/// How long a hull stays lit up white after taking a hit.
+const HIT_FLASH_TIME: f32 = 0.08;
+
+/// A ship's current roll about its own bow axis — the visual heel into a turn.
+/// Presentation only: the sim owns [`Heading`] and knows nothing about this.
+#[derive(Component, Default)]
+pub struct Bank(pub f32);
+
+/// Seconds of white hit-flash left on a hull. Refreshed by every hit that lands
+/// on it (see `spawn_hit_effects`), ticked down and folded into the tint here.
+#[derive(Component)]
+pub struct HitFlash(pub f32);
 
 /// Give every ship without one its faction hull: a low-poly model textured with
 /// the faction's colour variant. `base_color` starts white so the painted hull
@@ -31,7 +49,44 @@ pub fn attach_ship_visuals(
         });
         commands
             .entity(entity)
-            .insert((Mesh3d(mesh), MeshMaterial3d(material)));
+            .insert((Mesh3d(mesh), MeshMaterial3d(material), Bank::default()));
+    }
+}
+
+/// Heel each hull into its turn, up to [`MAX_BANK`].
+///
+/// The sim's `movement_system` writes `rotation = from_rotation_z(heading)` in
+/// `FixedUpdate`; this runs later in the frame and rewrites the *whole*
+/// rotation, so the two never fight over it. The roll is applied about the
+/// ship's own bow axis (local +X): port is local +Y, so a negative roll drops
+/// the port side, and `Helm::turn` is positive to port — hence the sign, which
+/// banks the hull *into* the turn rather than away from it.
+pub fn bank_ships(time: Res<Time>, mut ships: Query<(&Heading, &Helm, &mut Bank, &mut Transform)>) {
+    let dt = time.delta_secs();
+    let k = 1.0 - (-BANK_LERP * dt).exp();
+    for (heading, helm, mut bank, mut transform) in &mut ships {
+        bank.0 += (bank_target(helm.turn) - bank.0) * k;
+        transform.rotation = Quat::from_rotation_z(heading.0) * Quat::from_rotation_x(bank.0);
+    }
+}
+
+/// The roll a hull settles at for a given helm, in radians about its bow axis.
+fn bank_target(turn: f32) -> f32 {
+    -turn.clamp(-1.0, 1.0) * MAX_BANK
+}
+
+/// Burn down each hull's hit flash. `damage_tint` reads whatever is left.
+pub fn tick_hit_flash(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut flashes: Query<(Entity, &mut HitFlash)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut flash) in &mut flashes {
+        flash.0 -= dt;
+        if flash.0 <= 0.0 {
+            commands.entity(entity).remove::<HitFlash>();
+        }
     }
 }
 
@@ -96,6 +151,9 @@ pub fn orient_torpedoes(mut torps: Query<(&Torpedo, &mut Transform)>) {
 /// darker as its hull wears down, grey when crippled (boardable), a blue cast
 /// while bracing, and a cyan EMP glow as it is disabled by EMP. Faction colour
 /// lives in the texture now, so this only carries the ship's *state*.
+///
+/// A live [`HitFlash`] is blended in last, over everything else, so a hull lights
+/// up white the instant it is struck no matter what state it was already in.
 pub fn damage_tint(
     mut materials: ResMut<Assets<StandardMaterial>>,
     ships: Query<
@@ -105,17 +163,20 @@ pub fn damage_tint(
             &MeshMaterial3d<StandardMaterial>,
             Option<&Disabled>,
             Option<&Brace>,
+            Option<&HitFlash>,
         ),
         With<Ship>,
     >,
 ) {
-    for (hull, emp, material, disabled, brace) in &ships {
+    for (hull, emp, material, disabled, brace, flash) in &ships {
         let Some(mut material) = materials.get_mut(&material.0) else {
             continue;
         };
+        // How far toward white this hull is flashing right now.
+        let flash = flash.map_or(0.0, |f| (f.0 / HIT_FLASH_TIME).clamp(0.0, 1.0));
         if disabled.is_some() {
             // Crippled hulk — drifting, boardable. Washes the hull toward grey.
-            material.base_color = Color::srgb(0.42, 0.44, 0.5);
+            material.base_color = flashed(Color::srgb(0.42, 0.44, 0.5), flash);
             continue;
         }
         let frac = (hull.current / hull.max).clamp(0.0, 1.0);
@@ -133,6 +194,66 @@ pub fn damage_tint(
         r = r * (1.0 - e);
         g = g * (1.0 - e) + 0.7 * e;
         b = b * (1.0 - e) + 1.0 * e;
-        material.base_color = Color::srgb(r, g, b);
+        material.base_color = flashed(Color::srgb(r, g, b), flash);
+    }
+}
+
+/// Blend a tint toward white by `flash` (0 = untouched, 1 = fully lit).
+fn flashed(color: Color, flash: f32) -> Color {
+    if flash <= 0.0 {
+        return color;
+    }
+    let c = color.to_srgba();
+    Color::srgb(
+        c.red + (1.0 - c.red) * flash,
+        c.green + (1.0 - c.green) * flash,
+        c.blue + (1.0 - c.blue) * flash,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hull must heel *into* its turn. Port helm is `turn > 0` and port is the
+    /// ship's local +Y, so the roll about the bow axis has to be negative to
+    /// drop that side — get this backwards and every ship leans out of its
+    /// turns like a motorbike ridden wrong.
+    #[test]
+    fn a_hull_heels_into_its_turn() {
+        assert!(
+            bank_target(1.0) < 0.0,
+            "a turn to port should drop the port side"
+        );
+        assert!(
+            bank_target(-1.0) > 0.0,
+            "a turn to starboard should drop the starboard side"
+        );
+        assert_eq!(bank_target(0.0), 0.0, "a centred helm should sit level");
+    }
+
+    #[test]
+    fn the_heel_is_capped_at_ten_degrees() {
+        for turn in [1.0, 5.0, -5.0, f32::MAX] {
+            let degrees = bank_target(turn).to_degrees().abs();
+            assert!(
+                degrees <= 10.0 + 1e-3,
+                "helm {turn} rolled {degrees}°, past the 10° cap"
+            );
+        }
+        assert!((bank_target(1.0).to_degrees().abs() - 10.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_full_flash_lights_a_hull_white() {
+        let lit = flashed(Color::srgb(0.2, 0.1, 0.05), 1.0).to_srgba();
+        assert!(lit.red > 0.99 && lit.green > 0.99 && lit.blue > 0.99);
+    }
+
+    #[test]
+    fn no_flash_leaves_the_tint_alone() {
+        let base = Color::srgb(0.2, 0.1, 0.05);
+        let kept = flashed(base, 0.0).to_srgba();
+        assert!((kept.red - 0.2).abs() < 1e-6 && (kept.blue - 0.05).abs() < 1e-6);
     }
 }
