@@ -114,6 +114,50 @@ pub fn draw_boarding(mut gizmos: Gizmos, boarding: Res<Boarding>, ships: Query<&
     }
 }
 
+/// Ring every ship the torpedo bay currently has locked, so the pilot can see
+/// what a volley will actually chase before releasing. A target locked by more
+/// than one tube gets a ring per lock, drawn progressively wider — that reads as
+/// "two torpedoes are coming for this one".
+pub fn draw_torpedo_locks(
+    mut gizmos: Gizmos,
+    player: Query<&TorpedoLock, With<Player>>,
+    ships: Query<&Transform>,
+) {
+    let Ok(lock) = player.single() else {
+        return;
+    };
+    // Count the locks per target so repeats nest instead of overdrawing.
+    let mut seen: Vec<(Entity, u32)> = Vec::new();
+    for target in lock.targets.iter().take(lock.locks as usize).flatten() {
+        match seen.iter_mut().find(|(e, _)| e == target) {
+            Some((_, n)) => *n += 1,
+            None => seen.push((*target, 1)),
+        }
+    }
+
+    let color = Color::srgba(1.0, 0.55, 0.25, 0.9);
+    for (target, count) in seen {
+        let Ok(tf) = ships.get(target) else {
+            continue; // locked ship died this frame
+        };
+        let pos = tf.translation.truncate();
+        for i in 0..count {
+            let r = 38.0 + i as f32 * 7.0;
+            // A dashed ring: eight ticks, so it reads as a lock rather than a hull.
+            let segs = 8;
+            for s in 0..segs {
+                let a0 = (s as f32 / segs as f32) * TAU;
+                let a1 = a0 + TAU / (segs as f32 * 2.0);
+                gizmos.line(
+                    (pos + Vec2::from_angle(a0) * r).extend(5.0),
+                    (pos + Vec2::from_angle(a1) * r).extend(5.0),
+                    color,
+                );
+            }
+        }
+    }
+}
+
 /// Draw a small reticle on the plane where the aim cursor points.
 pub fn draw_reticle(mut gizmos: Gizmos, player: Query<&PilotIntent, With<Player>>) {
     let Ok(pilot) = player.single() else {

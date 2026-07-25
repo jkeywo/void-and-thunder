@@ -651,7 +651,19 @@ mod tests {
     #[test]
     fn decide_abilities_overrides_helm_only_when_hostiles_or_prizes_exist() {
         // Nothing to react to — the caller must not override the broadside-AI's helm.
-        let nothing = decide_abilities(Vec2::ZERO, 0.0, &[], &[], 620.0, 900.0, true, 95.0, 0, 0.0, 0.1);
+        let nothing = decide_abilities(
+            Vec2::ZERO,
+            0.0,
+            &[],
+            &[],
+            620.0,
+            900.0,
+            true,
+            95.0,
+            0,
+            0.0,
+            0.1,
+        );
         assert!(nothing.helm_override.is_none());
 
         // A hostile in range — the kit takes over steering.

@@ -24,8 +24,8 @@
 
 use bevy::prelude::*;
 use vt_sim::prelude::{
-    Boarding, BoostDrive, Broadside, Encounter, Hull, MicrowarpDrive, Outcome, Plunder,
-    TorpedoBay, TorpedoLock, BOARD_DWELL,
+    Boarding, BoostDrive, Broadside, Encounter, Hull, MicrowarpDrive, Outcome, Plunder, TorpedoBay,
+    TorpedoLock, BOARD_DWELL,
 };
 
 use crate::bullet_time::AimBattery;

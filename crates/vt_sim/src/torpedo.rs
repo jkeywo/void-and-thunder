@@ -245,10 +245,15 @@ pub fn torpedo_lock_system(
             }
             near.sort_by(|a, b| a.0.total_cmp(&b.0));
 
+            // Only *fully* loaded tubes can be locked, and only as many as the
+            // launch queue still has room for — so the lock count never promises
+            // more torpedoes than will actually leave the ship.
+            let free = launch.queue.iter().filter(|slot| slot.is_none()).count() as u32;
             let cap = (bay.loaded.floor() as u32)
                 .min(bay.tubes_max)
-                .min(TORPEDO_TUBES as u32);
-            lock.locks = if near.is_empty() {
+                .min(TORPEDO_TUBES as u32)
+                .min(free);
+            lock.locks = if near.is_empty() || cap == 0 {
                 0
             } else {
                 torpedo_locks(lock.hold_elapsed, bay.lock_interval, cap)
@@ -260,12 +265,28 @@ pub fn torpedo_lock_system(
                 lock.targets[i] = Some(near[i % near.len()].1);
             }
         } else {
-            // Release edge: hand the locked targets to the staggered launcher
-            // and consume the loaded tubes they used.
+            // Release edge: hand the locked targets to the staggered launcher and
+            // consume the tubes they used. Append into free slots rather than
+            // overwriting — a previous volley may still be draining, and clobbering
+            // it would silently destroy torpedoes the pilot has already paid for.
             if lock.was_holding && lock.locks > 0 {
-                launch.queue = lock.targets;
-                launch.timer = 0.0; // first tube launches next step
-                bay.loaded = (bay.loaded - lock.locks as f32).max(0.0);
+                let was_idle = launch.queue.iter().all(|slot| slot.is_none());
+                let mut queued = 0u32;
+                for target in lock.targets.iter().take(lock.locks as usize).flatten() {
+                    match launch.queue.iter_mut().find(|slot| slot.is_none()) {
+                        Some(slot) => {
+                            *slot = Some(*target);
+                            queued += 1;
+                        }
+                        None => break, // queue full — the cap should have prevented this
+                    }
+                }
+                // Only restart the cadence for a volley arriving into an idle
+                // launcher; an in-progress drain keeps its own rhythm.
+                if was_idle && queued > 0 {
+                    launch.timer = 0.0; // first tube launches next step
+                }
+                bay.loaded = (bay.loaded - queued as f32).max(0.0);
             }
             lock.hold_elapsed = 0.0;
             lock.locks = 0;
@@ -344,6 +365,110 @@ mod tests {
     #[test]
     fn locks_are_capped_by_loaded_tubes() {
         assert_eq!(torpedo_locks(100.0, 0.5, 4), 4);
+    }
+
+    #[test]
+    /// Locks are limited by *fully* loaded tubes: a partly reloaded magazine can
+    /// only throw as many torpedoes as it has whole tubes, and a fraction of a
+    /// tube throws nothing at all.
+    #[test]
+    fn locks_are_limited_by_loaded_tubes() {
+        use crate::components::PilotIntent;
+        use bevy_ecs::prelude::*;
+
+        // Hold aim for a long time with `loaded` tubes; how many lock on?
+        let locks_with = |loaded: f32| -> u32 {
+            let mut world = World::new();
+            world.insert_resource(Time::<()>::default());
+            let bay = world
+                .spawn((
+                    Transform::from_xyz(0.0, 0.0, 0.0),
+                    Faction::Corsairs,
+                    TorpedoBay {
+                        loaded,
+                        ..Default::default()
+                    },
+                    TorpedoLock::default(),
+                    TorpedoLaunchQueue::default(),
+                    PilotIntent {
+                        aim_point: Vec2::new(100.0, 0.0),
+                        torpedo_hold: true,
+                        ..Default::default()
+                    },
+                ))
+                .id();
+            world.spawn((Ship, Faction::Houses, Transform::from_xyz(100.0, 0.0, 0.0)));
+
+            let mut schedule = Schedule::default();
+            schedule.add_systems(torpedo_lock_system);
+            world
+                .resource_mut::<Time<()>>()
+                .advance_by(std::time::Duration::from_secs_f32(10.0));
+            schedule.run(&mut world);
+            world.get::<TorpedoLock>(bay).unwrap().locks
+        };
+
+        assert_eq!(locks_with(2.0), 2, "two loaded tubes → two locks");
+        assert_eq!(locks_with(2.9), 2, "a part-loaded third tube doesn't count");
+        assert_eq!(locks_with(0.8), 0, "no whole tube → nothing to fire");
+        assert_eq!(locks_with(6.0), 6, "a full magazine locks every tube");
+    }
+
+    /// Firing a second volley while the first is still launching must not clobber
+    /// the pending tubes — those torpedoes are already paid for.
+    #[test]
+    fn a_second_volley_does_not_clobber_one_still_launching() {
+        use crate::components::PilotIntent;
+        use bevy_ecs::prelude::*;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        let ship = world
+            .spawn((
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Faction::Corsairs,
+                TorpedoBay::default(),
+                TorpedoLock::default(),
+                // Two tubes from an earlier volley still waiting to launch.
+                TorpedoLaunchQueue::default(),
+                PilotIntent {
+                    aim_point: Vec2::new(100.0, 0.0),
+                    torpedo_hold: true,
+                    ..Default::default()
+                },
+            ))
+            .id();
+        let old = world
+            .spawn((Ship, Faction::Houses, Transform::from_xyz(400.0, 0.0, 0.0)))
+            .id();
+        world.spawn((Ship, Faction::Houses, Transform::from_xyz(100.0, 0.0, 0.0)));
+        {
+            let mut q = world.get_mut::<TorpedoLaunchQueue>(ship).unwrap();
+            q.queue[0] = Some(old);
+            q.queue[1] = Some(old);
+        }
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(torpedo_lock_system);
+        // Lock a fresh volley, then release it.
+        world
+            .resource_mut::<Time<()>>()
+            .advance_by(std::time::Duration::from_secs_f32(0.6));
+        schedule.run(&mut world);
+        world.get_mut::<PilotIntent>(ship).unwrap().torpedo_hold = false;
+        schedule.run(&mut world);
+
+        let queue = world.get::<TorpedoLaunchQueue>(ship).unwrap();
+        let pending: Vec<Entity> = queue.queue.iter().flatten().copied().collect();
+        assert_eq!(
+            pending.iter().filter(|e| **e == old).count(),
+            2,
+            "the in-flight volley's tubes must survive: {pending:?}"
+        );
+        assert!(
+            pending.len() > 2,
+            "the new volley should append alongside them, got {pending:?}"
+        );
     }
 
     #[test]

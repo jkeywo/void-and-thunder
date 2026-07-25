@@ -60,20 +60,20 @@ use camera::{camera_orbit, CameraRig, FreeLook, MainCamera, CAM_DISTANCE, CAM_HE
 
 mod visuals;
 use visuals::{
-    attach_empbolt_visuals, attach_projectile_visuals, attach_ship_visuals,
-    attach_torpedo_visuals, damage_tint, orient_torpedoes,
+    attach_empbolt_visuals, attach_projectile_visuals, attach_ship_visuals, attach_torpedo_visuals,
+    damage_tint, orient_torpedoes,
 };
 
 mod input;
 use input::{
     player_input, toggle_controls_panel, toggle_pause, toggle_player_ai, track_input_method,
-    Aiming, AimCursor, BroadsideAim, ControlsPanel, InputMethod, Paused, PlayerAi,
+    AimCursor, Aiming, BroadsideAim, ControlsPanel, InputMethod, Paused, PlayerAi,
 };
 
 mod gizmos;
 use gizmos::{
     draw_aim_beams, draw_boarding, draw_charge_telegraph, draw_grid, draw_microwarp_range,
-    draw_reticle, microwarp_ghost, MicrowarpGhost,
+    draw_reticle, draw_torpedo_locks, microwarp_ghost, MicrowarpGhost,
 };
 
 mod effects;
@@ -212,6 +212,7 @@ fn main() {
                 draw_aim_beams,
                 draw_charge_telegraph,
                 draw_reticle,
+                draw_torpedo_locks,
                 draw_boarding,
                 draw_microwarp_range,
                 microwarp_ghost,

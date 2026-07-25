@@ -76,14 +76,21 @@ const AIM_CURSOR_RATE: f32 = 780.0;
 const AIM_CURSOR_MAX: f32 = 1300.0;
 
 /// Radial deadzone below which the stick reads zero, above which it is rescaled
-/// so motion starts smoothly just past the edge (5% → ~0, 100% → 100%).
+/// so motion starts smoothly just past the edge (5% → ~0) and *saturates* before
+/// the physical limit (≥ 90% → 100%).
+///
+/// The saturation matters: a real stick rarely reports a clean 1.0 on one axis —
+/// the gate is round and the springs wear — so without it a pad could never
+/// reach the full turn rate a keyboard gets for free, and steering felt sluggish
+/// by comparison.
 pub fn deadzone(v: f32) -> f32 {
     const DZ: f32 = 0.05;
+    const SATURATION: f32 = 0.90;
     let a = v.abs();
     if a < DZ {
         0.0
     } else {
-        v.signum() * (a - DZ) / (1.0 - DZ)
+        v.signum() * ((a - DZ) / (SATURATION - DZ)).min(1.0)
     }
 }
 

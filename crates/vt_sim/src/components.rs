@@ -82,14 +82,15 @@ pub struct ShipStats {
 
 impl Default for ShipStats {
     fn default() -> Self {
-        // A corsair sloop. Slow and stately: turn at 25% and top speed at 50% of
-        // the original snappy values. Drag is high (little coast/drift); thrust
-        // is scaled with it so the ship still reaches `max_speed` (eq ≈
-        // thrust/drag).
+        // A corsair sloop. Slow and stately, but handy: it turns 25% quicker than
+        // it used to and runs 25% slower, so a duel is fought by out-turning the
+        // other ship rather than out-running it. Drag is high (little
+        // coast/drift); thrust is scaled with it so the ship still reaches
+        // `max_speed` (eq ≈ thrust/drag).
         Self {
-            thrust: 1120.0,
-            turn_rate: 0.55,
-            max_speed: 170.0,
+            thrust: 840.0,
+            turn_rate: 0.6875,
+            max_speed: 127.5,
             linear_drag: 6.0,
         }
     }

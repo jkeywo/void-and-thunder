@@ -49,7 +49,9 @@ pub struct Broadside {
     pub muzzle_speed: f32,
     /// Number of guns per side (shots per volley, spread along the hull).
     pub guns: u32,
-    /// Half-angle the volley may be steered from the beam (radians).
+    /// Half-angle the volley may be steered from the beam (radians). The full
+    /// firing arc is `2 * arc`, centred straight out the beam — equal reach fore
+    /// and aft, never biased toward the bow.
     pub arc: f32,
     /// Wind-up before firing (seconds). 0 for the player; ~0.5 for a telegraphed
     /// enemy so the shot is dodgeable.
@@ -67,7 +69,8 @@ impl Default for Broadside {
             damage: 12.0,
             muzzle_speed: 260.0,
             guns: 3,
-            arc: 0.6, // ~34°
+            // 67.5° either way — a 135° arc centred straight out the beam.
+            arc: std::f32::consts::FRAC_PI_2 * 0.75,
             charge_time: 0.0,
             port: BankState::default(),
             starboard: BankState::default(),
@@ -302,8 +305,7 @@ pub fn collision_system(
             }
             let ship_pos = ship_tf.translation.truncate();
             if circles_overlap(proj_pos, projectile.radius, ship_pos, collider.radius) {
-                hull.current -=
-                    braced_damage(projectile.damage, brace.is_some_and(|b| b.active));
+                hull.current -= braced_damage(projectile.damage, brace.is_some_and(|b| b.active));
                 hits.write(ShipHit {
                     position: proj_pos,
                     faction: *faction,
@@ -364,6 +366,38 @@ mod tests {
             angle >= std::f32::consts::FRAC_PI_2 - 0.6 - 1e-3,
             "clamped angle {angle} left the arc"
         );
+    }
+
+    /// The arc must sit *centred on the beam* — the same reach toward the bow as
+    /// toward the stern. A forward bias here is what makes aiming feel like it
+    /// only swings one way.
+    #[test]
+    fn the_arc_is_centred_on_the_beam() {
+        use std::f32::consts::FRAC_PI_2;
+        let arc = Broadside::default().arc;
+        for (port, beam) in [(true, FRAC_PI_2), (false, -FRAC_PI_2)] {
+            // Ask for a direction far past each edge; both must clamp to exactly
+            // `arc` off the beam, in opposite directions.
+            let fore = broadside_direction(0.0, port, Some(Vec2::X), arc);
+            let aft = broadside_direction(0.0, port, Some(Vec2::NEG_X), arc);
+            let fore_off = wrap_angle(fore.to_angle() - beam);
+            let aft_off = wrap_angle(aft.to_angle() - beam);
+            assert!(
+                (fore_off.abs() - arc).abs() < 1e-4 && (aft_off.abs() - arc).abs() < 1e-4,
+                "port={port}: edges should sit exactly `arc` off the beam, got {fore_off} / {aft_off}"
+            );
+            assert!(
+                (fore_off + aft_off).abs() < 1e-4,
+                "port={port}: arc is lopsided — fore {fore_off} vs aft {aft_off}"
+            );
+        }
+    }
+
+    /// The default bank covers a 135° arc (67.5° either side of the beam).
+    #[test]
+    fn the_default_arc_is_135_degrees_wide() {
+        let total = Broadside::default().arc.to_degrees() * 2.0;
+        assert!((total - 135.0).abs() < 1e-3, "arc was {total}°");
     }
 
     #[test]
