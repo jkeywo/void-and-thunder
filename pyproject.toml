@@ -11,7 +11,7 @@ dependencies = [
     # The tool lives in the fleet's shared repository (a subdirectory of
     # vellum), pinned to a rev. Bumping the rev is part of a vellum bump PR —
     # see vellum's docs/handbook/bump-workflow.md.
-    "pasm @ git+https://github.com/jkeywo/vellum@40e00b8eab5301471b9b5a37d9b5ae13cd3263f8#subdirectory=pasm",
+    "pasm @ git+https://github.com/jkeywo/vellum@61cf506e096854a3e05e1a19369deb0901d298d5#subdirectory=pasm",
 ]
 
 [tool.uv]
