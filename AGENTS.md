@@ -14,7 +14,7 @@ game owns mechanics; edit upstream and re-copy, never fork the lore here).
 |---|---|
 | Simulation core | Rust, `crates/vt_sim` — Bevy ECS subcrates only (no renderer/window/asset); owns ALL game rules |
 | Client | Bevy 0.19, `crates/vt_client` — window, renderer, camera, input, HUD, audio; owns NO game rules |
-| Game data | RON under `crates/vt_client/assets/data/` via a generic `RonAssetLoader`; `vt_sim` owns the types and never touches a file |
+| Game data | RON under `crates/vt_client/assets/data/` via a generic `RonAssetLoader`; `vt_sim` owns the types and never touches a file. Each ship `.glb` carries a `.model.ron` rig sidecar beside it (trail anchors today) |
 | HUD | Authored web page `assets/ui/hud.html` with a JSON contract; wasm overlay / native Ultralight (`native-html-hud` feature) |
 | Architecture model | PASM — YAML spec under `pasm/spec/`, tool pinned from vellum |
 | Shared crates | vellum-corpus (scenario corpus), vellum-perf (corpus measurement + live capture), vellum-compose (composition bridge — the data editor's foundation); this repo is each one's driving consumer |
@@ -25,6 +25,9 @@ game owns mechanics; edit upstream and re-copy, never fork the lore here).
 - Every sim system runs in `FixedUpdate` through the ordered `SimSet` chain
   (`plugin.rs`); presentation reads interpolated poses and never writes sim
   state.
+- The design panel saves `ships.ron` *sparsely* through vellum-compose:
+  each class is diffed against the compiled-in defaults and only what
+  differs reaches the file — never hand a save path that entombs defaults.
 - Gameplay numbers live in RON, not Rust consts. `Default` impls must
   reproduce the shipped RON exactly — a test asserts it — so missing data
   degrades instead of drifting.

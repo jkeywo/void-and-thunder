@@ -29,6 +29,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use vt_sim::prelude::SimTuning;
 
+use crate::data::ships::ShipClass;
 use crate::data::{paths, FeelTuning, ShipTable};
 
 /// Absolute path of an asset in the source tree.
@@ -56,10 +57,55 @@ fn write_ron<T: Serialize>(relative: &str, value: &T) -> Result<(), String> {
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Write the class table to `ships.ron`.
+/// Write the class table to `ships.ron` — sparsely.
+///
+/// The authored file's contract is that a class only says how it differs
+/// from the compiled-in defaults, and a save must not destroy that: each
+/// edited class is diffed against `ShipClass::default()` in value-space
+/// (`vellum_compose::diff`) and only the differing fields are written, in
+/// the authored struct style (`vellum_compose::write_ron`). A class equal
+/// to the defaults writes as `()` — the take-the-defaults idiom itself.
 pub fn save_ships(table: &ShipTable) -> Result<(), String> {
-    write_ron(paths::SHIPS.trim_start_matches("data/"), table)
+    let text = sparse_ships_ron(table).map_err(|e| format!("could not save ship classes — {e}"))?;
+    write_text(paths::SHIPS.trim_start_matches("data/"), &text)
         .map_err(|e| format!("could not save ship classes — {e}"))
+}
+
+/// A value's RON-value form, via its serde serialization.
+fn value_of<T: Serialize>(value: &T) -> Result<ron::Value, String> {
+    let config = PrettyConfig::new().struct_names(false);
+    let text = ron::ser::to_string_pretty(value, config).map_err(|e| e.to_string())?;
+    vellum_compose::parse(&text).map_err(|e| e.to_string())
+}
+
+/// The class table as sparse, authored-style RON text.
+fn sparse_ships_ron(table: &ShipTable) -> Result<String, String> {
+    use ron::Value;
+    let base = value_of(&ShipClass::default())?;
+    let mut classes = Vec::new();
+    for named in &table.classes {
+        let full = value_of(&named.class)?;
+        let sparse = vellum_compose::diff(&base, &full).map_err(|e| e.to_string())?;
+        let mut entry = ron::Map::new();
+        entry.insert(
+            Value::String("name".into()),
+            Value::String(named.name.clone()),
+        );
+        entry.insert(Value::String("class".into()), sparse);
+        classes.push(Value::Map(entry));
+    }
+    let mut root = ron::Map::new();
+    root.insert(Value::String("classes".into()), Value::Seq(classes));
+    vellum_compose::write_ron(&Value::Map(root)).map_err(|e| e.to_string())
+}
+
+/// Write already-rendered text to `relative` under `assets/`.
+fn write_text(relative: &str, text: &str) -> Result<(), String> {
+    let path = asset_path(relative);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Write the game-feel tuning to `feel.tuning.ron`.
@@ -86,12 +132,48 @@ mod tests {
         let mut table = ShipTable::default();
         table.classes[0].class.stats.thrust = 1234.0;
 
-        let config = PrettyConfig::new().struct_names(false);
-        let text = ron::ser::to_string_pretty(&table, config).expect("serializes");
+        let text = sparse_ships_ron(&table).expect("sparse save renders");
         let parsed: ShipTable = ron::from_str(&text).expect("saved RON must parse");
 
         assert_eq!(parsed, table);
         assert_eq!(parsed.classes[0].class.stats.thrust, 1234.0);
+    }
+
+    /// The save is *sparse*: the authored file's contract is that a class
+    /// only says how it differs, and editing one field must not entomb
+    /// every default alongside it.
+    #[test]
+    fn a_saved_class_says_only_how_it_differs() {
+        let mut table = ShipTable::default();
+        table.classes[0].class.hull = 250.0;
+
+        let text = sparse_ships_ron(&table).expect("sparse save renders");
+        assert!(text.contains("hull: 250"), "the edit is written:\n{text}");
+        assert!(
+            !text.contains("collider"),
+            "an untouched default must not be entombed in the file:\n{text}"
+        );
+    }
+
+    /// The whole class-table pipeline in one law: save sparsely, read it
+    /// back through vellum-compose's catalog, compose each sparse class
+    /// over the defaults, and the result is the table that was saved.
+    #[test]
+    fn a_sparse_save_composes_back_to_the_edited_table() {
+        let mut table = ShipTable::default();
+        table.classes[0].class.stats.turn_rate = 9.9;
+
+        let text = sparse_ships_ron(&table).expect("sparse save renders");
+        let catalog = crate::data::compose::catalog_from_ships_ron(&text).expect("catalog builds");
+        for named in &table.classes {
+            let template = catalog.resolve(&named.name).expect("class present");
+            let composed: ShipClass = vellum_compose::extract(
+                vellum_compose::apply(&value_of(&ShipClass::default()).unwrap(), template)
+                    .expect("defaults + sparse compose"),
+            )
+            .expect("composed class extracts");
+            assert_eq!(composed, named.class);
+        }
     }
 
     #[test]

@@ -347,23 +347,35 @@ fn spawn_ribbon(
 
 // ================================== drivers ==================================
 
-/// Give every new ship a pair of drive plumes, one per stern nacelle.
+/// Give every new ship its drive plumes.
+///
+/// Anchors come from the model's rig sidecar (`<model>.model.ron`) when it
+/// has one — each hull streams from its own authored points — and fall back
+/// to the global feel-tuning nacelle pair otherwise, which is the exact
+/// pre-sidecar behaviour.
 pub fn attach_engine_trails(
     mut commands: Commands,
     assets: Res<TrailAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
-    ships: Query<Entity, (With<Ship>, Without<TrailsAttached>)>,
+    ships: Query<(Entity, &Faction), (With<Ship>, Without<TrailsAttached>)>,
     feel: Res<FeelTuning>,
+    rigs: Res<crate::data::ModelRigs>,
 ) {
     let trails = feel.trails;
-    for ship in &ships {
-        for side in [-1.0, 1.0] {
+    let fallback = [
+        Vec3::new(trails.stern_x, trails.nacelle_y, 0.0),
+        Vec3::new(trails.stern_x, -trails.nacelle_y, 0.0),
+    ];
+    for (ship, faction) in &ships {
+        let (model, _) = crate::ship_model(faction);
+        let anchors = rigs.trail_anchors(model).unwrap_or(&fallback);
+        for anchor in anchors {
             spawn_ribbon(
                 &mut commands,
                 &mut meshes,
                 &assets,
                 ship,
-                Vec3::new(trails.stern_x, trails.nacelle_y * side, 0.0),
+                *anchor,
                 RibbonCfg::from_feel(&trails.engine, trails.width_falloff),
             );
         }

@@ -20,6 +20,10 @@ ron.workspace = true
 serde.workspace = true
 # Live gameplay profiling (src/perf.rs), behind `perf-capture`.
 vellum-perf = { workspace = true, optional = true }
+# The composition pipeline (src/data/compose.rs): the design panel's sparse
+# save path diffs edited classes against defaults so authored files keep
+# saying only how they differ. Test builds get it as a dev-dependency.
+vellum-compose = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The scenario corpus (src/data/corpus.rs): every authored scenario driven
@@ -69,7 +73,7 @@ perf-capture = ["dep:vellum-perf"]
 # Only the *UI* is behind this feature. Data loading, the tuning resources and
 # scenarios are unconditional — gating those would mean a release build silently
 # ran on Default values while the tuned RON sat unread.
-dev-panel = ["dep:bevy_egui", "hot-reload"]
+dev-panel = ["dep:bevy_egui", "dep:vellum-compose", "hot-reload"]
 # Render the HTML HUD (assets/ui/hud.html) on native desktop via Ultralight →
 # Bevy texture — the canonical HUD, matching the web build. Default-on so
 # plain `cargo run -p vt_client` shows a HUD; it downloads/links the Ultralight

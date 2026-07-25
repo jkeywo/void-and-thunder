@@ -183,3 +183,30 @@ entities:
           implements its workflow on the crate later without this repo ever
           having depended on phoenix code.
       references: [scenarios, data-tuning, dev-panel]
+
+  - decision: editor-saves-sparsely-and-models-carry-sidecars
+    core:
+      status: accepted
+      confidence: confirmed
+      title: The design panel saves through the composition pipeline, and models carry rig sidecars
+      summary: >-
+        Two halves of the same convention. The panel's ships.ron save now
+        diffs each edited class against the compiled-in defaults in
+        value-space (vellum-compose diff) and writes only what differs, in
+        the authored struct style (write_ron) — so "a class only says how it
+        differs" survives being edited by a tool, where the old typed save
+        entombed every default. And each ship .glb gains a .model.ron rig
+        sidecar beside it — the fleet composition pipeline's sidecar
+        convention, grown in project-phoenix-v2 as *.model.toml — whose
+        first datum is per-model engine trail anchors, replacing the single
+        global nacelle pair every hull previously shared. The shipped
+        sidecars reproduce the old global values exactly, so landing them
+        changed nothing on screen; divergence is now a data edit, and a
+        model without a sidecar keeps the global fallback.
+      rationale:
+        - >-
+          The sparse save is proven by law, not inspection - a saved table
+          parses back equal, an untouched default never reaches the file,
+          and composing each sparse class over the defaults through the
+          vellum-compose catalog reproduces the edited table exactly.
+      references: [scenarios, data-tuning, ship-visuals, dev-panel]
