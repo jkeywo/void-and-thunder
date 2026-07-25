@@ -5970,7 +5970,7 @@ dependencies = [
 [[package]]
 name = "vellum-corpus"
 version = "0.1.0"
-source = "git+https://github.com/jkeywo/vellum?rev=8e1037f8e7023fe2ea6988c5dcef8a21936c2a11#8e1037f8e7023fe2ea6988c5dcef8a21936c2a11"
+source = "git+https://github.com/jkeywo/vellum?rev=0d47f4e6d1203e63e5a019cae8736868bc958cc9#0d47f4e6d1203e63e5a019cae8736868bc958cc9"
 dependencies = [
  "serde",
  "serde_json",
