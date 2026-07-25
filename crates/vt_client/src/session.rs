@@ -59,8 +59,13 @@ pub fn watch_outcome(encounter: Res<Encounter>, mut next: ResMut<NextState<GameS
     }
 }
 
-/// On the game-over screen, `R` (or the pad's Start) clears the field and starts
-/// a fresh run.
+/// On the game-over screen, `R` — or the pad's South or Start — clears the field
+/// and starts a fresh run.
+///
+/// South is accepted as well as Start because it is the button that began the
+/// run in the first place ([`start_run`]): a pad player who pressed A to cast
+/// off will reach for A to sail again, and Start alone left them pressing a
+/// button the card never mentioned.
 pub fn restart(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
@@ -73,9 +78,9 @@ pub fn restart(
     mut board: ResMut<BoardIntent>,
     mut next: ResMut<NextState<GameState>>,
 ) {
-    let pad_restart = gamepads
-        .iter()
-        .any(|pad| pad.just_pressed(GamepadButton::Start));
+    let pad_restart = gamepads.iter().any(|pad| {
+        pad.just_pressed(GamepadButton::South) || pad.just_pressed(GamepadButton::Start)
+    });
     if !keys.just_pressed(KeyCode::KeyR) && !pad_restart {
         return;
     }

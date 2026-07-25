@@ -565,8 +565,11 @@
   }
 
   // Last-known run stats, so the end-of-run card can report the run back even
-  // though the host stops sending ship telemetry once the ship is gone.
-  var run={wave:1, plunder:0};
+  // though the host stops sending ship telemetry once the ship is gone. The
+  // outcome and input method are kept here too so either can be re-rendered
+  // when the *other* changes — pick up a pad on the game-over screen and the
+  // card has to stop telling you to press R.
+  var run={wave:1, plunder:0, outcome:"in_progress", method:"kbm"};
 
   window.updateHud=function(state){
     if(!state) return;
@@ -615,10 +618,15 @@
       }
     }
 
-    if(typeof state.inputMethod==="string"){ renderControls(state.inputMethod); setStartPrompt(state.inputMethod); }
+    if(typeof state.inputMethod==="string"){
+      run.method=state.inputMethod;
+      renderControls(run.method);
+      setStartPrompt(run.method);
+      showOutcome(run.outcome);   // re-label the end-of-run card for the new device
+    }
     if(typeof state.controlsOpen==="boolean") el.controls.classList.toggle("open", state.controlsOpen);
     if(typeof state.screen==="string") showScreen(state.screen);
-    if(typeof state.outcome==="string") showOutcome(state.outcome);
+    if(typeof state.outcome==="string"){ run.outcome=state.outcome; showOutcome(run.outcome); }
   };
 
   // ---------- low-hull vignette ----------
@@ -649,6 +657,12 @@
       : "Press Space to cast off";
   }
 
+  // Which button the end-of-run card should name. A pad player is told to press
+  // A — the same button that started the run — not a key they aren't holding.
+  function sailAgain(method){
+    return method === "gamepad" ? "Press A to sail again." : "Press R to sail again.";
+  }
+
   // ---------- encounter outcome banner ----------
   function showOutcome(outcome){
     if(outcome==="in_progress"){ el.outcome.classList.remove("show","lost"); return; }
@@ -657,12 +671,13 @@
     // "Wave reached", not "waves cleared" — on a loss the last wave was still
     // standing when the ship went down.
     var tally = "Wave " + run.wave + " · " + run.plunder + " plundered. ";
+    var again = sailAgain(run.method);
     if(outcome==="cleared"){
       el.outcomeHeadline.textContent="All Waves Cleared";
-      el.outcomeSub.textContent=tally+"The lanes are yours. Press R to sail again.";
+      el.outcomeSub.textContent=tally+"The lanes are yours. "+again;
     } else if(outcome==="destroyed"){
       el.outcomeHeadline.textContent="Ship Lost To The Void";
-      el.outcomeSub.textContent=tally+"Press R to sail again.";
+      el.outcomeSub.textContent=tally+again;
     }
   }
 
@@ -690,7 +705,7 @@
       ["X","EMP — hold to track and drain a target"],
       ["LB","Torpedoes — hold to lock, release to volley"],
       ["RB","Microwarp — hold to place, release to warp"],
-      ["A","Boost"],
+      ["A","Boost — also starts and restarts a run"],
       ["Y","Brace — cut incoming damage"],
       ["B","Board — hold alongside a crippled hulk"],
       ["Start","Pause / restart after a run ends"],

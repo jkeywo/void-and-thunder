@@ -25,6 +25,8 @@ use bevy::render::render_resource::PrimitiveTopology;
 use std::collections::VecDeque;
 use vt_sim::prelude::*;
 
+use crate::interpolate::SmoothingSet;
+
 // ---- Engine plume tuning ----
 
 /// How far aft of a hull's centre the drives sit. Hulls are normalised to ~44
@@ -75,7 +77,11 @@ impl Plugin for TrailPlugin {
                 attach_engine_trails,
                 attach_torpedo_trails,
                 update_trails.after(attach_engine_trails),
-            ),
+            )
+                // Emitters are read off `Transform`, so run after the fixed-step
+                // smoothing or the plume would be laid down in 64 Hz hops while
+                // the hull it comes out of glides between them.
+                .after(SmoothingSet),
         );
     }
 }

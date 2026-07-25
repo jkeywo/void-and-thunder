@@ -27,9 +27,13 @@ const CAM_YAW_LERP: f32 = 2.5;
 const CAM_PITCH_BASE: f32 = 0.85;
 const CAM_PITCH_MIN: f32 = 0.35;
 const CAM_PITCH_MAX: f32 = 1.2;
-const CAM_AIM_PITCH: f32 = 0.72;
-/// How much the camera pulls in toward the ship at maximum pitch (0 = none).
-const CAM_PITCH_ZOOM: f32 = 0.4;
+/// Pitch while a broadside is held — low and near-horizontal, so the volley is
+/// sighted along the plane the way a gun crew would see it rather than looked
+/// down on from above.
+const CAM_AIM_PITCH: f32 = 0.28;
+/// How much closer the eye sits while sighting a broadside — the low angle wants
+/// to be near the hull to read as aiming along it rather than watching from afar.
+const CAM_AIM_DIST: f32 = 0.62;
 /// Near-top-down pitch used while aiming a torpedo volley or a microwarp — the
 /// camera rises directly over the ship and the aim becomes a top-down pointer.
 const CAM_TOPDOWN_PITCH: f32 = 1.5;
@@ -50,7 +54,14 @@ const LOOK_PITCH_RATE: f32 = 1.8;
 const LOOK_YAW_LIMIT: f32 = PI;
 /// Seconds of no look input before the camera eases back to its default trailing
 /// position (behind the ship when moving forward, ahead of it when reversing).
+///
+/// A pad recentres almost at once. A stick springs back to centre on its own, so
+/// "no look input" means the player has physically let go and wants the view
+/// back behind the ship; waiting three seconds for that just leaves them flying
+/// sideways. A mouse holds wherever it was left, so its offset is deliberate and
+/// gets the long delay.
 const RECENTER_DELAY: f32 = 3.0;
+const RECENTER_DELAY_PAD: f32 = 0.1;
 /// How gently the idle camera eases back to its default position.
 const RECENTER_LERP: f32 = 1.6;
 /// How far ahead of the ship the camera looks, in seconds of travel. The focus
@@ -261,7 +272,7 @@ pub fn camera_orbit(
             let dir = broadside_direction(heading.0, is_port, Some(aim_dir), bank.arc);
             target_yaw = dir.to_angle();
             target_pitch = CAM_AIM_PITCH;
-            target_dist = CAM_DISTANCE * (1.0 - CAM_PITCH_ZOOM);
+            target_dist = CAM_DISTANCE * CAM_AIM_DIST;
             locked = true;
         } else if use_pad {
             // Gamepad free-look: integrate the right stick into a persistent
@@ -291,7 +302,12 @@ pub fn camera_orbit(
         } else {
             freelook.idle += dt;
         }
-        if !locked && !on_menu && freelook.idle > RECENTER_DELAY {
+        let recenter_delay = if use_pad {
+            RECENTER_DELAY_PAD
+        } else {
+            RECENTER_DELAY
+        };
+        if !locked && !on_menu && freelook.idle > recenter_delay {
             let forward = heading.forward();
             let reversing = velocity.0.dot(forward) < -5.0;
             let default_off = if reversing { PI } else { 0.0 };

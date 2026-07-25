@@ -4,8 +4,10 @@
 //! material by its live hull/brace/EMP state.
 
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use vt_sim::prelude::*;
 
+use crate::interpolate::{overstep, SimPose};
 use crate::{ship_mesh_label, ship_model, GameMaterials, GameMeshes};
 
 /// Render radius of a cannonball / EMP bolt (the shared sphere is unit-sized).
@@ -61,12 +63,21 @@ pub fn attach_ship_visuals(
 /// ship's own bow axis (local +X): port is local +Y, so a negative roll drops
 /// the port side, and `Helm::turn` is positive to port — hence the sign, which
 /// banks the hull *into* the turn rather than away from it.
-pub fn bank_ships(time: Res<Time>, mut ships: Query<(&Heading, &Helm, &mut Bank, &mut Transform)>) {
+pub fn bank_ships(
+    time: Res<Time>,
+    fixed: Res<Time<Fixed>>,
+    mut ships: Query<(&SimPose, &Helm, &mut Bank, &mut Transform)>,
+) {
     let dt = time.delta_secs();
     let k = 1.0 - (-BANK_LERP * dt).exp();
-    for (heading, helm, mut bank, mut transform) in &mut ships {
+    // Take the heading from the interpolated pose, not the sim's stepped
+    // `Heading`: a hull turning at 64 Hz against a higher refresh rate would
+    // otherwise snap between facings while its roll eased smoothly.
+    let alpha = overstep(&fixed);
+    for (pose, helm, mut bank, mut transform) in &mut ships {
         bank.0 += (bank_target(helm.turn) - bank.0) * k;
-        transform.rotation = Quat::from_rotation_z(heading.0) * Quat::from_rotation_x(bank.0);
+        transform.rotation =
+            Quat::from_rotation_z(pose.heading_at(alpha)) * Quat::from_rotation_x(bank.0);
     }
 }
 

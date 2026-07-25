@@ -90,6 +90,11 @@ use effects::{
 mod edge_markers;
 use edge_markers::{update_offscreen_markers, EdgeMarker, EDGE_MARKER_COUNT, EDGE_MARKER_SIZE};
 
+mod interpolate;
+use interpolate::{
+    attach_sim_pose, interpolate_sim_pose, record_sim_pose, restore_sim_pose, SmoothingSet,
+};
+
 mod trails;
 use trails::TrailPlugin;
 
@@ -106,14 +111,22 @@ use session::{freeze_for_menu, restart, start_run, unfreeze_for_run, watch_outco
 // and normalised to ~44-unit length. Each faction gets a distinct hull plus the
 // pack's matching colour variant, so faction identity comes from the textured
 // paint while `damage_tint` only multiplies in the hull/brace/EMP state.
-const SHIP_MODEL_PLAYER: &str = "models/executioner.glb";
+const SHIP_MODEL_PLAYER: &str = "models/challenger.glb";
 
 /// The glb + colour-variant texture placeholder for a faction's hull.
+///
+/// The Corsairs fly the pack's chunkiest hull, because it is the one the player
+/// looks at all game. Measured across the pack's bounding boxes, the Challenger
+/// is nearly as wide as it is long and half again as tall as the Executioner it
+/// replaced — a corsair sloop with some heft rather than a flat dart. It and the
+/// Executioner simply swapped factions; every hull stays unique to its power,
+/// and each keeps its own baked texture (there is one colour variant per model
+/// in the repo, so hull and paint move together).
 fn ship_model(faction: &Faction) -> (&'static str, &'static str) {
     match faction {
         Faction::Corsairs => (
-            "models/executioner.glb",
-            "models/textures/executioner_green.png",
+            "models/challenger.glb",
+            "models/textures/challenger_purple.png",
         ),
         Faction::Houses => ("models/imperial.glb", "models/textures/imperial_red.png"),
         Faction::Janissariat => ("models/bob.glb", "models/textures/bob_orange.png"),
@@ -122,8 +135,8 @@ fn ship_model(faction: &Faction) -> (&'static str, &'static str) {
             "models/textures/dispatcher_blue.png",
         ),
         Faction::Freebooters => (
-            "models/challenger.glb",
-            "models/textures/challenger_purple.png",
+            "models/executioner.glb",
+            "models/textures/executioner_green.png",
         ),
     }
 }
@@ -213,7 +226,20 @@ fn main() {
         // The start screen freezes the sim; casting off thaws it.
         .add_systems(OnEnter(GameState::Menu), freeze_for_menu)
         .add_systems(OnEnter(GameState::Playing), unfreeze_for_run)
-        // Presentation runs in every state. Split in two: giving sim entities
+        // Smoothing: the sim steps at a fixed 64 Hz, the screen redraws far more
+        // often. Hand the sim back its authoritative pose before each step, take
+        // the new one after, and draw the blend — otherwise the whole world
+        // visibly stutters against a camera that eases on real time.
+        .add_systems(FixedFirst, restore_sim_pose)
+        .add_systems(FixedLast, record_sim_pose)
+        .add_systems(
+            Update,
+            (attach_sim_pose, interpolate_sim_pose)
+                .chain()
+                .in_set(SmoothingSet),
+        )
+        // Presentation runs in every state, and after the smoothing above so it
+        // reads the pose actually on screen. Split in two: giving sim entities
         // their bodies, then the overlays drawn on top of them. (Bevy's system
         // tuples top out at 20 elements, so these cannot be one list anyway.)
         .add_systems(
@@ -232,7 +258,8 @@ fn main() {
                 microwarp_ghost,
                 camera_orbit,
                 aim_time_dilation,
-            ),
+            )
+                .after(SmoothingSet),
         )
         // Gizmo overlays: aim beams and leads, telegraphs, ranges, markers.
         .add_systems(
@@ -248,7 +275,8 @@ fn main() {
                 draw_boarding,
                 draw_microwarp_range,
                 update_offscreen_markers,
-            ),
+            )
+                .after(SmoothingSet),
         )
         // Juice: muzzle flashes, hit sparks, explosions, screen shake.
         .add_systems(
