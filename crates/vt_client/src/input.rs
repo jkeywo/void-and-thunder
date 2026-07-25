@@ -5,6 +5,7 @@
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::time::{Real, Virtual};
+use bevy::window::{MonitorSelection, WindowMode};
 use std::f32::consts::FRAC_PI_2;
 use vt_sim::prelude::*;
 
@@ -37,7 +38,7 @@ pub struct PlayerAi {
 /// Whether the game is paused. Pausing freezes `Time<Virtual>` (and with it the
 /// whole `FixedUpdate` simulation and every virtual-time visual); real-time
 /// input still flows so the pause can be lifted.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, Copy)]
 pub struct Paused(pub bool);
 
 /// Whether the HUD's controls side panel is open (toggled with Tab).
@@ -436,6 +437,27 @@ pub fn toggle_pause(
         virt.pause();
     } else {
         virt.unpause();
+    }
+}
+
+/// Toggle borderless fullscreen with `F11`.
+///
+/// Borderless rather than exclusive fullscreen: it keeps the desktop resolution,
+/// so alt-tabbing away and back doesn't make every other window jump about, and
+/// the design panel and HUD keep the scale factor they were laid out for.
+///
+/// Deliberately *not* gated on the design panel's input guard, the way F1 isn't
+/// either. Window management should answer whatever else has focus — a player
+/// who has clicked into a text box and wants their window back should get it.
+pub fn toggle_fullscreen(keys: Res<ButtonInput<KeyCode>>, mut windows: Query<&mut Window>) {
+    if !keys.just_pressed(KeyCode::F11) {
+        return;
+    }
+    for mut window in &mut windows {
+        window.mode = match window.mode {
+            WindowMode::Windowed => WindowMode::BorderlessFullscreen(MonitorSelection::Current),
+            _ => WindowMode::Windowed,
+        };
     }
 }
 

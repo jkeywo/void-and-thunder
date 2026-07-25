@@ -11,12 +11,14 @@
 //!   so rather than letting you discover it after twenty minutes of work.
 
 use bevy::prelude::*;
+use bevy::time::Virtual;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use vt_sim::prelude::{
     Broadside, ClassId, EmpWeapon, Hull, MicrowarpDrive, ShipStats, SimTuning, TorpedoBay,
 };
 
 use crate::data::{paths, ActiveScenario, DataHandles, FeelTuning, SelectedScenario, ShipTable};
+use crate::input::Paused;
 use crate::session::GameState;
 use crate::Player;
 
@@ -46,6 +48,12 @@ pub struct DevPanel {
     pub dirty_tuning: bool,
     /// Set when the feel tuning has been edited but not yet written to disk.
     pub dirty_feel: bool,
+    /// `open` as of last frame, so opening and closing can be acted on as edges
+    /// rather than every frame.
+    was_open: bool,
+    /// What the pause state looked like before the panel took it over.
+    prior_paused: bool,
+    prior_time_paused: bool,
     /// Last save result, shown in the panel. Failing silently would look
     /// identical to succeeding, which is the worst outcome for a Save button.
     status: Option<String>,
@@ -79,6 +87,49 @@ impl DevPanel {
 pub fn toggle_panel(keys: Res<ButtonInput<KeyCode>>, mut panel: ResMut<DevPanel>) {
     if keys.just_pressed(KeyCode::F1) {
         panel.open = !panel.open;
+    }
+}
+
+/// Freeze the simulation while the panel is open.
+///
+/// Tuning a number is a poor experience against a world that is still moving:
+/// the ship you are measuring drifts out of position, waves arrive mid-thought,
+/// and a slider drag competes with a fight. So opening the panel pauses, and
+/// closing it puts back *exactly what it found*.
+///
+/// Restoring rather than simply unpausing is the whole subtlety. The panel can
+/// be opened from the title card (where time is already frozen) or over a run
+/// the player had paused themselves; blindly unpausing on close would thaw the
+/// menu or undo their pause. Both flags are captured because they are
+/// independent: `freeze_for_menu` stops the clock without setting `Paused`,
+/// which is what the HUD reads.
+///
+/// `P` still works while the panel is open (it is only blocked while the pointer
+/// is actually over the panel), so you can deliberately let the world run and
+/// watch an edit take effect. Closing the panel then returns to the pre-panel
+/// state, which is the one rule that keeps this predictable.
+pub fn panel_pauses_the_sim(
+    mut panel: ResMut<DevPanel>,
+    mut paused: ResMut<Paused>,
+    mut virt: ResMut<Time<Virtual>>,
+) {
+    if panel.open == panel.was_open {
+        return;
+    }
+    panel.was_open = panel.open;
+
+    if panel.open {
+        panel.prior_paused = paused.0;
+        panel.prior_time_paused = virt.is_paused();
+        paused.0 = true;
+        virt.pause();
+    } else {
+        paused.0 = panel.prior_paused;
+        if panel.prior_time_paused {
+            virt.pause();
+        } else {
+            virt.unpause();
+        }
     }
 }
 
@@ -361,6 +412,112 @@ fn feel_tab(ui: &mut egui::Ui, panel: &mut DevPanel, feel: &mut ResMut<FeelTunin
 /// System set for the panel's UI, so game systems can be ordered after it.
 pub fn panel_systems(app: &mut App) {
     app.init_resource::<DevPanel>()
-        .add_systems(Update, toggle_panel)
+        .add_systems(Update, (toggle_panel, panel_pauses_the_sim).chain())
         .add_systems(EguiPrimaryContextPass, (draw_panel, track_focus).chain());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drive `panel_pauses_the_sim` once against a bare world.
+    fn step(open: bool, panel: &mut DevPanel, paused: &mut Paused, virt: &mut Time<Virtual>) {
+        let mut world = World::new();
+        panel.open = open;
+        world.insert_resource(std::mem::take(panel));
+        world.insert_resource(*paused);
+        world.insert_resource(std::mem::take(virt));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(panel_pauses_the_sim);
+        schedule.run(&mut world);
+
+        *panel = world.remove_resource::<DevPanel>().unwrap();
+        *paused = *world.resource::<Paused>();
+        *virt = world.remove_resource::<Time<Virtual>>().unwrap();
+    }
+
+    /// The plain case: opening the panel stops the world, closing it starts it
+    /// again. Tuning a number against a moving target is the thing this avoids.
+    #[test]
+    fn opening_the_panel_pauses_and_closing_resumes() {
+        let (mut panel, mut paused, mut virt) = (
+            DevPanel::default(),
+            Paused(false),
+            Time::<Virtual>::default(),
+        );
+
+        step(true, &mut panel, &mut paused, &mut virt);
+        assert!(paused.0, "the HUD should say the game is paused");
+        assert!(virt.is_paused(), "the sim clock should be stopped");
+
+        step(false, &mut panel, &mut paused, &mut virt);
+        assert!(!paused.0);
+        assert!(!virt.is_paused(), "closing should start the world again");
+    }
+
+    /// A run the player paused themselves must still be paused after the panel
+    /// has been opened and closed over the top of it.
+    #[test]
+    fn closing_does_not_undo_a_pause_the_player_made() {
+        let (mut panel, mut paused, mut virt) = (
+            DevPanel::default(),
+            Paused(true),
+            Time::<Virtual>::default(),
+        );
+        virt.pause();
+
+        step(true, &mut panel, &mut paused, &mut virt);
+        step(false, &mut panel, &mut paused, &mut virt);
+
+        assert!(paused.0, "the player's own pause must survive");
+        assert!(virt.is_paused());
+    }
+
+    /// Opened from the title card, where `freeze_for_menu` has stopped the clock
+    /// without setting `Paused`. Closing must not thaw the menu — and must not
+    /// leave the HUD claiming a pause the player never asked for.
+    #[test]
+    fn closing_on_the_title_card_leaves_the_menu_frozen() {
+        let (mut panel, mut paused, mut virt) = (
+            DevPanel::default(),
+            Paused(false), // the menu freezes time without setting this
+            Time::<Virtual>::default(),
+        );
+        virt.pause();
+
+        step(true, &mut panel, &mut paused, &mut virt);
+        step(false, &mut panel, &mut paused, &mut virt);
+
+        assert!(virt.is_paused(), "the menu must stay frozen");
+        assert!(!paused.0, "and the HUD must not claim a pause");
+    }
+
+    /// Holding the panel open across frames must not keep re-capturing the prior
+    /// state, or a `P` press while it is open would be latched as the state to
+    /// restore to.
+    #[test]
+    fn holding_the_panel_open_only_acts_on_the_edge() {
+        let (mut panel, mut paused, mut virt) = (
+            DevPanel::default(),
+            Paused(false),
+            Time::<Virtual>::default(),
+        );
+
+        step(true, &mut panel, &mut paused, &mut virt);
+        // The player deliberately lets the world run to watch an edit land.
+        paused.0 = false;
+        virt.unpause();
+        step(true, &mut panel, &mut paused, &mut virt);
+        assert!(
+            !virt.is_paused(),
+            "an open panel must not re-pause every frame"
+        );
+
+        step(false, &mut panel, &mut paused, &mut virt);
+        assert!(
+            !virt.is_paused(),
+            "and closing returns to the pre-panel state"
+        );
+    }
 }

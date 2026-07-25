@@ -32,6 +32,8 @@
 //!   T          — toggle AI pilot (the AI flies the ship; you keep the camera)
 //!   P / Esc    — pause / resume
 //!   R          — restart after a run ends
+//!   F11        — toggle borderless fullscreen
+//!   F1         — design panel (dev builds only; pauses while it is open)
 //!
 //! Broadside banks reload independently (port/starboard) and their aim beams glow
 //! amber when loaded, dim red while reloading. Reverse is ~25% of forward speed.
@@ -74,8 +76,9 @@ use visuals::{
 
 mod input;
 use input::{
-    player_input, toggle_controls_panel, toggle_pause, toggle_player_ai, track_input_method,
-    AimCursor, Aiming, BroadsideAim, ControlsPanel, InputMethod, Paused, PlayerAi,
+    player_input, toggle_controls_panel, toggle_fullscreen, toggle_pause, toggle_player_ai,
+    track_input_method, AimCursor, Aiming, BroadsideAim, ControlsPanel, InputMethod, Paused,
+    PlayerAi,
 };
 
 mod gizmos;
@@ -318,6 +321,9 @@ fn main() {
             Update,
             (track_input_method, toggle_controls_panel).run_if(game_has_input),
         )
+        // Window management answers whatever else has focus, so it is not gated
+        // on the design panel's input guard.
+        .add_systems(Update, toggle_fullscreen)
         // Start screen: wait for the player to cast off.
         .add_systems(
             Update,
