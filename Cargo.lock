@@ -5968,9 +5968,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "vellum-compose"
+version = "0.1.0"
+source = "git+https://github.com/jkeywo/vellum?rev=efdb2d034e07baadd93e3cbf257ba8b3a3a571a9#efdb2d034e07baadd93e3cbf257ba8b3a3a571a9"
+dependencies = [
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "vellum-corpus"
 version = "0.1.0"
-source = "git+https://github.com/jkeywo/vellum?rev=0d47f4e6d1203e63e5a019cae8736868bc958cc9#0d47f4e6d1203e63e5a019cae8736868bc958cc9"
+source = "git+https://github.com/jkeywo/vellum?rev=efdb2d034e07baadd93e3cbf257ba8b3a3a571a9#efdb2d034e07baadd93e3cbf257ba8b3a3a571a9"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "vellum-perf"
+version = "0.1.0"
+source = "git+https://github.com/jkeywo/vellum?rev=efdb2d034e07baadd93e3cbf257ba8b3a3a571a9#efdb2d034e07baadd93e3cbf257ba8b3a3a571a9"
 dependencies = [
  "serde",
  "serde_json",
@@ -5991,7 +6009,9 @@ dependencies = [
  "ron",
  "serde",
  "ul-next",
+ "vellum-compose",
  "vellum-corpus",
+ "vellum-perf",
  "vt_sim",
  "wasm-bindgen",
 ]

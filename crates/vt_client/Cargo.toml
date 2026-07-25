@@ -18,12 +18,18 @@ vt_sim.workspace = true
 # Tuning/scenario data is RON (see assets/data/ and src/data/).
 ron.workspace = true
 serde.workspace = true
+# Live gameplay profiling (src/perf.rs), behind `perf-capture`.
+vellum-perf = { workspace = true, optional = true }
 
 [dev-dependencies]
-# The scenario corpus (tests/scenario_corpus.rs): every authored scenario
-# driven headlessly by the AI pilot, batched and reported. Dev-only — nothing
-# from it reaches a shipped build.
+# The scenario corpus (src/data/corpus.rs): every authored scenario driven
+# headlessly by the AI pilot, batched, measured, and reported. Dev-only —
+# nothing from it reaches a shipped build.
 vellum-corpus.workspace = true
+vellum-perf.workspace = true
+# The composition bridge (src/data/compose.rs): ship classes as a template
+# catalog, proven equivalent to the typed path — the data editor's foundation.
+vellum-compose.workspace = true
 
 # On the web, Bevy's audio is disabled (it doesn't play nicely in wasm); sound is
 # routed through a WebAudio JS shim instead, called via wasm-bindgen.
@@ -52,6 +58,10 @@ fast-compile = ["bevy/dynamic_linking"]
 # forfeits the determinism `fixed-update-sim` buys — a run whose tuning moved
 # mid-flight is not reproducible from its inputs alone.
 hot-reload = ["bevy/file_watcher"]
+# Live frame sampling into a vellum-perf capture, written to
+# perf-capture.json on exit. Native-only in practice (the writer needs a
+# filesystem); the web build never enables it.
+perf-capture = ["dep:vellum-perf"]
 # The in-game design panel: pick an entity or a ship class and move its numbers
 # with sliders and text boxes, live, then save them back to assets/data/.
 # Implies hot-reload so an external edit and a panel edit behave the same.

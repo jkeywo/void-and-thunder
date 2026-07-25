@@ -18,6 +18,7 @@
 use bevy::ecs::world::CommandQueue;
 use bevy::prelude::*;
 use vellum_corpus::{drive, Budget, Provenance, Report, StallGuard, Tally};
+use vellum_perf::{compare, render, worst, Baseline, Profile, Recorder, Unit, Verdict};
 use vt_sim::prelude::*;
 
 use super::scenario::{director_for, spawn_scenario, Scenario};
@@ -45,11 +46,14 @@ struct CaseRecord {
     player_alive: bool,
 }
 
-/// The corpus summary: outcome counts and the decisive rate.
+/// The corpus summary: outcome counts, the decisive rate, and the perf
+/// summaries — a vellum-perf capture riding inside a vellum-corpus report as
+/// plain serde data, which is the whole envelope-composition story.
 #[derive(Debug, serde::Serialize)]
 struct Summary {
     outcomes: Tally<&'static str>,
     decisive_permille: u32,
+    perf: std::collections::BTreeMap<String, vellum_perf::MetricSummary>,
 }
 
 fn outcome_label(outcome: Outcome) -> &'static str {
@@ -79,8 +83,10 @@ fn observe(world: &mut World) -> (u32, u32, u32, usize) {
     )
 }
 
-/// Drive one scenario once, AI-piloted, under one seed.
-fn run_case(scenario: &Scenario, seed: u32) -> CaseRecord {
+/// Drive one scenario once, AI-piloted, under one seed. The recorder takes
+/// one wall-clock sample per simulated second — sim throughput, measured
+/// from outside the sim, per the measurement contract.
+fn run_case(scenario: &Scenario, seed: u32, recorder: &mut Recorder) -> CaseRecord {
     let table = ShipTable::default();
     let mut h = Harness::new();
     h.world.insert_resource(SystemBounds {
@@ -107,11 +113,18 @@ fn run_case(scenario: &Scenario, seed: u32) -> CaseRecord {
         .entity_mut(protagonist)
         .insert(AiController::piloting());
 
+    let metric = format!("{}.sim-second-ms", scenario.name);
     let mut stall = StallGuard::new(STALL_SECONDS);
     let mut stalled = false;
     let mut sim_seconds = 0;
     for second in 0..CASE_SECONDS {
+        let started = std::time::Instant::now();
         h.run(OBSERVE_EVERY, STEP);
+        recorder.sample(
+            &metric,
+            Unit::Millis,
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
         sim_seconds = second + 1;
         if h.world.resource::<Encounter>().outcome != Outcome::InProgress {
             break;
@@ -154,12 +167,25 @@ mod tests {
         .map(|text| ron::from_str(text).expect("authored scenarios parse"))
         .collect();
 
+        let mut recorder = Recorder::new();
         let batch = drive(
             0..(authored.len() as u64 * SEEDS),
             Budget::cases(authored.len() as u64 * SEEDS),
             |case| {
                 let scenario = &authored[(case / SEEDS) as usize];
-                run_case(scenario, (case % SEEDS) as u32)
+                run_case(scenario, (case % SEEDS) as u32, &mut recorder)
+            },
+        );
+        let capture = recorder.finish(
+            "scenario-corpus",
+            Profile {
+                runtime: "headless".into(),
+                build: if cfg!(debug_assertions) {
+                    "dev".into()
+                } else {
+                    "release".into()
+                },
+                ..Profile::default()
             },
         );
 
@@ -207,11 +233,27 @@ mod tests {
             summary: Summary {
                 decisive_permille: vellum_corpus::permille(decisive, outcomes.total()),
                 outcomes,
+                perf: capture.summaries.clone(),
             },
             records: batch.records,
         };
         // Visible under `cargo test -- --nocapture`; the shape CI tooling
         // will pick up once corpus reports become artifacts.
         eprintln!("{}", report.to_json());
+
+        // The baseline comparison is warnings-first, exactly as the
+        // measurement contract says: findings are printed for a human, and
+        // the only assertion is that the *contract* held — every baselined
+        // metric was measured in its declared unit. Values are benchmark
+        // evidence; a noisy CI runner must never turn them into a red build.
+        let baseline: Baseline = ron::from_str(include_str!("../../perf/corpus-baseline.ron"))
+            .expect("the perf baseline parses");
+        let findings = compare(&capture, &baseline);
+        eprintln!("{}", render(&findings));
+        assert_ne!(
+            worst(&findings),
+            Verdict::Incomparable,
+            "a baselined metric is missing or mis-united: {findings:?}"
+        );
     }
 }

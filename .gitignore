@@ -50,3 +50,6 @@ target-verify/
 
 # uv caches
 .uv-cache*/
+
+# Live perf captures (perf-capture feature) — runtime debris, never committed
+perf-capture.json
