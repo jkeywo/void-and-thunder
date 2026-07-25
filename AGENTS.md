@@ -17,7 +17,7 @@ game owns mechanics; edit upstream and re-copy, never fork the lore here).
 | Game data | RON under `crates/vt_client/assets/data/` via a generic `RonAssetLoader`; `vt_sim` owns the types and never touches a file |
 | HUD | Authored web page `assets/ui/hud.html` with a JSON contract; wasm overlay / native Ultralight (`native-html-hud` feature) |
 | Architecture model | PASM — YAML spec under `pasm/spec/`, tool pinned from vellum |
-| Shared crates | none yet — this repo is the designated first consumer for vellum-corpus (scenarios), vellum-perf (profiling), and vellum-compose (data editor) |
+| Shared crates | vellum-corpus (scenario corpus), vellum-perf (corpus measurement + live capture), vellum-compose (composition bridge — the data editor's foundation); this repo is each one's driving consumer |
 | CI | fleet-ci caller (`.github/workflows/ci.yml`) → pasm gates, clippy `-D warnings`, tests, Trunk build, Pages deploy |
 
 ## Project rules
@@ -61,6 +61,7 @@ uv run pasm validate pasm/spec
 cargo run -p vt_client
 cargo run -p vt_client --features fast-compile        # dynamic linking
 cargo run -p vt_client --features hot-reload          # RON file watching
+cargo run -p vt_client --features perf-capture        # writes perf-capture.json on exit
 
 # Web build
 trunk serve                        # http://localhost:8080

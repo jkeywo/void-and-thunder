@@ -39,6 +39,12 @@ pub mod ships;
 #[cfg(test)]
 mod corpus;
 
+// The composition bridge is the data editor's foundation, test-gated until
+// the editor arrives: ship classes as a vellum-compose template catalog,
+// proven equivalent to the typed path against the real ships.ron.
+#[cfg(test)]
+mod compose;
+
 pub use feel::FeelTuning;
 pub use scenario::{director_for, spawn_scenario, Scenario};
 pub use ships::{set_director, ShipTable};

@@ -156,3 +156,30 @@ entities:
           a stalled encounter — except the Test Range, whose steady-state
           stall is exactly what it is for.
       references: [scenarios, test-harness, spawn-director]
+
+  - decision: perf-and-compose-first-consumer
+    core:
+      status: accepted
+      confidence: confirmed
+      title: This repo drives vellum-perf and vellum-compose into existence
+      summary: >-
+        Per the fleet rule that a new shared crate lands only with a driving
+        consumer, this repo wires both remaining planned crates. vellum-perf:
+        the scenario corpus times every simulated second (sim throughput,
+        measured from outside the sim) and compares against a versioned RON
+        baseline warnings-first — values are benchmark evidence, and the only
+        assertion is that the measurement contract held; live frame sampling
+        ships behind the perf-capture feature, writing a capture JSON on
+        exit. vellum-compose: ship classes double as a template catalog, and
+        the bridge proves value-space composition exactly reproduces the
+        typed loader against the real ships.ron — including RON's field: ()
+        take-the-defaults idiom, which the bridge's first run caught the
+        value layer flattening. The data editor builds on that equivalence
+        instead of re-earning it.
+      rationale:
+        - >-
+          vellum-perf's contract is project-phoenix-v2's performance PRD
+          (its issue 868) — designed for phoenix, proven here, so phoenix
+          implements its workflow on the crate later without this repo ever
+          having depended on phoenix code.
+      references: [scenarios, data-tuning, dev-panel]

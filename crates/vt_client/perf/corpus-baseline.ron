@@ -1,0 +1,25 @@
+// Perf baseline for the scenario corpus (vellum-perf). Versioned and
+// reviewable: moving a number here is a diff a human reads.
+//
+// Warnings-first, and lopsidedly so: dev-profile CI runners are noisy
+// neighbours, so the tolerances are wide enough that only a collapse (or a
+// contract breach — missing metric, wrong unit) says anything at all. The
+// `expected` values were measured on a dev-profile desktop run; treat drift
+// findings as a prompt to look, never as a verdict.
+(
+    scenario: "scenario-corpus",
+    expectations: {
+        "Skirmish.sim-second-ms": (
+            unit: millis,
+            statistic: p95,
+            expected: 10.0,
+            tolerance: ( warn: 4.0, fail: 100.0 ),
+        ),
+        "Test Range.sim-second-ms": (
+            unit: millis,
+            statistic: p95,
+            expected: 10.0,
+            tolerance: ( warn: 4.0, fail: 100.0 ),
+        ),
+    },
+)

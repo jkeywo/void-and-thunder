@@ -56,6 +56,11 @@ use dev::{game_has_input, game_has_pointer, DevPanelPlugin};
 mod audio;
 use audio::SfxPlugin;
 
+// Live gameplay profiling — a presentation-side frame sampler writing a
+// vellum-perf capture on exit. The collector never touches the sim.
+#[cfg(feature = "perf-capture")]
+mod perf;
+
 mod render;
 use render::{space_skybox, SpaceSkyboxAsset, SpaceSkyboxPlugin};
 
@@ -218,6 +223,16 @@ fn main() {
         // input guards below can be unconditional.
         .add_plugins(DevPanelPlugin)
         .add_plugins(SfxPlugin)
+        .add_plugins({
+            #[cfg(feature = "perf-capture")]
+            {
+                perf::PerfPlugin
+            }
+            #[cfg(not(feature = "perf-capture"))]
+            {
+                |_: &mut App| {}
+            }
+        })
         .add_plugins(SpaceSkyboxPlugin)
         .add_plugins(StarPlugin)
         .add_plugins(HudBridgePlugin)
