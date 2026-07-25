@@ -31,6 +31,7 @@ use std::marker::PhantomData;
 use vt_sim::prelude::SimTuning;
 
 pub mod feel;
+pub mod rig;
 pub mod scenario;
 pub mod ships;
 
@@ -39,13 +40,16 @@ pub mod ships;
 #[cfg(test)]
 mod corpus;
 
-// The composition bridge is the data editor's foundation, test-gated until
-// the editor arrives: ship classes as a vellum-compose template catalog,
-// proven equivalent to the typed path against the real ships.ron.
+// The composition bridge: ship classes as a vellum-compose template catalog,
+// proven equivalent to the typed path against the real ships.ron. The design
+// panel's sparse save path consumes vellum-compose directly; this bridge is
+// the test instrument that keeps value-space and the typed loader honest
+// with each other (including for every sparse file the panel writes).
 #[cfg(test)]
-mod compose;
+pub(crate) mod compose;
 
 pub use feel::FeelTuning;
+pub use rig::ModelRigs;
 pub use scenario::{director_for, spawn_scenario, Scenario};
 pub use ships::{set_director, ShipTable};
 
@@ -65,6 +69,17 @@ pub mod paths {
 
     /// Every scenario, as `(label, path)`. The design panel lists these.
     pub const SCENARIOS: &[(&str, &str)] = &[("Skirmish", SKIRMISH), ("Test Range", TEST_RANGE)];
+
+    /// Every ship model's rig sidecar, as `(model path, sidecar path)` — the
+    /// sidecar sits beside its `.glb`, per the fleet composition pipeline's
+    /// convention.
+    pub const MODEL_RIGS: &[(&str, &str)] = &[
+        ("models/bob.glb", "models/bob.model.ron"),
+        ("models/challenger.glb", "models/challenger.model.ron"),
+        ("models/dispatcher.glb", "models/dispatcher.model.ron"),
+        ("models/executioner.glb", "models/executioner.model.ron"),
+        ("models/imperial.glb", "models/imperial.model.ron"),
+    ];
 }
 
 /// A tuning file, as an asset.
@@ -181,6 +196,9 @@ pub struct DataHandles {
     /// Both scenarios stay loaded so switching to the test range is instant and
     /// a hot-reload watch stays on each.
     pub scenarios: Vec<(&'static str, Handle<Scenario>)>,
+    /// One rig per ship model, keyed by *model* path so the apply system can
+    /// file a loaded rig under the model it describes.
+    pub rigs: Vec<(&'static str, Handle<rig::ModelRig>)>,
 }
 
 impl DataHandles {
@@ -221,6 +239,9 @@ impl Plugin for DataPlugin {
             .register_asset_loader(RonAssetLoader::<FeelTuning>::new(&["tuning.ron"]))
             .register_asset_loader(RonAssetLoader::<ShipTable>::new(&["ron"]))
             .register_asset_loader(RonAssetLoader::<Scenario>::new(&["scn.ron"]))
+            .init_asset::<rig::ModelRig>()
+            .register_asset_loader(RonAssetLoader::<rig::ModelRig>::new(&["model.ron"]))
+            .init_resource::<rig::ModelRigs>()
             .init_resource::<DataHandles>()
             .init_resource::<SelectedScenario>()
             .init_resource::<ActiveScenario>()
@@ -232,7 +253,12 @@ impl Plugin for DataPlugin {
             .add_systems(Startup, begin_load)
             .add_systems(
                 Update,
-                (apply_sim_tuning, apply_feel_tuning, apply_ship_table),
+                (
+                    apply_sim_tuning,
+                    apply_feel_tuning,
+                    apply_ship_table,
+                    apply_model_rigs,
+                ),
             );
     }
 }
@@ -249,6 +275,36 @@ fn begin_load(server: Res<AssetServer>, mut handles: ResMut<DataHandles>) {
         .iter()
         .map(|(_, path)| (*path, server.load(*path)))
         .collect();
+    handles.rigs = paths::MODEL_RIGS
+        .iter()
+        .map(|(model, sidecar)| (*model, server.load(*sidecar)))
+        .collect();
+}
+
+/// Copy each loaded (or reloaded) model rig into the [`rig::ModelRigs`]
+/// resource, keyed by the model it describes.
+fn apply_model_rigs(
+    mut events: MessageReader<AssetEvent<rig::ModelRig>>,
+    assets: Res<Assets<rig::ModelRig>>,
+    handles: Res<DataHandles>,
+    mut rigs: ResMut<rig::ModelRigs>,
+) {
+    for event in events.read() {
+        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = event else {
+            continue;
+        };
+        let Some(loaded) = assets.get(*id) else {
+            continue;
+        };
+        let Some((model, _)) = handles.rigs.iter().find(|(_, handle)| handle.id() == *id) else {
+            continue;
+        };
+        if rigs.get(model) == Some(loaded) {
+            continue; // our own save came back around
+        }
+        rigs.insert(model, loaded.clone());
+        info!("model rig reloaded for {model}");
+    }
 }
 
 /// Copy loaded (or reloaded) feel tuning into the resource the client reads.

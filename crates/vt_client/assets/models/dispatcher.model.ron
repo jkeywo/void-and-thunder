@@ -1,0 +1,12 @@
+// Rig sidecar for dispatcher.glb — authored data about the model, next to the model
+// (the fleet composition pipeline's sidecar convention).
+//
+// These anchors reproduce the global nacelle pair the game shipped with
+// (stern_x: -20, nacelle_y: ±6), so landing the sidecars changed nothing on
+// screen; each hull can now diverge as its own data edit.
+(
+    trail_anchors: [
+        (-20.0, 6.0, 0.0),
+        (-20.0, -6.0, 0.0),
+    ],
+)
