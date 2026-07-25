@@ -1,0 +1,8 @@
+# Fleet-pinned toolchain. rustup reads this at cargo time, so CI and every
+# contributor build with the same compiler; the fleet-ci workflow's default
+# matches it for repos that lack the file.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
