@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   fleet:
-    uses: jkeywo/vellum/.github/workflows/fleet-ci.yml@0d47f4e6d1203e63e5a019cae8736868bc958cc9
+    uses: jkeywo/vellum/.github/workflows/fleet-ci.yml@efdb2d034e07baadd93e3cbf257ba8b3a3a571a9
     with:
       # winit's Wayland backend and Bevy's audio/input need these to build on
       # ubuntu; the wasm job shares them for host-compiled build scripts.
