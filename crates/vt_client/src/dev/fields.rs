@@ -10,7 +10,13 @@
 //!   reload timer that must never be written by a class edit, and `TorpedoBay.
 //!   loaded` is a magazine that would refill on every keystroke.
 //!
-//! Hence this table. Anything missing from it still works: it gets a text box, a
+//! Hence this table. The *mechanism* — what a descriptor is, how one is
+//! looked up, and the heuristic fallback for a field nobody has described —
+//! lives in `vellum-editor`; what lives here is the part only this game can
+//! know: that a thrust runs to 3000 and that `Broadside.port` is a reload
+//! timer nobody should be typing into.
+//!
+//! Anything missing from the table still works: it gets a text box, a
 //! heuristic range, and is treated as config. That degradation is the point —
 //! a new field being *badly ranged* is a small problem, a new field being
 //! *invisible* is the problem this whole feature exists to avoid.
@@ -21,43 +27,12 @@
 //! second as the first would wipe a ship's EMP load every time anything was
 //! retuned.
 
-/// Whether a field is authored, or belongs to a running ship.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldKind {
-    /// Authored: editable, saved to disk, and pushed onto live ships.
-    Config,
-    /// Live state: shown greyed out, never written by a class edit, never saved.
-    Live,
-}
-
-/// Panel metadata for one field.
-#[derive(Debug, Clone, Copy)]
-pub struct FieldSpec {
-    pub min: f32,
-    pub max: f32,
-    pub kind: FieldKind,
-}
-
-impl FieldSpec {
-    const fn config(min: f32, max: f32) -> Self {
-        Self {
-            min,
-            max,
-            kind: FieldKind::Config,
-        }
-    }
-    const fn live() -> Self {
-        Self {
-            min: 0.0,
-            max: 0.0,
-            kind: FieldKind::Live,
-        }
-    }
-}
+use vellum_editor::SpecTable;
+pub use vellum_editor::{FieldKind, FieldSpec};
 
 /// Ranges chosen to put the shipped value somewhere useful on the slider —
 /// roughly a third to half way — so there is room to push a number both ways.
-const FIELDS: &[(&str, &str, FieldSpec)] = &[
+static FIELDS: SpecTable = SpecTable::new(&[
     // ShipStats — how a hull handles.
     ("ShipStats", "thrust", FieldSpec::config(0.0, 3000.0)),
     ("ShipStats", "turn_rate", FieldSpec::config(0.0, 4.0)),
@@ -193,34 +168,20 @@ const FIELDS: &[(&str, &str, FieldSpec)] = &[
     // Hull / collider.
     ("ShipClass", "hull", FieldSpec::config(1.0, 500.0)),
     ("Collider", "radius", FieldSpec::config(1.0, 100.0)),
-];
+]);
 
-/// The spec for a field, falling back to a heuristic when the table is silent.
-///
-/// The fallback spans zero to twice the current value (or 1, for a value of
-/// zero), which is wrong often enough to want tuning but never so wrong that the
-/// field is unusable — and the text box beside every slider means an exact value
-/// is always reachable regardless.
-/// The short type name of a reflected value — `"Broadside"`, not the full
-/// `vt_sim::combat::Broadside` — which is how [`spec_for`] keys its table.
-///
-/// Returns `""` for a value whose type is not registered, which simply means
-/// every field of it falls back to the heuristic range.
-pub fn owner_of(value: &dyn bevy::reflect::PartialReflect) -> &'static str {
-    value
-        .get_represented_type_info()
-        .map(|info| info.type_path_table().short_path())
-        .unwrap_or("")
+/// This game's descriptor table.
+pub fn specs() -> &'static SpecTable {
+    &FIELDS
 }
 
+/// The spec for a field, falling back to the shared heuristic when the table
+/// is silent.
 pub fn spec_for(owner: &str, field: &str, current: f32) -> FieldSpec {
-    for (o, f, spec) in FIELDS {
-        if *o == owner && *f == field {
-            return *spec;
-        }
-    }
-    FieldSpec::config(0.0, (current.abs() * 2.0).max(1.0))
+    FIELDS.spec_for(owner, field, current)
 }
+
+pub use vellum_editor::owner_of;
 
 #[cfg(test)]
 mod tests {

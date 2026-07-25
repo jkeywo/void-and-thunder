@@ -71,21 +71,14 @@ pub fn save_ships(table: &ShipTable) -> Result<(), String> {
         .map_err(|e| format!("could not save ship classes — {e}"))
 }
 
-/// A value's RON-value form, via its serde serialization.
-fn value_of<T: Serialize>(value: &T) -> Result<ron::Value, String> {
-    let config = PrettyConfig::new().struct_names(false);
-    let text = ron::ser::to_string_pretty(value, config).map_err(|e| e.to_string())?;
-    vellum_compose::parse(&text).map_err(|e| e.to_string())
-}
-
 /// The class table as sparse, authored-style RON text.
 fn sparse_ships_ron(table: &ShipTable) -> Result<String, String> {
     use ron::Value;
-    let base = value_of(&ShipClass::default())?;
+    let defaults = ShipClass::default();
     let mut classes = Vec::new();
     for named in &table.classes {
-        let full = value_of(&named.class)?;
-        let sparse = vellum_compose::diff(&base, &full).map_err(|e| e.to_string())?;
+        let sparse =
+            vellum_editor::sparse_override(&defaults, &named.class).map_err(|e| e.to_string())?;
         let mut entry = ron::Map::new();
         entry.insert(
             Value::String("name".into()),
@@ -96,7 +89,7 @@ fn sparse_ships_ron(table: &ShipTable) -> Result<String, String> {
     }
     let mut root = ron::Map::new();
     root.insert(Value::String("classes".into()), Value::Seq(classes));
-    vellum_compose::write_ron(&Value::Map(root)).map_err(|e| e.to_string())
+    vellum_editor::write_ron(&Value::Map(root)).map_err(|e| e.to_string())
 }
 
 /// Write already-rendered text to `relative` under `assets/`.
@@ -155,9 +148,14 @@ mod tests {
         );
     }
 
+    /// A value's RON-value form — the composing half of the law below.
+    fn value_of<T: Serialize>(value: &T) -> Result<ron::Value, String> {
+        vellum_editor::value_of(value).map_err(|e| e.to_string())
+    }
+
     /// The whole class-table pipeline in one law: save sparsely, read it
-    /// back through vellum-compose's catalog, compose each sparse class
-    /// over the defaults, and the result is the table that was saved.
+    /// back through the composition catalog, compose each sparse class over
+    /// the defaults, and the result is the table that was saved.
     #[test]
     fn a_sparse_save_composes_back_to_the_edited_table() {
         let mut table = ShipTable::default();
@@ -167,9 +165,12 @@ mod tests {
         let catalog = crate::data::compose::catalog_from_ships_ron(&text).expect("catalog builds");
         for named in &table.classes {
             let template = catalog.resolve(&named.name).expect("class present");
-            let composed: ShipClass = vellum_compose::extract(
-                vellum_compose::apply(&value_of(&ShipClass::default()).unwrap(), template)
-                    .expect("defaults + sparse compose"),
+            let composed: ShipClass = vellum_editor::vellum_compose::extract(
+                vellum_editor::vellum_compose::apply(
+                    &value_of(&ShipClass::default()).unwrap(),
+                    template,
+                )
+                .expect("defaults + sparse compose"),
             )
             .expect("composed class extracts");
             assert_eq!(composed, named.class);

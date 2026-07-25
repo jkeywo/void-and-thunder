@@ -40,9 +40,10 @@ ron = "0.12"
 # corpus). Pinned to a rev like every vellum dependency; bumping it is a PR
 # whose diff touches only manifests and lockfiles. For local work against a
 # checkout, use a gitignored .cargo/config.toml [patch] — see vellum's README.
-vellum-corpus = { git = "https://github.com/jkeywo/vellum", rev = "40e00b8eab5301471b9b5a37d9b5ae13cd3263f8", features = ["json"] }
-vellum-perf = { git = "https://github.com/jkeywo/vellum", rev = "40e00b8eab5301471b9b5a37d9b5ae13cd3263f8", features = ["json"] }
-vellum-compose = { git = "https://github.com/jkeywo/vellum", rev = "40e00b8eab5301471b9b5a37d9b5ae13cd3263f8" }
+vellum-corpus = { git = "https://github.com/jkeywo/vellum", rev = "41d2e6274a7d0d0ddc1c0c0aca3db3cbd2760471", features = ["json"] }
+vellum-perf = { git = "https://github.com/jkeywo/vellum", rev = "41d2e6274a7d0d0ddc1c0c0aca3db3cbd2760471", features = ["json"] }
+vellum-editor = { git = "https://github.com/jkeywo/vellum", rev = "41d2e6274a7d0d0ddc1c0c0aca3db3cbd2760471" }
+vellum-compose = { git = "https://github.com/jkeywo/vellum", rev = "41d2e6274a7d0d0ddc1c0c0aca3db3cbd2760471" }
 
 # Faster iterative builds: our code lightly optimised, dependencies fully optimised.
 [profile.dev]

@@ -22,8 +22,8 @@ use crate::input::Paused;
 use crate::session::GameState;
 use crate::Player;
 
+use super::fields::specs;
 use super::save::{save_feel, save_ships, save_sim_tuning};
-use super::walker::edit_value;
 use super::DevPanelFocus;
 
 /// Which target the panel is editing.
@@ -298,12 +298,13 @@ fn class_tab(
     let mut changed = false;
     {
         let class = &mut table.bypass_change_detection().classes[index].class;
-        changed |= edit_value(ui, "stats", &mut class.stats, true);
-        changed |= edit_value(ui, "hull", &mut class.hull, true);
-        changed |= edit_value(ui, "collider", &mut class.collider, true);
-        changed |= edit_value(ui, "emp_defense", &mut class.emp_defense, true);
-        changed |= edit_value(ui, "loadout", &mut class.loadout, true);
-        changed |= edit_value(ui, "ai", &mut class.ai, true);
+        changed |= vellum_editor::edit_value(ui, specs(), "stats", &mut class.stats, true);
+        changed |= vellum_editor::edit_value(ui, specs(), "hull", &mut class.hull, true);
+        changed |= vellum_editor::edit_value(ui, specs(), "collider", &mut class.collider, true);
+        changed |=
+            vellum_editor::edit_value(ui, specs(), "emp_defense", &mut class.emp_defense, true);
+        changed |= vellum_editor::edit_value(ui, specs(), "loadout", &mut class.loadout, true);
+        changed |= vellum_editor::edit_value(ui, specs(), "ai", &mut class.ai, true);
     }
     if changed {
         table.set_changed();
@@ -347,12 +348,12 @@ fn entity_tab(
     }
     ui.separator();
 
-    edit_value(ui, "stats", stats.as_mut(), true);
-    edit_value(ui, "hull", hull.as_mut(), true);
-    edit_value(ui, "broadside", bank.as_mut(), true);
-    edit_value(ui, "emp", emp.as_mut(), true);
-    edit_value(ui, "torpedoes", bay.as_mut(), true);
-    edit_value(ui, "microwarp", warp.as_mut(), true);
+    vellum_editor::edit_value(ui, specs(), "stats", stats.as_mut(), true);
+    vellum_editor::edit_value(ui, specs(), "hull", hull.as_mut(), true);
+    vellum_editor::edit_value(ui, specs(), "broadside", bank.as_mut(), true);
+    vellum_editor::edit_value(ui, specs(), "emp", emp.as_mut(), true);
+    vellum_editor::edit_value(ui, specs(), "torpedoes", bay.as_mut(), true);
+    vellum_editor::edit_value(ui, specs(), "microwarp", warp.as_mut(), true);
 }
 
 /// Edit the whole-sim rules.
@@ -376,7 +377,7 @@ fn sim_tab(ui: &mut egui::Ui, panel: &mut DevPanel, tuning: &mut ResMut<SimTunin
     ui.separator();
 
     let mut copy = **tuning;
-    if edit_value(ui, "sim", &mut copy, true) {
+    if vellum_editor::edit_value(ui, specs(), "sim", &mut copy, true) {
         **tuning = copy;
         panel.dirty_tuning = true;
     }
@@ -403,7 +404,7 @@ fn feel_tab(ui: &mut egui::Ui, panel: &mut DevPanel, feel: &mut ResMut<FeelTunin
     ui.separator();
 
     let mut copy = **feel;
-    if edit_value(ui, "feel", &mut copy, true) {
+    if vellum_editor::edit_value(ui, specs(), "feel", &mut copy, true) {
         **feel = copy;
         panel.dirty_feel = true;
     }
