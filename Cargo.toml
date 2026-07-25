@@ -36,6 +36,12 @@ vt_sim = { path = "crates/vt_sim" }
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"
 
+# The fleet's shared batch-and-report testing shape (dev-only: the scenario
+# corpus). Pinned to a rev like every vellum dependency; bumping it is a PR
+# whose diff touches only manifests and lockfiles. For local work against a
+# checkout, use a gitignored .cargo/config.toml [patch] — see vellum's README.
+vellum-corpus = { git = "https://github.com/jkeywo/vellum", rev = "0d47f4e6d1203e63e5a019cae8736868bc958cc9", features = ["json"] }
+
 # Faster iterative builds: our code lightly optimised, dependencies fully optimised.
 [profile.dev]
 opt-level = 1

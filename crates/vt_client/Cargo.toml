@@ -19,6 +19,12 @@ vt_sim.workspace = true
 ron.workspace = true
 serde.workspace = true
 
+[dev-dependencies]
+# The scenario corpus (tests/scenario_corpus.rs): every authored scenario
+# driven headlessly by the AI pilot, batched and reported. Dev-only — nothing
+# from it reaches a shipped build.
+vellum-corpus.workspace = true
+
 # On the web, Bevy's audio is disabled (it doesn't play nicely in wasm); sound is
 # routed through a WebAudio JS shim instead, called via wasm-bindgen.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

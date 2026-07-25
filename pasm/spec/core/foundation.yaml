@@ -574,7 +574,9 @@ entities:
         DirectorSettings. A scenario with no director settings suppresses waves
         entirely, which is what the Test Range uses: one stationary,
         non-attacking, invulnerable target. Loading is a new GameState that
-        gates spawning on the assets being ready.
+        gates spawning on the assets being ready. The scenario corpus drives
+        every authored scenario headlessly (AI-piloted player, seeded
+        director) and reports outcomes via vellum-corpus.
       references: [spawn-director, session-lifecycle, data-tuning, piracy-finisher]
     implementation:
       status: declared
@@ -582,6 +584,7 @@ entities:
         [
           crates/vt_client/src/data/ships.rs,
           crates/vt_client/src/data/scenario.rs,
+          crates/vt_client/src/data/corpus.rs,
           crates/vt_client/src/session.rs,
           crates/vt_client/assets/data/ships.ron,
           crates/vt_client/assets/data/scenarios,
@@ -610,7 +613,11 @@ entities:
           apply_hull_damage,
         ]
       tests:
-        [crates/vt_client/src/data/scenario.rs, crates/vt_sim/src/harness.rs]
+        [
+          crates/vt_client/src/data/scenario.rs,
+          crates/vt_client/src/data/corpus.rs,
+          crates/vt_sim/src/harness.rs,
+        ]
 
   - component: dev-panel
     core:
