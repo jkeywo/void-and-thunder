@@ -32,8 +32,6 @@ mod fields;
 mod panel;
 #[cfg(feature = "dev-panel")]
 mod save;
-#[cfg(feature = "dev-panel")]
-mod walker;
 
 /// Whether the design panel is swallowing input this frame.
 ///
