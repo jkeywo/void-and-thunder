@@ -11,6 +11,10 @@ use bevy_time::Time;
 use bevy_transform::components::Transform;
 
 use crate::components::{AiController, Disabled, FireOrders, Helm, Hull, Protagonist, Ship};
+use crate::tuning::SimTuning;
+
+// Defaults for the piracy thresholds; the live values are the matching
+// [`SimTuning`] fields, which is what the systems read.
 
 /// Hull fraction at or below which an enemy is crippled and becomes boardable.
 pub const CRIPPLE_THRESHOLD: f32 = 0.25;
@@ -47,6 +51,7 @@ pub struct Boarding {
 /// steering and firing and drift, boardable.
 pub fn cripple_system(
     mut commands: Commands,
+    tuning: Res<SimTuning>,
     // Never cripple the protagonist (it may be AI-piloted via the player-AI toggle).
     mut ships: Query<
         (Entity, &Hull, &mut Helm, &mut FireOrders),
@@ -59,7 +64,7 @@ pub fn cripple_system(
     >,
 ) {
     for (entity, hull, mut helm, mut orders) in &mut ships {
-        if hull.current <= hull.max * CRIPPLE_THRESHOLD {
+        if hull.current <= hull.max * tuning.cripple_threshold {
             commands.entity(entity).insert(Disabled);
             *helm = Helm::default();
             *orders = FireOrders::default();
@@ -73,6 +78,7 @@ pub fn cripple_system(
 /// [`Plunder`]). Drifting out of range, or the target changing, resets progress.
 pub fn boarding_system(
     time: Res<Time>,
+    tuning: Res<SimTuning>,
     mut commands: Commands,
     mut plunder: ResMut<Plunder>,
     mut boarding: ResMut<Boarding>,
@@ -87,7 +93,7 @@ pub fn boarding_system(
 
     // Nearest crippled ship within board range.
     let mut best: Option<Entity> = None;
-    let mut best_dist = BOARD_RANGE * BOARD_RANGE;
+    let mut best_dist = tuning.board_range * tuning.board_range;
     for (entity, transform) in &disabled {
         let dist = transform.translation.truncate().distance_squared(origin);
         if dist <= best_dist {
@@ -105,7 +111,7 @@ pub fn boarding_system(
                 boarding.target = Some(entity);
                 boarding.progress = 0.0;
             }
-            if boarding.progress >= BOARD_DWELL {
+            if boarding.progress >= tuning.board_dwell {
                 commands.entity(entity).despawn();
                 plunder.ships_boarded += 1;
                 boarding.target = None;
@@ -144,6 +150,7 @@ mod tests {
     #[test]
     fn a_low_hull_enemy_becomes_disabled() {
         let mut world = World::new();
+        world.insert_resource(SimTuning::default());
         let enemy = world
             .spawn((
                 Ship,
@@ -182,6 +189,7 @@ mod tests {
     fn boarding_claims_a_ship_after_dwelling_in_range() {
         let mut world = World::new();
         world.insert_resource(Time::<()>::default());
+        world.insert_resource(SimTuning::default());
         world.insert_resource(Plunder::default());
         world.insert_resource(Boarding::default());
         world.spawn((Protagonist, Transform::from_xyz(0.0, 0.0, 0.0)));
@@ -211,6 +219,7 @@ mod tests {
     fn leaving_range_resets_boarding_progress() {
         let mut world = World::new();
         world.insert_resource(Time::<()>::default());
+        world.insert_resource(SimTuning::default());
         world.insert_resource(Plunder::default());
         world.insert_resource(Boarding::default());
         let protagonist = world
@@ -244,6 +253,7 @@ mod tests {
     fn boarding_misses_a_ship_out_of_range() {
         let mut world = World::new();
         world.insert_resource(Time::<()>::default());
+        world.insert_resource(SimTuning::default());
         world.insert_resource(Plunder::default());
         world.insert_resource(Boarding::default());
         world.spawn((Protagonist, Transform::from_xyz(0.0, 0.0, 0.0)));

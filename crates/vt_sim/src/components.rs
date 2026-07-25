@@ -8,6 +8,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec2;
+use serde::{Deserialize, Serialize};
 
 /// How far the ship's top-down kit reaches — the microwarp's jump range and the
 /// torpedo bay's engagement range are deliberately the same number.
@@ -20,7 +21,7 @@ pub const ENGAGEMENT_RANGE: f32 = 675.0;
 
 /// Which power a ship answers to. Used for friendly-fire filtering and, later,
 /// AI target selection. Names are drawn from the Settled Dark setting.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Faction {
     /// The player and allied pirates working the void lanes.
     Corsairs,
@@ -77,7 +78,8 @@ impl Heading {
 pub struct Velocity(pub Vec2);
 
 /// Handling characteristics of a hull. Tuned per ship class.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ShipStats {
     /// Forward acceleration at full throttle (units/s²).
     pub thrust: f32,
@@ -154,7 +156,8 @@ pub struct Projectile {
 pub struct Ttl(pub f32);
 
 /// Collision radius of a ship, for projectile hit tests (broad-phase circle).
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Collider {
     pub radius: f32,
 }
@@ -202,11 +205,13 @@ impl Default for SpeedScale {
 /// approaches `resist` the ship's speed is inverse-lerped to zero; `damage`
 /// bleeds off at `recovery_per_sec`. All ships carry one so the player's EMP can
 /// slow anything.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EmpDefense {
     /// EMP points to fully disable this ship's drive.
     pub resist: f32,
-    /// EMP points currently soaked (`0..=resist`).
+    /// EMP points currently soaked (`0..=resist`). Live state, never authored.
+    #[serde(skip)]
     pub damage: f32,
     /// Points recovered per second.
     pub recovery_per_sec: f32,
@@ -250,7 +255,8 @@ pub struct PilotIntent {
 /// writes this ship's [`Helm`] and [`FireOrders`]; a ship without it (the
 /// player) is driven by the client instead. This keeps the sim ignorant of who
 /// "the player" is — it only knows which ships steer themselves.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AiController {
     /// Inside this distance the ship stops closing and turns to present a beam.
     pub engage_range: f32,
@@ -264,6 +270,7 @@ pub struct AiController {
     /// off; the player-piloting AI turns it on.
     pub use_abilities: bool,
     /// Transient: how long the AI has been priming a microwarp (internal).
+    #[serde(skip)]
     pub warp_prime: f32,
 }
 

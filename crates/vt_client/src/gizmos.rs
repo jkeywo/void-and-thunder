@@ -22,8 +22,8 @@ const LEAD_MARKER_R: f32 = 20.0;
 /// cannonball lives before it falls into the void. The drawn aim beam runs
 /// exactly this far, so the beam ends where the shots die rather than at an
 /// arbitrary length that has to be re-tuned whenever the guns change.
-fn bank_reach(bank: &Broadside) -> f32 {
-    bank.muzzle_speed * PROJECTILE_TTL
+fn bank_reach(bank: &Broadside, projectile_ttl: f32) -> f32 {
+    bank.muzzle_speed * projectile_ttl
 }
 
 /// The translucent preview of where a microwarp will drop the player.
@@ -59,6 +59,7 @@ pub fn draw_grid(mut gizmos: Gizmos, bounds: Res<SystemBounds>) {
 pub fn draw_aim_beams(
     mut gizmos: Gizmos,
     aiming: Res<Aiming>,
+    tuning: Res<SimTuning>,
     player: Query<(&Transform, &Heading, &Velocity, &Broadside, &PilotIntent), With<Player>>,
 ) {
     let Ok((transform, heading, velocity, bank, pilot)) = player.single() else {
@@ -77,10 +78,17 @@ pub fn draw_aim_beams(
             Color::srgba(1.0, 0.30, 0.25, 0.35) // reloading — dim red
         };
         let dir = broadside_direction(heading.0, is_port, Some(aim_dir), bank.arc);
-        for shot in broadside_volley(pos, velocity.0, dir, bank) {
+        for shot in broadside_volley(
+            pos,
+            velocity.0,
+            dir,
+            bank,
+            tuning.hull_length,
+            tuning.muzzle_standoff,
+        ) {
             let beam = shot.velocity.normalize_or_zero();
             let start = shot.position.extend(0.0);
-            let end = (shot.position + beam * bank_reach(bank)).extend(0.0);
+            let end = (shot.position + beam * bank_reach(bank, tuning.projectile_ttl)).extend(0.0);
             gizmos.line(start, end, color);
         }
     }
@@ -101,6 +109,7 @@ pub fn draw_aim_beams(
 pub fn draw_aim_lead(
     mut gizmos: Gizmos,
     aiming: Res<Aiming>,
+    tuning: Res<SimTuning>,
     player: Query<(&Transform, &Heading, &Velocity, &Broadside, &Faction), With<Player>>,
     targets: Query<
         (&Transform, &Velocity, &Faction),
@@ -141,7 +150,7 @@ pub fn draw_aim_lead(
                 continue; // outrunning the guns
             };
             // A shot that would expire before arriving is out of range.
-            if lead.time > PROJECTILE_TTL {
+            if lead.time > tuning.projectile_ttl {
                 continue;
             }
             // Where the volley would have to be thrown to make that intercept.
@@ -180,7 +189,12 @@ fn draw_diamond(gizmos: &mut Gizmos, centre: Vec2, r: f32, color: Color) {
 /// alongside, filling clockwise as the dwell completes. It appears only while
 /// the protagonist is in range (the sim sets [`Boarding::target`] then), giving
 /// the "close enough to board" cue.
-pub fn draw_boarding(mut gizmos: Gizmos, boarding: Res<Boarding>, ships: Query<&Transform>) {
+pub fn draw_boarding(
+    mut gizmos: Gizmos,
+    boarding: Res<Boarding>,
+    tuning: Res<SimTuning>,
+    ships: Query<&Transform>,
+) {
     let Some(target) = boarding.target else {
         return;
     };
@@ -188,7 +202,7 @@ pub fn draw_boarding(mut gizmos: Gizmos, boarding: Res<Boarding>, ships: Query<&
         return;
     };
     let pos = tf.translation.truncate();
-    let frac = (boarding.progress / BOARD_DWELL).clamp(0.0, 1.0);
+    let frac = (boarding.progress / tuning.board_dwell).clamp(0.0, 1.0);
     let r = 46.0;
     // Dim base ring the moment you're in range.
     gizmos.circle(

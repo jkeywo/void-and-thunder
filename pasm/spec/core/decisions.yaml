@@ -62,3 +62,70 @@ entities:
           Canon still lives upstream; this is a read-only snapshot the game reads
           for flavour and naming.
       references: [ship-combat]
+
+  - decision: tuning-in-ron-loaded-by-client
+    core:
+      status: accepted
+      confidence: confirmed
+      title: Tuning lives in RON; the client loads it, the sim just reads a Resource
+      summary: >-
+        vt_sim owns the tuning types and derives Serialize/Deserialize/Reflect,
+        but gains no bevy_asset dependency. vt_client owns the AssetLoaders and
+        copies each loaded asset into a plain Resource the sim systems read.
+      rationale:
+        - >-
+          Keeps vt_sim headless and asset-free — Harness::new() builds a bare
+          World + Schedule with no plugins, and would need an AssetServer (or a
+          second, divergent construction path) if the sim loaded its own files.
+        - >-
+          Mirror DTO structs in the client were rejected: they drift from the
+          real components, and ship_bundle's "exactly one way to make a ship"
+          invariant would quietly gain a second definition.
+        - >-
+          Default impls stay as the fallback, so every existing test keeps
+          passing and a missing or partial file degrades instead of failing.
+      references: [data-tuning, test-harness]
+
+  - decision: hot-reload-breaks-replay-determinism
+    core:
+      status: accepted
+      confidence: confirmed
+      title: Hot-reloading tuning mid-run forfeits the determinism fixed-update buys
+      summary: >-
+        Changing tuning while the sim is running makes that run
+        non-reproducible, since the same inputs no longer imply the same state.
+      rationale:
+        - >-
+          fixed-update-sim is justified partly as a precondition for replays;
+          this is the explicit exception to it.
+        - >-
+          Accepted because the design panel is a development tool behind a
+          non-default feature, never present in a shipped build, and the
+          iteration speed is worth more than replayable tuning sessions.
+        - >-
+          A recorded run must therefore capture the tuning it ran under, not
+          just the inputs.
+      references: [fixed-update-sim, dev-panel, data-tuning]
+
+  - decision: dev-panel-behind-a-feature
+    core:
+      status: accepted
+      confidence: confirmed
+      title: The design panel is bevy_egui behind a non-default feature; data loading is not
+      summary: >-
+        Only the panel UI is gated by the dev-panel feature. RON loading, the
+        tuning resources, scenarios and the sim markers are unconditional.
+      rationale:
+        - >-
+          A release build must still read its tuned RON; gating the loading too
+          would mean the shipped game silently ran on Default values.
+        - >-
+          bevy_egui gives sliders, text entry and its own input handling for
+          free, where bevy_ui would need all three hand-built, and routing the
+          panel through the HTML HUD would first require building the HUD's
+          missing input channel.
+        - >-
+          egui captures the pointer when hovered, so game input systems must
+          respect a DevPanelFocus run condition or dragging a slider also aims
+          and fires.
+      references: [dev-panel, hud-bridge, controller-input]

@@ -25,14 +25,18 @@ use crate::components::{
 };
 use crate::drive::MicrowarpDrive;
 use crate::emp::EmpWeapon;
-use crate::piracy::{BoardIntent, BOARD_RANGE};
+use crate::piracy::BoardIntent;
 use crate::torpedo::TorpedoLock;
+use crate::tuning::{AiTuning, SimTuning};
 use crate::util::wrap_angle as wrap;
 
+// Defaults for the AI's gains; the live values are the matching [`AiTuning`]
+// fields, which is what the systems pass in.
+
 /// Proportional gain turning a heading error (radians) into a helm command.
-const TURN_GAIN: f32 = 2.5;
+pub const TURN_GAIN: f32 = 2.5;
 /// Throttle while jockeying for a broadside — mostly turning, holding station.
-const STATION_THROTTLE: f32 = 0.3;
+pub const STATION_THROTTLE: f32 = 0.3;
 
 /// Decide the [`Helm`] and [`FireOrders`] for one AI ship against one target.
 ///
@@ -43,6 +47,7 @@ pub fn desired_helm(
     hull_frac: f32,
     target_pos: Vec2,
     ai: &AiController,
+    tuning: &AiTuning,
 ) -> (Helm, FireOrders) {
     let to_target = target_pos - self_pos;
     let dist = to_target.length();
@@ -68,14 +73,14 @@ pub fn desired_helm(
         } else {
             bearing + FRAC_PI_2 // target to starboard -> starboard beam
         };
-        (wrap(desired), STATION_THROTTLE)
+        (wrap(desired), tuning.station_throttle)
     } else {
         // Close the distance, bow on the target.
         (bearing, 1.0)
     };
 
     let heading_err = wrap(desired_heading - heading);
-    let turn = (heading_err * TURN_GAIN).clamp(-1.0, 1.0);
+    let turn = (heading_err * tuning.turn_gain).clamp(-1.0, 1.0);
 
     // Fire a beam when the target is within its firing arc — never while fleeing.
     let mut orders = FireOrders::default();
@@ -89,6 +94,7 @@ pub fn desired_helm(
 
 /// Bevy system: drive every AI ship toward the nearest hostile ship.
 pub fn ai_system(
+    tuning: Res<SimTuning>,
     mut controlled: Query<
         (
             &Transform,
@@ -132,20 +138,21 @@ pub fn ai_system(
         };
 
         let hull_frac = (hull.current / hull.max).clamp(0.0, 1.0);
-        let (new_helm, new_orders) = desired_helm(self_pos, heading.0, hull_frac, *target_pos, ai);
+        let (new_helm, new_orders) =
+            desired_helm(self_pos, heading.0, hull_frac, *target_pos, ai, &tuning.ai);
         *helm = new_helm;
         *orders = new_orders;
     }
 }
 
 /// Enemies within this radius count toward being "surrounded".
-const SURROUND_RADIUS: f32 = 400.0;
+pub const SURROUND_RADIUS: f32 = 400.0;
 /// This many nearby hostiles triggers a microwarp escape.
-const SURROUND_COUNT: usize = 2;
+pub const SURROUND_COUNT: usize = 2;
 /// Seconds the AI holds a microwarp to prime it before releasing (warping).
-const WARP_PRIME: f32 = 0.4;
+pub const WARP_PRIME: f32 = 0.4;
 /// Torpedo locks the AI builds before releasing a volley.
-const TORPEDO_MIN_VOLLEY: u32 = 3;
+pub const TORPEDO_MIN_VOLLEY: u32 = 3;
 
 /// What the special-abilities AI wants to do this frame, including a helm that
 /// points the bow at the aim point (EMP is a frontal weapon; microwarp aims at
@@ -185,6 +192,7 @@ fn face(ship: Vec2, heading: f32, aim: Vec2, throttle: f32) -> Helm {
 ///   boardable — hold to build a volley, release once enough tubes are locked.
 ///
 /// `hostiles` are the *active* enemies; `boardable` are crippled (disabled) ships.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_abilities(
     ship: Vec2,
     heading: f32,
@@ -196,6 +204,7 @@ pub fn decide_abilities(
     board_range: f32,
     torpedo_locks: u32,
     warp_prime: f32,
+    tuning: &AiTuning,
     dt: f32,
 ) -> AbilityIntent {
     let forward = Vec2::from_angle(heading);
@@ -223,16 +232,16 @@ pub fn decide_abilities(
     let near: Vec<Vec2> = hostiles
         .iter()
         .copied()
-        .filter(|h| h.distance(ship) < SURROUND_RADIUS)
+        .filter(|h| h.distance(ship) < tuning.surround_radius)
         .collect();
-    if near.len() >= SURROUND_COUNT && microwarp_ready {
+    if near.len() >= tuning.surround_count as usize && microwarp_ready {
         let centroid = near.iter().copied().fold(Vec2::ZERO, |a, b| a + b) / near.len() as f32;
         let away = (ship - centroid).normalize_or(forward);
         out.aim_point = ship + away * microwarp_range;
         out.helm = face(ship, heading, out.aim_point, 1.0);
         out.helm_override = Some(out.helm);
         let wp = warp_prime + dt;
-        if wp < WARP_PRIME {
+        if wp < tuning.warp_prime {
             out.microwarp_hold = true;
             out.warp_prime = wp;
         }
@@ -273,7 +282,7 @@ pub fn decide_abilities(
     // Otherwise lob torpedoes at the distant hostile.
     if let Some(target) = nearest(hostiles) {
         out.aim_point = target;
-        out.torpedo_hold = torpedo_locks < TORPEDO_MIN_VOLLEY;
+        out.torpedo_hold = torpedo_locks < tuning.torpedo_min_volley;
         out.helm = face(ship, heading, target, 0.2);
     }
     out.helm_override = has_target.then_some(out.helm);
@@ -285,6 +294,7 @@ pub fn decide_abilities(
 #[allow(clippy::type_complexity)]
 pub fn ai_abilities_system(
     time: Res<Time>,
+    tuning: Res<SimTuning>,
     mut board_intent: ResMut<BoardIntent>,
     mut ships: Query<(
         &Transform,
@@ -330,9 +340,10 @@ pub fn ai_abilities_system(
             emp.range,
             warp.range,
             warp.timer <= 0.0,
-            BOARD_RANGE,
+            tuning.board_range,
             lock.locks,
             ai.warp_prime,
+            &tuning.ai,
             dt,
         );
         ai.warp_prime = d.warp_prime;
@@ -369,7 +380,14 @@ mod tests {
     #[test]
     fn pursues_a_distant_target_bow_on() {
         // Target far away on +X, we face +X: close at full throttle, no turn, hold fire.
-        let (helm, orders) = desired_helm(Vec2::ZERO, 0.0, 1.0, Vec2::new(1000.0, 0.0), &ai());
+        let (helm, orders) = desired_helm(
+            Vec2::ZERO,
+            0.0,
+            1.0,
+            Vec2::new(1000.0, 0.0),
+            &ai(),
+            &AiTuning::default(),
+        );
         assert_eq!(helm.throttle, 1.0);
         assert!(helm.turn.abs() < 1e-3, "turn was {}", helm.turn);
         assert!(!orders.port && !orders.starboard);
@@ -378,7 +396,14 @@ mod tests {
     #[test]
     fn fires_port_when_target_is_on_the_port_beam() {
         // Close target directly to port (+Y) while facing +X.
-        let (_helm, orders) = desired_helm(Vec2::ZERO, 0.0, 1.0, Vec2::new(0.0, 100.0), &ai());
+        let (_helm, orders) = desired_helm(
+            Vec2::ZERO,
+            0.0,
+            1.0,
+            Vec2::new(0.0, 100.0),
+            &ai(),
+            &AiTuning::default(),
+        );
         assert!(orders.port, "should fire port");
         assert!(!orders.starboard, "should not fire starboard");
     }
@@ -386,7 +411,14 @@ mod tests {
     #[test]
     fn fires_starboard_when_target_is_on_the_starboard_beam() {
         // Close target directly to starboard (-Y) while facing +X.
-        let (_helm, orders) = desired_helm(Vec2::ZERO, 0.0, 1.0, Vec2::new(0.0, -100.0), &ai());
+        let (_helm, orders) = desired_helm(
+            Vec2::ZERO,
+            0.0,
+            1.0,
+            Vec2::new(0.0, -100.0),
+            &ai(),
+            &AiTuning::default(),
+        );
         assert!(orders.starboard, "should fire starboard");
         assert!(!orders.port, "should not fire port");
     }
@@ -394,7 +426,14 @@ mod tests {
     #[test]
     fn presents_a_beam_when_target_is_close_ahead() {
         // Close target dead ahead: break off (turn) and slow, don't ram.
-        let (helm, orders) = desired_helm(Vec2::ZERO, 0.0, 1.0, Vec2::new(100.0, 0.0), &ai());
+        let (helm, orders) = desired_helm(
+            Vec2::ZERO,
+            0.0,
+            1.0,
+            Vec2::new(100.0, 0.0),
+            &ai(),
+            &AiTuning::default(),
+        );
         assert!(
             helm.turn.abs() > 0.5,
             "should turn to present a beam, turn={}",
@@ -411,7 +450,14 @@ mod tests {
     #[test]
     fn flees_when_hull_is_low() {
         // Crippled, target dead ahead: turn hard away and run, hold fire.
-        let (helm, orders) = desired_helm(Vec2::ZERO, 0.0, 0.1, Vec2::new(100.0, 0.0), &ai());
+        let (helm, orders) = desired_helm(
+            Vec2::ZERO,
+            0.0,
+            0.1,
+            Vec2::new(100.0, 0.0),
+            &ai(),
+            &AiTuning::default(),
+        );
         assert_eq!(helm.throttle, 1.0);
         assert!(
             helm.turn.abs() > 0.9,
@@ -460,6 +506,7 @@ mod tests {
             ))
             .id();
 
+        world.insert_resource(SimTuning::default());
         let mut schedule = Schedule::default();
         schedule.add_systems(ai_system);
         schedule.run(&mut world);
@@ -512,6 +559,7 @@ mod tests {
             ))
             .id();
 
+        world.insert_resource(SimTuning::default());
         let mut schedule = Schedule::default();
         schedule.add_systems(ai_system);
         schedule.run(&mut world);
@@ -537,6 +585,7 @@ mod tests {
             95.0,
             0,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(d.emp_fire, "should EMP a targetable ship");
@@ -557,6 +606,7 @@ mod tests {
             95.0,
             0,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(!d.emp_fire, "target is too far for EMP");
@@ -573,6 +623,7 @@ mod tests {
             95.0,
             5,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(
@@ -600,6 +651,7 @@ mod tests {
             95.0,
             0,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(d.microwarp_hold, "should prime a microwarp");
@@ -627,6 +679,7 @@ mod tests {
             95.0,
             0,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(d.board, "should board a crippled ship in range");
@@ -642,6 +695,7 @@ mod tests {
             95.0,
             0,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(!far.board, "too far to board yet");
@@ -662,6 +716,7 @@ mod tests {
             95.0,
             0,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(nothing.helm_override.is_none());
@@ -678,6 +733,7 @@ mod tests {
             95.0,
             0,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(hostile.helm_override.is_some());
@@ -694,6 +750,7 @@ mod tests {
             95.0,
             0,
             0.0,
+            &AiTuning::default(),
             0.1,
         );
         assert!(prize.helm_override.is_some());

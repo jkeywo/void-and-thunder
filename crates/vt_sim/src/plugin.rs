@@ -20,6 +20,7 @@ use crate::torpedo::{
     torpedo_hit_system, torpedo_homing_system, torpedo_launch_system, torpedo_lock_system,
     torpedo_reload_system,
 };
+use crate::tuning::SimTuning;
 use crate::world::{bounds_system, SystemBounds};
 
 /// Ordered stages of a single simulation step.
@@ -51,6 +52,9 @@ pub struct SimPlugin;
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SystemBounds>()
+            // Defaults reproduce the constants exactly; the client may load a
+            // RON file over the top (see vt_client's DataPlugin).
+            .init_resource::<SimTuning>()
             .init_resource::<SpawnDirector>()
             .init_resource::<Encounter>()
             .init_resource::<Plunder>()

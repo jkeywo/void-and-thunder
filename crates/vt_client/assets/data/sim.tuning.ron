@@ -1,0 +1,55 @@
+// Simulation rules — the numbers that apply to every ship at once.
+//
+// Per-ship kit (thrust, broadside damage, torpedo speed) is NOT here; that lives
+// on each ship's components. This file is for the rules of the world.
+//
+// Every field may be omitted to inherit the compiled-in default, so it is safe
+// to delete a line you don't want to override. The shipped copy below is exactly
+// the defaults, and a test asserts it stays that way — if you tune something
+// here, expect that test to tell you the defaults have moved on.
+(
+    // Fraction of damage a braced ship still takes. 1.0 = bracing does nothing.
+    brace_damage_factor: 0.35,
+
+    // How long a cannonball lives (seconds). With a bank's muzzle speed this is
+    // also its reach — 2.5s at 325 units/s is ~810 units.
+    projectile_ttl: 2.5,
+    projectile_radius: 5.0,
+
+    // Volley geometry: guns are spread across this much hull, this far ahead.
+    hull_length: 40.0,
+    muzzle_standoff: 22.0,
+
+    // Seconds between torpedoes leaving the tubes during a volley.
+    torpedo_launch_interval: 0.5,
+
+    // Fraction of forward thrust available in reverse.
+    reverse_throttle: 0.25,
+
+    // How hard the system boundary pushes a straying ship back inside.
+    bounds_spring: 3.0,
+
+    // How far the top-down kit reaches — microwarp jump and torpedo range share
+    // this deliberately, so one ring on screen means one mental model.
+    engagement_range: 675.0,
+
+    // Piracy: hull fraction that cripples a ship, and the range/dwell to board it.
+    cripple_threshold: 0.25,
+    board_range: 95.0,
+    board_dwell: 3.0,
+
+    ai: (
+        // Proportional gain from heading error to helm. Higher turns harder.
+        turn_gain: 2.5,
+        // Throttle while jockeying for a broadside — mostly turning, not closing.
+        station_throttle: 0.3,
+        // Being "surrounded": this many hostiles inside this radius triggers a
+        // microwarp escape.
+        surround_radius: 400.0,
+        surround_count: 2,
+        // Seconds the AI primes a microwarp before releasing it.
+        warp_prime: 0.4,
+        // Torpedo locks the AI builds before releasing a volley.
+        torpedo_min_volley: 3,
+    ),
+)

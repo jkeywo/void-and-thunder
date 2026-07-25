@@ -7,12 +7,18 @@ use bevy_ecs::prelude::*;
 use bevy_math::{Vec2, Vec3};
 use bevy_time::Time;
 use bevy_transform::components::Transform;
+use serde::{Deserialize, Serialize};
 
 use crate::components::{
     Brace, Collider, Faction, FireOrders, Heading, Hull, Projectile, Ttl, Velocity,
 };
 use crate::events::{ShipDestroyed, ShipHit};
+use crate::tuning::SimTuning;
 use crate::util::wrap_angle;
+
+// Defaults for the combat rules. Each is mirrored by a [`SimTuning`] field that
+// systems actually read, so a designer can move them at runtime; these stay as
+// the documented starting values and the fallback when no data file is loaded.
 
 /// Fraction of damage a braced ship still takes (Black-Flag brace).
 pub const BRACE_DAMAGE_FACTOR: f32 = 0.35;
@@ -21,10 +27,14 @@ pub const BRACE_DAMAGE_FACTOR: f32 = 0.35;
 pub const PROJECTILE_TTL: f32 = 2.5;
 /// Cannonball collision radius.
 pub const PROJECTILE_RADIUS: f32 = 5.0;
+/// Length of hull the guns of a volley are spread along.
+pub const HULL_LENGTH: f32 = 40.0;
+/// How far ahead of the ship a volley's muzzles sit.
+pub const MUZZLE_STANDOFF: f32 = 22.0;
 
 /// Per-side reload + telegraph state for one broadside bank. Port and starboard
 /// each carry their own, so the two sides reload and fire independently.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BankState {
     /// Remaining reload until this side can fire again (0 = ready).
     pub timer: f32,
@@ -39,7 +49,8 @@ pub struct BankState {
 /// steer each volley within `arc` of the beam; an enemy telegraphs a
 /// `charge_time` wind-up before firing. The two sides ([`BankState`]) reload on
 /// independent timers.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Broadside {
     /// Seconds between volleys (per side).
     pub cooldown: f32,
@@ -56,9 +67,12 @@ pub struct Broadside {
     /// Wind-up before firing (seconds). 0 for the player; ~0.5 for a telegraphed
     /// enemy so the shot is dodgeable.
     pub charge_time: f32,
-    /// Port bank (the ship's left, +90° from the bow).
+    /// Port bank (the ship's left, +90° from the bow). Live reload/charge
+    /// state — never authored, so a saved class can't carry a half-spent timer.
+    #[serde(skip)]
     pub port: BankState,
-    /// Starboard bank (the ship's right, -90°).
+    /// Starboard bank (the ship's right, -90°). Live state, as `port`.
+    #[serde(skip)]
     pub starboard: BankState,
 }
 
@@ -142,12 +156,13 @@ pub fn broadside_volley(
     ship_vel: Vec2,
     fire_dir: Vec2,
     bank: &Broadside,
+    hull_length: f32,
+    muzzle_standoff: f32,
 ) -> Vec<ProjectileSpawn> {
     let dir = fire_dir.normalize_or(Vec2::X);
     let along = dir.perp(); // spread the guns across the hull
     let guns = bank.guns.max(1);
 
-    let hull_length = 40.0;
     let mut out = Vec::with_capacity(guns as usize);
     for i in 0..guns {
         let t = if guns == 1 {
@@ -155,7 +170,7 @@ pub fn broadside_volley(
         } else {
             (i as f32 / (guns - 1) as f32) - 0.5
         };
-        let muzzle = ship_pos + along * (t * hull_length) + dir * 22.0;
+        let muzzle = ship_pos + along * (t * hull_length) + dir * muzzle_standoff;
         let velocity = ship_vel + dir * bank.muzzle_speed;
         out.push(ProjectileSpawn {
             position: muzzle,
@@ -254,8 +269,8 @@ pub fn spheres_overlap(a: Vec3, ra: f32, b: Vec3, rb: f32) -> bool {
 
 /// Hull damage after brace mitigation — shared by every weapon's hit system so
 /// "how much a brace cuts damage by" has exactly one home.
-pub fn braced_damage(base_damage: f32, braced: bool) -> f32 {
-    base_damage * if braced { BRACE_DAMAGE_FACTOR } else { 1.0 }
+pub fn braced_damage(base_damage: f32, braced: bool, brace_factor: f32) -> f32 {
+    base_damage * if braced { brace_factor } else { 1.0 }
 }
 
 /// Bevy system: fire aimed broadsides, with a per-bank charge/telegraph.
@@ -267,6 +282,7 @@ pub fn braced_damage(base_damage: f32, braced: bool) -> f32 {
 /// re-requests every tick, so it keeps firing on cooldown.
 pub fn weapons_system(
     time: Res<Time>,
+    tuning: Res<SimTuning>,
     mut commands: Commands,
     mut ships: Query<(
         &Transform,
@@ -306,7 +322,7 @@ pub fn weapons_system(
                 };
                 if done {
                     let dir = bank.side(port).charge_dir;
-                    fire_broadside(&mut commands, pos, velocity.0, dir, &cfg, *faction);
+                    fire_broadside(&mut commands, pos, velocity.0, dir, &cfg, *faction, &tuning);
                     bank.side_mut(port).timer = cfg.cooldown;
                 }
                 continue; // a charging side ignores fresh requests
@@ -321,7 +337,7 @@ pub fn weapons_system(
                 s.charging = cfg.charge_time;
                 s.charge_dir = dir;
             } else {
-                fire_broadside(&mut commands, pos, velocity.0, dir, &cfg, *faction);
+                fire_broadside(&mut commands, pos, velocity.0, dir, &cfg, *faction, &tuning);
                 bank.side_mut(port).timer = cfg.cooldown;
             }
         }
@@ -336,17 +352,25 @@ fn fire_broadside(
     dir: Vec2,
     bank: &Broadside,
     faction: Faction,
+    tuning: &SimTuning,
 ) {
-    for shot in broadside_volley(pos, ship_vel, dir, bank) {
+    for shot in broadside_volley(
+        pos,
+        ship_vel,
+        dir,
+        bank,
+        tuning.hull_length,
+        tuning.muzzle_standoff,
+    ) {
         commands.spawn((
             Projectile {
                 damage: bank.damage,
                 faction,
-                radius: PROJECTILE_RADIUS,
+                radius: tuning.projectile_radius,
             },
             Velocity(shot.velocity),
             Transform::from_translation(shot.position.extend(0.0)),
-            Ttl(PROJECTILE_TTL),
+            Ttl(tuning.projectile_ttl),
         ));
     }
 }
@@ -371,6 +395,7 @@ pub fn projectile_system(
 /// announcing each hit for the presentation layer.
 pub fn collision_system(
     mut commands: Commands,
+    tuning: Res<SimTuning>,
     mut hits: MessageWriter<ShipHit>,
     projectiles: Query<(Entity, &Transform, &Projectile)>,
     mut ships: Query<(
@@ -390,7 +415,11 @@ pub fn collision_system(
             }
             let ship_pos = ship_tf.translation.truncate();
             if circles_overlap(proj_pos, projectile.radius, ship_pos, collider.radius) {
-                hull.current -= braced_damage(projectile.damage, brace.is_some_and(|b| b.active));
+                hull.current -= braced_damage(
+                    projectile.damage,
+                    brace.is_some_and(|b| b.active),
+                    tuning.brace_damage_factor,
+                );
                 hits.write(ShipHit {
                     position: proj_pos,
                     ship: ship_entity,
@@ -433,7 +462,14 @@ mod tests {
             guns: 3,
             ..Default::default()
         };
-        let volley = broadside_volley(Vec2::ZERO, Vec2::ZERO, Vec2::Y, &bank);
+        let volley = broadside_volley(
+            Vec2::ZERO,
+            Vec2::ZERO,
+            Vec2::Y,
+            &bank,
+            HULL_LENGTH,
+            MUZZLE_STANDOFF,
+        );
         assert_eq!(volley.len(), 3);
     }
 
@@ -496,7 +532,14 @@ mod tests {
         };
         // Fire straight +Y; the ship's +X momentum carries into the shot.
         let ship_vel = Vec2::new(50.0, 0.0);
-        let shot = broadside_volley(Vec2::ZERO, ship_vel, Vec2::Y, &bank)[0];
+        let shot = broadside_volley(
+            Vec2::ZERO,
+            ship_vel,
+            Vec2::Y,
+            &bank,
+            HULL_LENGTH,
+            MUZZLE_STANDOFF,
+        )[0];
         assert!(
             (shot.velocity.x - 50.0).abs() < 1e-4,
             "vx was {}",
@@ -532,13 +575,13 @@ mod tests {
 
     #[test]
     fn braced_damage_applies_the_brace_factor() {
-        let dmg = braced_damage(100.0, true);
+        let dmg = braced_damage(100.0, true, BRACE_DAMAGE_FACTOR);
         assert!((dmg - 100.0 * BRACE_DAMAGE_FACTOR).abs() < 1e-4);
     }
 
     #[test]
     fn braced_damage_is_full_when_not_braced() {
-        assert!((braced_damage(100.0, false) - 100.0).abs() < 1e-4);
+        assert!((braced_damage(100.0, false, BRACE_DAMAGE_FACTOR) - 100.0).abs() < 1e-4);
     }
 
     #[test]
@@ -662,6 +705,7 @@ mod tests {
     fn a_hit_names_the_ship_and_the_damage() {
         let mut world = World::new();
         world.init_resource::<Messages<ShipHit>>();
+        world.init_resource::<SimTuning>();
 
         let ship = world
             .spawn((

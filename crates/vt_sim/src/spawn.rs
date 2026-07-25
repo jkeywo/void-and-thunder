@@ -6,8 +6,9 @@
 //! in [`ship_bundle`] so there is exactly one way to make a ship.
 
 use bevy_ecs::prelude::*;
-use bevy_math::Vec2;
+use bevy_math::{Quat, Vec2};
 use bevy_transform::components::Transform;
+use serde::{Deserialize, Serialize};
 use std::f32::consts::TAU;
 
 use crate::combat::Broadside;
@@ -22,7 +23,8 @@ use crate::world::SystemBounds;
 
 /// A ship's full weapon/drive loadout. Every ship carries the same kit; presets
 /// differ only in tuning, so a player and an AI ship are the same entity shape.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ShipLoadout {
     pub broadside: Broadside,
     pub emp: EmpWeapon,
@@ -76,18 +78,23 @@ impl ShipLoadout {
 /// hull + the full [`ShipLoadout`] + a [`PilotIntent`] its controller writes.
 /// The player adds [`Protagonist`]; an AI adds [`AiController`]. Which one drives
 /// the ship — the client or the sim's AI — is the *only* difference.
+///
+/// `heading` seeds both the sim's [`Heading`] and the `Transform` rotation.
+/// Movement rewrites the rotation every step for a ship that moves, but a ship
+/// that never moves (an anchored target) would otherwise render bow-along-+X.
 pub fn ship_bundle(
     faction: Faction,
     stats: ShipStats,
     hull_max: f32,
     pos: Vec2,
+    heading: f32,
     loadout: ShipLoadout,
 ) -> impl Bundle {
     (
         Ship,
         faction,
         stats,
-        Heading(0.0),
+        Heading(heading),
         Velocity::default(),
         Helm::default(),
         FireOrders::default(),
@@ -97,7 +104,7 @@ pub fn ship_bundle(
         Collider::default(),
         EmpDefense::default(),
         SpeedScale::default(),
-        Transform::from_translation(pos.extend(0.0)),
+        Transform::from_translation(pos.extend(0.0)).with_rotation(Quat::from_rotation_z(heading)),
         // The full kit — identical set on every ship. Torpedoes carry three
         // components: static config/reload (from the loadout) plus the two
         // always-empty-at-spawn transient lifecycles (aim-lock, launch-queue).
@@ -133,19 +140,55 @@ pub struct Encounter {
     pub outcome: Outcome,
 }
 
-/// Drives wave spawning.
-#[derive(Resource, Clone, Copy, Debug)]
-pub struct SpawnDirector {
-    /// The last wave number spawned (0 before the first).
-    pub wave: u32,
+/// How an encounter's waves are shaped. This is the *authored* half of the
+/// director — everything a scenario file gets to say about the waves. The live
+/// half (which wave we're on, the RNG state) lives on [`SpawnDirector`], so this
+/// can be serialised without dragging mid-run state into the file.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DirectorSettings {
     /// Clear this many waves to win.
     pub max_waves: u32,
     /// Ships in wave 1; each later wave adds one.
     pub base_count: u32,
     /// Faction of the ships that are sent.
     pub faction: Faction,
-    /// Hull each spawned ship starts with (rises with the wave).
+    /// Hull the first wave's ships start with.
     pub base_hull: f32,
+    /// Extra hull each wave adds on top of `base_hull`.
+    pub hull_per_wave: f32,
+    /// Handling of the ships that are sent.
+    pub stats: ShipStats,
+}
+
+impl Default for DirectorSettings {
+    fn default() -> Self {
+        Self {
+            max_waves: 3,
+            base_count: 2,
+            faction: Faction::Houses,
+            base_hull: 100.0,
+            hull_per_wave: 25.0,
+            // A House patrol: heavier and slower than the player's sloop.
+            stats: ShipStats {
+                thrust: 660.0,
+                turn_rate: 0.35,
+                max_speed: 100.0,
+                ..ShipStats::default()
+            },
+        }
+    }
+}
+
+/// Drives wave spawning. `settings` of `None` suppresses waves entirely — an
+/// authored scenario (the test range) that places its own ships and wants no
+/// director on top.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct SpawnDirector {
+    /// The last wave number spawned (0 before the first).
+    pub wave: u32,
+    /// How the waves are shaped, or `None` for no waves at all.
+    pub settings: Option<DirectorSettings>,
     /// RNG state for jittering spawn angles.
     seed: u32,
 }
@@ -154,16 +197,21 @@ impl Default for SpawnDirector {
     fn default() -> Self {
         Self {
             wave: 0,
-            max_waves: 3,
-            base_count: 2,
-            faction: Faction::Houses,
-            base_hull: 100.0,
+            settings: Some(DirectorSettings::default()),
             seed: 0x1234_5678,
         }
     }
 }
 
 impl SpawnDirector {
+    /// A director that sends no waves — the encounter is whatever was placed.
+    pub fn silent() -> Self {
+        Self {
+            settings: None,
+            ..Self::default()
+        }
+    }
+
     fn next_seed(&mut self) -> f32 {
         crate::util::lcg_next(&mut self.seed)
     }
@@ -200,11 +248,21 @@ pub fn director_system(
         return;
     }
 
-    // Lose: the protagonist is gone.
+    // Lose: the protagonist is gone. Checked before the no-waves branch below, so
+    // an authored scenario can still be *lost* even though it can never be won by
+    // clearing waves it doesn't have.
     if protagonist.is_empty() {
         encounter.outcome = Outcome::PlayerDestroyed;
         return;
     }
+
+    // No director: whatever the scenario placed is the whole encounter. Report
+    // what's alive and stop — never "Cleared", since an inert target carries no
+    // `AiController` and so is never counted as an enemy to clear.
+    let Some(settings) = director.settings else {
+        encounter.enemies_remaining = enemies.iter().count() as u32;
+        return;
+    };
 
     let alive = enemies.iter().count() as u32;
     encounter.enemies_remaining = alive;
@@ -213,7 +271,7 @@ pub fn director_system(
     }
 
     // Current wave cleared — win, or send the next.
-    if director.wave >= director.max_waves {
+    if director.wave >= settings.max_waves {
         encounter.outcome = Outcome::Cleared;
         return;
     }
@@ -221,18 +279,22 @@ pub fn director_system(
     director.wave += 1;
     encounter.wave = director.wave;
 
-    let count = wave_size(director.wave, director.base_count);
-    let hull = director.base_hull + (director.wave - 1) as f32 * 25.0;
+    let count = wave_size(director.wave, settings.base_count);
+    let hull = settings.base_hull + (director.wave - 1) as f32 * settings.hull_per_wave;
     let jitter = director.next_seed();
-    let stats = ShipStats {
-        thrust: 660.0,
-        turn_rate: 0.35,
-        max_speed: 100.0,
-        ..Default::default()
-    };
     for pos in wave_spawn_points(count, bounds.radius * 0.85, jitter) {
+        // Face the origin — waves ring the system edge, so this points each
+        // arrival inward, at the action.
+        let heading = (-pos).to_angle();
         commands.spawn((
-            ship_bundle(director.faction, stats, hull, pos, ShipLoadout::enemy()),
+            ship_bundle(
+                settings.faction,
+                settings.stats,
+                hull,
+                pos,
+                heading,
+                ShipLoadout::enemy(),
+            ),
             AiController::default(),
         ));
     }
@@ -241,11 +303,14 @@ pub fn director_system(
 
 /// Reset the encounter to its opening state. The client calls this on restart
 /// (after despawning the old ships) to begin a fresh run.
+///
+/// The RNG seed *and* the authored settings survive, so restarting replays the
+/// same scenario — a restarted test range must not suddenly grow waves.
 pub fn reset_encounter(director: &mut SpawnDirector, encounter: &mut Encounter) {
-    let seed = director.seed;
     *director = SpawnDirector {
-        seed,
-        ..Default::default()
+        wave: 0,
+        settings: director.settings,
+        seed: director.seed,
     };
     *encounter = Encounter::default();
 }
@@ -291,6 +356,77 @@ mod tests {
             .count();
         assert_eq!(enemies, 2, "wave 1 should spawn base_count ships");
         assert_eq!(world.resource::<Encounter>().wave, 1);
+    }
+
+    /// A scenario with no director settings places its own ships and gets no
+    /// waves — and must never resolve as `Cleared`, however few enemies the
+    /// director can see (an inert target carries no `AiController` at all).
+    #[test]
+    fn a_silent_director_spawns_nothing_and_never_clears() {
+        let mut world = World::new();
+        world.insert_resource(SpawnDirector::silent());
+        world.insert_resource(Encounter::default());
+        world.insert_resource(SystemBounds::default());
+        world.spawn(Protagonist);
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(director_system);
+        for _ in 0..8 {
+            schedule.run(&mut world);
+        }
+
+        let ships = world
+            .query_filtered::<(), With<Ship>>()
+            .iter(&world)
+            .count();
+        assert_eq!(ships, 0, "a silent director must spawn nothing");
+        assert_eq!(
+            world.resource::<Encounter>().outcome,
+            Outcome::InProgress,
+            "an authored scenario is never won by clearing waves"
+        );
+    }
+
+    /// Losing is still possible without a director — the protagonist check must
+    /// come *before* the no-waves early return.
+    #[test]
+    fn a_silent_director_can_still_lose() {
+        let mut world = World::new();
+        world.insert_resource(SpawnDirector::silent());
+        world.insert_resource(Encounter::default());
+        world.insert_resource(SystemBounds::default());
+        // No Protagonist entity at all.
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(director_system);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world.resource::<Encounter>().outcome,
+            Outcome::PlayerDestroyed
+        );
+    }
+
+    /// A restart must replay the same scenario, not fall back to the wave
+    /// encounter — otherwise restarting the test range summons a fleet.
+    #[test]
+    fn resetting_preserves_the_authored_settings() {
+        let mut director = SpawnDirector::silent();
+        let mut encounter = Encounter {
+            wave: 2,
+            enemies_remaining: 3,
+            outcome: Outcome::Cleared,
+        };
+        director.wave = 2;
+
+        reset_encounter(&mut director, &mut encounter);
+
+        assert_eq!(director.wave, 0, "the wave counter restarts");
+        assert!(
+            director.settings.is_none(),
+            "the scenario's settings survive"
+        );
+        assert_eq!(encounter.outcome, Outcome::InProgress);
     }
 
     #[test]

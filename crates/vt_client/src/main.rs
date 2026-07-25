@@ -45,6 +45,9 @@ use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 use vt_sim::prelude::*;
 
+mod data;
+use data::DataPlugin;
+
 mod audio;
 use audio::SfxPlugin;
 
@@ -187,6 +190,8 @@ fn main() {
         .add_plugins(default_plugins)
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
         .add_plugins(SimPlugin)
+        // After SimPlugin: it installs the tuning resources this loads over.
+        .add_plugins(DataPlugin)
         .add_plugins(SfxPlugin)
         .add_plugins(SpaceSkyboxPlugin)
         .add_plugins(StarPlugin)
@@ -272,6 +277,8 @@ fn main() {
 
 /// The player's starting position, offset from the star at the origin.
 const PLAYER_START: Vec2 = Vec2::new(0.0, -520.0);
+/// Facing at the start: bow toward the star, and the action around it.
+const PLAYER_START_HEADING: f32 = std::f32::consts::FRAC_PI_2;
 
 /// Spawn the player's corsair sloop — the encounter's protagonist.
 fn spawn_player(commands: &mut Commands) {
@@ -283,6 +290,7 @@ fn spawn_player(commands: &mut Commands) {
             ShipStats::default(),
             100.0,
             PLAYER_START,
+            PLAYER_START_HEADING,
             ShipLoadout::player(),
         ),
         Player,

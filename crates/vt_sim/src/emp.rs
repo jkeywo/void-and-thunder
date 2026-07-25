@@ -12,6 +12,7 @@ use bevy_ecs::prelude::*;
 use bevy_math::Vec2;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
+use serde::{Deserialize, Serialize};
 
 use crate::combat::circles_overlap;
 use crate::components::{Collider, EmpDefense, Faction, Heading, PilotIntent, Ship, Ttl, Velocity};
@@ -20,7 +21,8 @@ use crate::util::wrap_angle as wrap;
 
 /// A frontal EMP emitter. While held it swivels within `arc` toward a lead of
 /// the target and fires [`EmpBolt`]s on `cooldown`. Player-only for now.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EmpWeapon {
     /// Full width of the firing arc (radians); the emitter aims within ±arc/2 of the bow.
     pub arc: f32,

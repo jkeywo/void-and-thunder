@@ -21,12 +21,15 @@ use bevy_ecs::prelude::*;
 use bevy_math::{Quat, Vec3};
 use bevy_time::Time;
 use bevy_transform::components::Transform;
+use serde::{Deserialize, Serialize};
 
 use crate::combat::{braced_damage, spheres_overlap};
 use crate::components::{Brace, Collider, Faction, Hull, PilotIntent, Ship, Ttl, ENGAGEMENT_RANGE};
 use crate::events::ShipHit;
+use crate::tuning::SimTuning;
 
-/// Seconds between successive tube launches once a volley is released.
+/// Default seconds between successive tube launches once a volley is released.
+/// The live value is [`SimTuning::torpedo_launch_interval`].
 pub const TORPEDO_LAUNCH_INTERVAL: f32 = 0.5;
 
 /// Maximum torpedo tubes a bay can hold. Sizes the fixed lock/launch arrays so
@@ -39,11 +42,14 @@ pub const TORPEDO_TUBES: usize = 6;
 /// ([`TorpedoLock`]) and draining a staggered launch ([`TorpedoLaunchQueue`]) —
 /// are separate components, since they don't share a lifetime with each other
 /// or with this one (a volley can be mid-launch while a fresh aim starts).
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TorpedoBay {
     /// Tubes available (magazine size).
     pub tubes_max: u32,
-    /// Tubes currently loaded (fractional while a tube reloads).
+    /// Tubes currently loaded (fractional while a tube reloads). Live state —
+    /// authoring it would refill the magazine on every hot reload.
+    #[serde(skip)]
     pub loaded: f32,
     /// Seconds to reload one tube.
     pub reload_per_tube: f32,
@@ -219,6 +225,7 @@ pub fn torpedo_reload_system(time: Res<Time>, mut bays: Query<&mut TorpedoBay>) 
 /// volley can still be launching while a fresh aim starts accruing locks.
 pub fn torpedo_launch_system(
     time: Res<Time>,
+    tuning: Res<SimTuning>,
     mut commands: Commands,
     mut bays: Query<(&Transform, &Faction, &TorpedoBay, &mut TorpedoLaunchQueue)>,
 ) {
@@ -250,7 +257,7 @@ pub fn torpedo_launch_system(
                 ));
             }
             launch.flip = !launch.flip;
-            launch.timer = TORPEDO_LAUNCH_INTERVAL;
+            launch.timer = tuning.torpedo_launch_interval;
         }
     }
 }
@@ -403,6 +410,7 @@ pub fn torpedo_homing_system(
 /// 3D distance so a torpedo still arcing high above the plane doesn't detonate.
 pub fn torpedo_hit_system(
     mut commands: Commands,
+    tuning: Res<SimTuning>,
     mut hits: MessageWriter<ShipHit>,
     torps: Query<(Entity, &Transform, &Torpedo), Without<Ship>>,
     mut ships: Query<
@@ -428,7 +436,11 @@ pub fn torpedo_hit_system(
                 ship_tf.translation,
                 collider.radius,
             ) {
-                hull.current -= braced_damage(torp.damage, brace.is_some_and(|b| b.active));
+                hull.current -= braced_damage(
+                    torp.damage,
+                    brace.is_some_and(|b| b.active),
+                    tuning.brace_damage_factor,
+                );
                 hits.write(ShipHit {
                     position: ship_tf.translation.truncate(),
                     ship: ship_entity,
@@ -746,6 +758,7 @@ mod tests {
 
         let mut world = World::new();
         world.insert_resource(Time::<()>::default());
+        world.init_resource::<SimTuning>();
 
         // A target for the queued torpedo to home on (never actually checked
         // here — this test only isolates the launch-queue drain).

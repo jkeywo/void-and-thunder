@@ -12,6 +12,9 @@ repository.workspace = true
 [dependencies]
 bevy = { workspace = true, features = ["wav"] }
 vt_sim.workspace = true
+# Tuning/scenario data is RON (see assets/data/ and src/data/).
+ron.workspace = true
+serde.workspace = true
 
 # On the web, Bevy's audio is disabled (it doesn't play nicely in wasm); sound is
 # routed through a WebAudio JS shim instead, called via wasm-bindgen.
@@ -31,6 +34,12 @@ ul-next = { version = "0.5", optional = true }
 [features]
 default = ["native-html-hud"]
 fast-compile = ["bevy/dynamic_linking"]
+# Watch assets/data/ and re-apply tuning the moment a file changes on disk —
+# edit a RON file in any editor and the running game follows. Native only:
+# `file_watcher` pulls in `notify`, which doesn't build for wasm. Note this
+# forfeits the determinism `fixed-update-sim` buys — a run whose tuning moved
+# mid-flight is not reproducible from its inputs alone.
+hot-reload = ["bevy/file_watcher"]
 # Render the HTML HUD (assets/ui/hud.html) on native desktop via Ultralight →
 # Bevy texture — the canonical HUD, matching the web build. Default-on so
 # plain `cargo run -p vt_client` shows a HUD; it downloads/links the Ultralight

@@ -9,8 +9,14 @@ repository.workspace = true
 
 [dependencies]
 # Logic-only Bevy: ECS, App/Plugin, math, time, transform. No render/window/audio.
+# Deliberately *not* bevy_asset: this crate owns the tuning types and knows how
+# to be deserialized, but never loads a file. The client does the loading and
+# hands the result over as a plain Resource, so `Harness` stays a bare World.
 bevy_app.workspace = true
 bevy_ecs.workspace = true
-bevy_math.workspace = true
+# `serialize` is named explicitly rather than relied on via feature unification
+# with the client, so `cargo test -p vt_sim` on its own still gets Vec2: Serialize.
+bevy_math = { workspace = true, features = ["serialize"] }
 bevy_time.workspace = true
 bevy_transform.workspace = true
+serde.workspace = true

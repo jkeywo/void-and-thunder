@@ -12,10 +12,12 @@ use bevy_time::Time;
 use bevy_transform::components::Transform;
 
 use crate::components::{Heading, Helm, ShipStats, SpeedScale, Velocity};
+use crate::tuning::SimTuning;
 use crate::util::wrap_angle;
 
-/// Fraction of forward thrust available in reverse — backing sails only push a
-/// quarter as hard, so reverse tops out at ~25% of forward speed.
+/// Default fraction of forward thrust available in reverse — backing sails only
+/// push a quarter as hard, so reverse tops out at ~25% of forward speed. The live
+/// value is [`SimTuning::reverse_throttle`].
 pub const REVERSE_THROTTLE: f32 = 0.25;
 
 /// Advance one ship's heading and velocity by `dt` seconds.
@@ -27,13 +29,14 @@ pub fn helm_step(
     velocity: Vec2,
     stats: &ShipStats,
     helm: &Helm,
+    reverse_throttle: f32,
     dt: f32,
 ) -> (f32, Vec2) {
     let turn = helm.turn.clamp(-1.0, 1.0);
     let throttle = helm.throttle.clamp(-1.0, 1.0);
-    // Reverse is weak — a quarter of forward thrust.
+    // Reverse is weak — a fraction of forward thrust.
     let drive = if throttle < 0.0 {
-        throttle * REVERSE_THROTTLE
+        throttle * reverse_throttle
     } else {
         throttle
     };
@@ -59,6 +62,7 @@ pub fn helm_step(
 /// unaware of the modifiers.
 pub fn movement_system(
     time: Res<Time>,
+    tuning: Res<SimTuning>,
     mut ships: Query<(
         &mut Transform,
         &mut Heading,
@@ -78,7 +82,14 @@ pub fn movement_system(
             thrust: stats.thrust * scale.0,
             ..*stats
         };
-        let (new_heading, new_velocity) = helm_step(heading.0, velocity.0, &scaled, helm, dt);
+        let (new_heading, new_velocity) = helm_step(
+            heading.0,
+            velocity.0,
+            &scaled,
+            helm,
+            tuning.reverse_throttle,
+            dt,
+        );
         heading.0 = wrap_angle(new_heading);
         velocity.0 = new_velocity;
         transform.translation += (new_velocity * dt).extend(0.0);
@@ -111,6 +122,7 @@ mod tests {
                 throttle: 1.0,
                 turn: 0.0,
             },
+            REVERSE_THROTTLE,
             1.0,
         );
         assert!((v.x - 100.0).abs() < 1e-4, "vx was {}", v.x);
@@ -128,6 +140,7 @@ mod tests {
                 throttle: -1.0,
                 turn: 0.0,
             },
+            REVERSE_THROTTLE,
             1.0,
         );
         assert!(
@@ -147,6 +160,7 @@ mod tests {
                 throttle: 0.0,
                 turn: 1.0,
             },
+            REVERSE_THROTTLE,
             0.5,
         );
         assert!((h - 0.5).abs() < 1e-4, "heading was {}", h);
@@ -165,6 +179,7 @@ mod tests {
                     throttle: 1.0,
                     turn: 0.0,
                 },
+                REVERSE_THROTTLE,
                 0.1,
             );
         }
@@ -177,7 +192,14 @@ mod tests {
             linear_drag: 0.5,
             ..sloop()
         };
-        let (_, v) = helm_step(0.0, Vec2::new(100.0, 0.0), &stats, &Helm::default(), 1.0);
+        let (_, v) = helm_step(
+            0.0,
+            Vec2::new(100.0, 0.0),
+            &stats,
+            &Helm::default(),
+            REVERSE_THROTTLE,
+            1.0,
+        );
         assert!(
             v.length() < 100.0,
             "coasting speed should drop, was {}",

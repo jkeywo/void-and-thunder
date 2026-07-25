@@ -29,6 +29,7 @@ pub mod plugin;
 pub mod ship;
 pub mod spawn;
 pub mod torpedo;
+pub mod tuning;
 pub mod util;
 pub mod world;
 
@@ -55,9 +56,11 @@ pub mod prelude {
     };
     pub use crate::plugin::{SimPlugin, SimSet};
     pub use crate::spawn::{
-        reset_encounter, ship_bundle, Encounter, Outcome, ShipLoadout, SpawnDirector,
+        reset_encounter, ship_bundle, DirectorSettings, Encounter, Outcome, ShipLoadout,
+        SpawnDirector,
     };
     pub use crate::torpedo::{Torpedo, TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
+    pub use crate::tuning::{AiTuning, SimTuning};
     pub use crate::util::{lcg_next, wrap_angle};
     pub use crate::world::{bounds_return, SystemBounds};
 }

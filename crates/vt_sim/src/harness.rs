@@ -23,6 +23,7 @@ use crate::torpedo::{
     torpedo_hit_system, torpedo_homing_system, torpedo_launch_system, torpedo_lock_system,
     torpedo_reload_system,
 };
+use crate::tuning::SimTuning;
 use crate::world::{bounds_system, SystemBounds};
 
 /// A deterministic, headless instance of the simulation.
@@ -43,6 +44,8 @@ impl Harness {
         let mut world = World::new();
         world.init_resource::<Time>();
         world.init_resource::<SystemBounds>();
+        // The defaults are the constants, so the harness needs no data file.
+        world.init_resource::<SimTuning>();
         world.init_resource::<SpawnDirector>();
         world.init_resource::<Encounter>();
         world.init_resource::<Plunder>();
@@ -142,6 +145,7 @@ mod tests {
                 ShipStats::default(),
                 100.0,
                 Vec2::ZERO,
+                0.0,
                 ShipLoadout::default(),
             ),
             Protagonist,
@@ -156,6 +160,7 @@ mod tests {
                     ShipStats::default(),
                     100.0,
                     Vec2::new(280.0, 0.0),
+                    0.0,
                     ShipLoadout::enemy(),
                 ),
                 AiController::default(),
@@ -187,6 +192,7 @@ mod tests {
                 ShipStats::default(),
                 100.0,
                 Vec2::ZERO,
+                0.0,
                 ShipLoadout::player(),
             ),
             Protagonist,
@@ -201,6 +207,7 @@ mod tests {
                     ShipStats::default(),
                     100.0,
                     Vec2::new(300.0, 0.0),
+                    0.0,
                     ShipLoadout::enemy(),
                 ),
                 AiController::default(),

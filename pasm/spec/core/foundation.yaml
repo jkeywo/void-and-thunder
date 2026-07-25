@@ -506,3 +506,76 @@ entities:
         ]
       symbols: [SystemBounds, bounds_return, bounds_system, Landmark]
       tests: [crates/vt_sim/src/world.rs]
+
+  # ---- Proposed: data-driven tuning, scenarios and the design panel ----
+
+  - component: data-tuning
+    core:
+      status: partially-implemented
+      confidence: confirmed
+      title: Data-Driven Tuning (RON + hot reload)
+      summary: >-
+        Gameplay numbers move out of Rust consts into RON under
+        crates/vt_client/assets/data/. SimTuning holds the sim's rules
+        (damage/TTL/ranges/AI gains) and FeelTuning the client's feel
+        (bullet-time, screen shake, trails, camera). vt_sim owns the types and
+        derives Serialize/Deserialize/Reflect but stays asset-free; vt_client
+        owns the AssetLoaders and copies each loaded asset into the plain
+        Resource the sim reads. Default impls remain the fallback, so the
+        headless Harness needs no asset plumbing and shipped RON is asserted
+        equal to Default in tests.
+
+        Landed so far: SimTuning and its RON file, loaded and hot-reloaded.
+        FeelTuning (the client's camera/juice/trail constants) is still to come.
+      references: [void-and-thunder-simulation, test-harness, game-feel, bullet-time]
+    implementation:
+      status: declared
+      paths:
+        [
+          crates/vt_sim/src/tuning.rs,
+          crates/vt_client/src/data/mod.rs,
+          crates/vt_client/assets/data/sim.tuning.ron,
+        ]
+      symbols:
+        [
+          SimTuning,
+          AiTuning,
+          DataPlugin,
+          DataHandles,
+          RonAssetLoader,
+          SimTuningAsset,
+          RonLoadError,
+        ]
+      tests: [crates/vt_sim/src/tuning.rs, crates/vt_client/src/data/mod.rs]
+
+  - component: scenarios
+    core:
+      status: proposed
+      confidence: provisional
+      title: Ship Classes & Scenarios
+      summary: >-
+        Ships become instances of named classes (ShipTable + a ClassId
+        component) rather than hand-written struct literals, and encounters
+        become authored Scenario files — player placement, pre-placed enemies
+        with ShipFlags (invulnerable / inert / anchored), and optional
+        DirectorSettings. A scenario with no director settings suppresses waves
+        entirely, which is what the Test Range uses: one stationary,
+        non-attacking, invulnerable target. Loading is a new GameState that
+        gates spawning on the assets being ready.
+      references: [spawn-director, session-lifecycle, data-tuning, piracy-finisher]
+
+  - component: dev-panel
+    core:
+      status: proposed
+      confidence: provisional
+      title: Design Panel (in-game tuning UI)
+      summary: >-
+        An egui panel, behind the non-default dev-panel feature, that walks the
+        tuning structs with bevy_reflect and renders every field as a paired
+        slider and text box. A static FieldSpec table supplies the min/max and
+        marks which fields are authored config versus live state, so a re-apply
+        pass can push class edits onto live entities without clobbering reload
+        timers. Edits apply instantly; an explicit Save writes the RON back.
+        A DevPanelFocus resource gates game input while the panel has the
+        pointer or keyboard.
+      references: [data-tuning, scenarios, controller-input]

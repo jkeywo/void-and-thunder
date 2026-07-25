@@ -24,8 +24,8 @@
 
 use bevy::prelude::*;
 use vt_sim::prelude::{
-    Boarding, BoostDrive, Broadside, Encounter, Hull, MicrowarpDrive, Outcome, Plunder, TorpedoBay,
-    TorpedoLock, BOARD_DWELL,
+    Boarding, BoostDrive, Broadside, Encounter, Hull, MicrowarpDrive, Outcome, Plunder, SimTuning,
+    TorpedoBay, TorpedoLock,
 };
 
 use crate::bullet_time::AimBattery;
@@ -114,6 +114,7 @@ fn gather_hud_state(
     method: Res<InputMethod>,
     battery: Res<AimBattery>,
     controls_panel: Res<ControlsPanel>,
+    tuning: Res<SimTuning>,
     state: Res<State<GameState>>,
     mut snap: ResMut<HudSnapshot>,
 ) {
@@ -148,7 +149,7 @@ fn gather_hud_state(
     j.push_str(&format!(",\"aiPilot\":{}", player_ai.on));
 
     let boarding_progress = if boarding.target.is_some() {
-        (boarding.progress / BOARD_DWELL).clamp(0.0, 1.0)
+        (boarding.progress / tuning.board_dwell).clamp(0.0, 1.0)
     } else {
         0.0
     };

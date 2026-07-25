@@ -22,6 +22,11 @@ bevy_transform = "0.19"
 
 vt_sim = { path = "crates/vt_sim" }
 
+# Data-driven tuning. `ron` is pinned to the major already in the lock via
+# bevy_asset — a different major would duplicate the crate in the build.
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+
 # Faster iterative builds: our code lightly optimised, dependencies fully optimised.
 [profile.dev]
 opt-level = 1
