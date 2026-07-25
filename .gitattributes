@@ -1,0 +1,15 @@
+# Normalize line endings: LF in the repository, always. This repo is edited on
+# Windows and consumed by CI on Linux; without this, the same file exists as two
+# different byte sequences depending on who checked it out, and every
+# cross-repo diff (games vendoring or comparing against this code) is noise.
+* text=auto
+*.rs text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.csv text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
