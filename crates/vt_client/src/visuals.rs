@@ -202,7 +202,7 @@ pub fn damage_tint(
         }
         // EMP glow, growing with the EMP load.
         let e = (emp.damage / emp.resist).clamp(0.0, 1.0);
-        r = r * (1.0 - e);
+        r *= 1.0 - e;
         g = g * (1.0 - e) + 0.7 * e;
         b = b * (1.0 - e) + 1.0 * e;
         material.base_color = flashed(Color::srgb(r, g, b), flash);

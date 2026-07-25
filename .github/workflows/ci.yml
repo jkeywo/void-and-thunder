@@ -1,3 +1,7 @@
+# Fleet CI caller — the workflow itself lives in vellum, pinned to a rev like
+# every other vellum dependency; a bump PR moves this rev together with the
+# pyproject pin. Jobs: pasm validate + scan (gates), fmt / clippy -D warnings /
+# tests, Trunk web build, Pages deploy on main pushes.
 name: CI
 
 on:
@@ -5,34 +9,22 @@ on:
     branches: [main]
   pull_request:
 
-jobs:
-  rust:
-    name: Rust — fmt, test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - name: Install system deps for Bevy
-        # libwayland-dev / libxkbcommon-dev are needed to build vt_client's winit
-        # (Wayland) backend on Linux — wayland-sys pkg-configs wayland-client.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
-      - name: Format check
-        run: cargo fmt --all --check
-      - name: Test (sim + client build)
-        run: cargo test --workspace
+# The deploy job inside fleet-ci needs pages + id-token; a called workflow can
+# only narrow what the caller grants.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
-  pasm:
-    name: PASM — architecture spec
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Validate the spec, then scan the implementation against it
-        run: |
-          uv run pasm validate pasm/spec
-          uv run pasm scan pasm/spec --json > pasm-scan.json || true
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fleet:
+    uses: jkeywo/vellum/.github/workflows/fleet-ci.yml@ece24ad86fa384d12279105f94f089da180f9d89
+    with:
+      # winit's Wayland backend and Bevy's audio/input need these to build on
+      # ubuntu; the wasm job shares them for host-compiled build scripts.
+      apt-packages: libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      wasm-mode: trunk

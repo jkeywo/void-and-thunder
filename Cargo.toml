@@ -9,6 +9,14 @@ license = "MIT OR Apache-2.0"
 authors = ["John K"]
 repository = "https://github.com/jkeywo/void-and-thunder"
 
+[workspace.lints.clippy]
+# Bevy system signatures are one inline type by design: a query is its type and
+# a system's arguments are its data access. Factoring either into aliases or
+# param structs only moves the noise somewhere the reader still has to chase.
+# Bevy's own workspace allows both lints for the same reason.
+type_complexity = "allow"
+too_many_arguments = "allow"
+
 [workspace.dependencies]
 # Full engine — client only.
 bevy = "0.19"

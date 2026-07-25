@@ -24,7 +24,7 @@ use crate::world::SystemBounds;
 
 /// A ship's full weapon/drive loadout. Every ship carries the same kit; presets
 /// differ only in tuning, so a player and an AI ship are the same entity shape.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct ShipLoadout {
     pub broadside: Broadside,
@@ -32,18 +32,6 @@ pub struct ShipLoadout {
     pub torpedoes: TorpedoBay,
     pub boost: BoostDrive,
     pub microwarp: MicrowarpDrive,
-}
-
-impl Default for ShipLoadout {
-    fn default() -> Self {
-        Self {
-            broadside: Broadside::default(),
-            emp: EmpWeapon::default(),
-            torpedoes: TorpedoBay::default(),
-            boost: BoostDrive::default(),
-            microwarp: MicrowarpDrive::default(),
-        }
-    }
 }
 
 impl ShipLoadout {
