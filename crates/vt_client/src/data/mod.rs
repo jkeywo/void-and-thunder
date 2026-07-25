@@ -30,9 +30,11 @@ use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
 use vt_sim::prelude::SimTuning;
 
+pub mod feel;
 pub mod scenario;
 pub mod ships;
 
+pub use feel::FeelTuning;
 pub use scenario::{director_for, spawn_scenario, Scenario};
 pub use ships::{set_director, ShipTable};
 
@@ -41,6 +43,8 @@ pub use ships::{set_director, ShipTable};
 pub mod paths {
     /// Simulation rules — damage, ranges, AI gains.
     pub const SIM_TUNING: &str = "data/sim.tuning.ron";
+    /// How the game feels — bullet-time, shake, trails, camera.
+    pub const FEEL_TUNING: &str = "data/feel.tuning.ron";
     /// The ship classes every ship is an instance of.
     pub const SHIPS: &str = "data/ships.ron";
     /// The normal encounter: a player, and three escalating waves.
@@ -161,6 +165,7 @@ impl<A: Asset + DeserializeOwned> AssetLoader for RonAssetLoader<A> {
 #[derive(Resource, Default)]
 pub struct DataHandles {
     pub sim_tuning: Handle<SimTuningAsset>,
+    pub feel: Handle<FeelTuning>,
     pub ships: Handle<ShipTable>,
     /// Both scenarios stay loaded so switching to the test range is instant and
     /// a hot-reload watch stays on each.
@@ -198,9 +203,11 @@ pub struct DataPlugin;
 impl Plugin for DataPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<SimTuningAsset>()
+            .init_asset::<FeelTuning>()
             .init_asset::<ShipTable>()
             .init_asset::<Scenario>()
             .register_asset_loader(RonAssetLoader::<SimTuningAsset>::new(&["tuning.ron"]))
+            .register_asset_loader(RonAssetLoader::<FeelTuning>::new(&["tuning.ron"]))
             .register_asset_loader(RonAssetLoader::<ShipTable>::new(&["ron"]))
             .register_asset_loader(RonAssetLoader::<Scenario>::new(&["scn.ron"]))
             .init_resource::<DataHandles>()
@@ -210,8 +217,12 @@ impl Plugin for DataPlugin {
             // the resource, and the loader copies into it. One authoritative
             // copy, whichever end the edit came from.
             .init_resource::<ShipTable>()
+            .init_resource::<FeelTuning>()
             .add_systems(Startup, begin_load)
-            .add_systems(Update, (apply_sim_tuning, apply_ship_table));
+            .add_systems(
+                Update,
+                (apply_sim_tuning, apply_feel_tuning, apply_ship_table),
+            );
     }
 }
 
@@ -221,11 +232,33 @@ impl Plugin for DataPlugin {
 /// `session::await_data`).
 fn begin_load(server: Res<AssetServer>, mut handles: ResMut<DataHandles>) {
     handles.sim_tuning = server.load(paths::SIM_TUNING);
+    handles.feel = server.load(paths::FEEL_TUNING);
     handles.ships = server.load(paths::SHIPS);
     handles.scenarios = paths::SCENARIOS
         .iter()
         .map(|(_, path)| (*path, server.load(*path)))
         .collect();
+}
+
+/// Copy loaded (or reloaded) feel tuning into the resource the client reads.
+fn apply_feel_tuning(
+    mut events: MessageReader<AssetEvent<FeelTuning>>,
+    assets: Res<Assets<FeelTuning>>,
+    mut feel: ResMut<FeelTuning>,
+) {
+    for event in events.read() {
+        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = event else {
+            continue;
+        };
+        let Some(loaded) = assets.get(*id) else {
+            continue;
+        };
+        if *feel == *loaded {
+            continue; // our own save came back around
+        }
+        *feel = *loaded;
+        info!("feel tuning reloaded from {}", paths::FEEL_TUNING);
+    }
 }
 
 /// Copy a loaded (or reloaded) class table into the resource everything reads.

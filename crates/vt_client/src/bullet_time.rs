@@ -16,13 +16,9 @@ use bevy::prelude::*;
 use bevy::time::{Real, Virtual};
 use vt_sim::prelude::PilotIntent;
 
+use crate::data::FeelTuning;
 use crate::input::{Aiming, Paused};
 use crate::Player;
-
-/// Fraction of normal time while aiming (bullet-time).
-const AIM_TIMESCALE: f32 = 0.10;
-/// Fraction of normal time during a hitstop — near enough a freeze-frame.
-const HITSTOP_TIMESCALE: f32 = 0.05;
 
 /// A brief freeze-frame on impact, measured in *real* seconds so it lasts the
 /// same handful of frames whether or not bullet-time is already running.
@@ -39,34 +35,35 @@ impl Hitstop {
     }
 }
 
-/// The aim battery: aiming a weapon dilates global time toward
-/// [`AIM_TIMESCALE`] while this has charge, then eases back. Charge is spent in
-/// real seconds (so the window is a real ~5s regardless of the dilation) and
-/// recovers when not aiming. `dilation` is the current eased timescale.
+/// The aim battery: aiming a weapon dilates global time while this has charge,
+/// then eases back. Charge is spent in real seconds (so the window is a real ~5s
+/// regardless of the dilation) and recovers when not aiming. `dilation` is the
+/// current eased timescale.
+///
+/// Only the live charge lives here; the rates and the timescales are authored in
+/// [`FeelTuning::time`]. `max` is mirrored from there each frame so the HUD's
+/// gauge has a denominator without reaching for the tuning itself.
 #[derive(Resource)]
 pub struct AimBattery {
     pub charge: f32,
     pub max: f32,
-    drain_per_sec: f32,
-    recharge_per_sec: f32,
     dilation: f32,
 }
 
 impl Default for AimBattery {
     fn default() -> Self {
+        let time = crate::data::feel::TimeFeel::default();
         Self {
-            charge: 5.0,
-            max: 5.0,
-            drain_per_sec: 1.0,
-            recharge_per_sec: 1.0,
+            charge: time.battery_max,
+            max: time.battery_max,
             dilation: 1.0,
         }
     }
 }
 
-/// Dilate global time toward [`AIM_TIMESCALE`] while the player is aiming and the
-/// aim battery has charge; ease back otherwise. Battery + easing run on real
-/// time so the window is a real ~5s and stays smooth under dilation.
+/// Dilate global time toward the authored aim timescale while the player is
+/// aiming and the aim battery has charge; ease back otherwise. Battery + easing
+/// run on real time so the window is a real ~5s and stays smooth under dilation.
 pub fn aim_time_dilation(
     real: Res<Time<Real>>,
     mut virt: ResMut<Time<Virtual>>,
@@ -75,6 +72,7 @@ pub fn aim_time_dilation(
     player: Query<&PilotIntent, With<Player>>,
     mut battery: ResMut<AimBattery>,
     mut hitstop: ResMut<Hitstop>,
+    feel: Res<FeelTuning>,
 ) {
     // While paused — or parked on the start screen — the virtual clock is
     // frozen. Leave the battery untouched and don't fight the freeze with a
@@ -90,11 +88,15 @@ pub fn aim_time_dilation(
     // the one ability you want to line up carefully the one that punished you
     // for taking your time.
     let wants_dilation = aiming.port || aiming.starboard || microwarp_hold;
+    // Retuning the battery's size mid-run must not leave a stale gauge, so the
+    // cap is taken from the authored value every frame rather than at spawn.
+    battery.max = feel.time.battery_max;
     let target = if wants_dilation && battery.charge > 0.0 {
-        battery.charge = (battery.charge - battery.drain_per_sec * dt).max(0.0);
-        AIM_TIMESCALE
+        battery.charge = (battery.charge - feel.time.battery_drain_per_sec * dt).max(0.0);
+        feel.time.aim_timescale
     } else {
-        battery.charge = (battery.charge + battery.recharge_per_sec * dt).min(battery.max);
+        battery.charge =
+            (battery.charge + feel.time.battery_recharge_per_sec * dt).min(battery.max);
         1.0
     };
     let k = 1.0 - (-10.0 * dt).exp();
@@ -105,7 +107,7 @@ pub fn aim_time_dilation(
     // underneath, so time resumes wherever the dilation had got to.
     if hitstop.remaining > 0.0 {
         hitstop.remaining -= dt;
-        virt.set_relative_speed(HITSTOP_TIMESCALE);
+        virt.set_relative_speed(feel.time.hitstop_timescale);
         return;
     }
     virt.set_relative_speed(battery.dilation.max(0.02));

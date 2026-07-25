@@ -64,7 +64,7 @@ mod hud;
 use hud::HudBridgePlugin;
 
 mod camera;
-use camera::{camera_orbit, CameraRig, FreeLook, MainCamera, CAM_DISTANCE, CAM_HEIGHT};
+use camera::{camera_orbit, CameraRig, FreeLook, MainCamera};
 
 mod visuals;
 use visuals::{
@@ -379,13 +379,16 @@ fn setup(
 
     // Camera: a perspective view slightly above the plane. The far plane is
     // pushed out so the distant starfield is visible.
+    let cam = data::feel::CameraFeel::default();
     commands.spawn((
         Camera3d::default(),
         Projection::from(PerspectiveProjection {
             far: 30_000.0,
             ..default()
         }),
-        Transform::from_xyz(0.0, -CAM_DISTANCE, CAM_HEIGHT).looking_at(Vec3::ZERO, Vec3::Z),
+        // Seeded from the compiled-in camera feel; `camera_orbit` moves it to
+        // wherever the loaded file says on the first frame.
+        Transform::from_xyz(0.0, -cam.distance, cam.height).looking_at(Vec3::ZERO, Vec3::Z),
         // Ambient fill is a per-camera component in Bevy 0.19.
         AmbientLight {
             color: Color::srgb(0.6, 0.7, 1.0),

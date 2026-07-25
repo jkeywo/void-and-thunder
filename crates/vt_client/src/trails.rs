@@ -25,46 +25,12 @@ use bevy::render::render_resource::PrimitiveTopology;
 use std::collections::VecDeque;
 use vt_sim::prelude::*;
 
+use crate::data::feel::RibbonFeel;
+use crate::data::FeelTuning;
 use crate::interpolate::SmoothingSet;
 
-// ---- Engine plume tuning ----
-
-/// How far aft of a hull's centre the drives sit. Hulls are normalised to ~44
-/// units long (see `ship_model` in `main.rs`), so this is roughly the stern.
-const STERN_X: f32 = -20.0;
-/// Half the spacing between the twin drives, so a ship trails two plumes.
-const NACELLE_Y: f32 = 6.0;
-/// Throttle below which the drives are considered cold — no plume.
-const THROTTLE_DEADZONE: f32 = 0.05;
-/// How much wider the plume runs while the boost drive is engaged.
-const BOOST_WIDTH: f32 = 1.7;
-
-/// The drive plume: white-hot at the nozzle, cooling to deep ion blue.
-const ENGINE_CFG: RibbonCfg = RibbonCfg {
-    hot: LinearRgba::rgb(0.78, 0.93, 1.0),
-    cool: LinearRgba::rgb(0.12, 0.32, 0.9),
-    width: 5.0,
-    lifetime: 0.9,
-    max_crumbs: 64,
-    min_step: 5.0,
-};
-
-/// A torpedo's burn: shorter, tighter and angrier than a drive plume.
-const TORPEDO_CFG: RibbonCfg = RibbonCfg {
-    hot: LinearRgba::rgb(1.0, 0.86, 0.55),
-    cool: LinearRgba::rgb(0.9, 0.28, 0.05),
-    width: 3.5,
-    lifetime: 0.45,
-    max_crumbs: 48,
-    min_step: 4.0,
-};
-
-/// How far back along a torpedo's body (local +Z is its nose) the burn starts.
-const TORPEDO_TAIL_Z: f32 = -13.0;
-
-/// How much of its width a crumb loses by the end of its life, on top of the
-/// alpha fade — the ribbon tapers to a point rather than ending in a blunt edge.
-const WIDTH_FALLOFF: f32 = 0.55;
+// Engine and torpedo trail tuning lives in `FeelTuning::trails` (see
+// `data/feel.rs`), so a plume can be reshaped with the game running.
 
 /// Mounts the trail ribbons: the shared material plus the attach/update systems.
 pub struct TrailPlugin;
@@ -126,7 +92,11 @@ struct Crumb {
     glow: f32,
 }
 
-/// The fixed shape of one kind of ribbon.
+/// The shape of one kind of ribbon, as the renderer wants it.
+///
+/// Built from the authored [`RibbonFeel`] rather than being the authored type
+/// itself: colours are `LinearRgba` here and plain arrays in the file, because a
+/// designer editing a colour wants three numbers, not a colour space.
 #[derive(Clone, Copy, Debug)]
 struct RibbonCfg {
     /// Colour at the head of the ribbon.
@@ -142,6 +112,23 @@ struct RibbonCfg {
     /// How far the emitter must travel before a new crumb is laid rather than
     /// the head one being slid along.
     min_step: f32,
+    /// How much of its width a crumb loses by the end of its life, on top of the
+    /// alpha fade — so the ribbon tapers to a point rather than a blunt edge.
+    width_falloff: f32,
+}
+
+impl RibbonCfg {
+    fn from_feel(feel: &RibbonFeel, width_falloff: f32) -> Self {
+        Self {
+            hot: LinearRgba::rgb(feel.hot[0], feel.hot[1], feel.hot[2]),
+            cool: LinearRgba::rgb(feel.cool[0], feel.cool[1], feel.cool[2]),
+            width: feel.width,
+            lifetime: feel.lifetime,
+            max_crumbs: feel.max_crumbs as usize,
+            min_step: feel.min_step,
+            width_falloff,
+        }
+    }
 }
 
 /// A ribbon streaming from `source`. Lives on its **own** entity with an
@@ -251,7 +238,7 @@ fn rebuild_mesh(mesh: &mut Mesh, crumbs: &VecDeque<Crumb>, head: Option<Crumb>, 
 
         let t = i as f32 / (n - 1) as f32;
         let age_frac = (crumb.age / cfg.lifetime.max(1e-4)).clamp(0.0, 1.0);
-        let half = crumb.width * (1.0 - age_frac * WIDTH_FALLOFF) * 0.5;
+        let half = crumb.width * (1.0 - age_frac * cfg.width_falloff) * 0.5;
 
         positions.push((crumb.pos - perp * half).to_array());
         positions.push((crumb.pos + perp * half).to_array());
@@ -366,7 +353,9 @@ pub fn attach_engine_trails(
     assets: Res<TrailAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     ships: Query<Entity, (With<Ship>, Without<TrailsAttached>)>,
+    feel: Res<FeelTuning>,
 ) {
+    let trails = feel.trails;
     for ship in &ships {
         for side in [-1.0, 1.0] {
             spawn_ribbon(
@@ -374,8 +363,8 @@ pub fn attach_engine_trails(
                 &mut meshes,
                 &assets,
                 ship,
-                Vec3::new(STERN_X, NACELLE_Y * side, 0.0),
-                ENGINE_CFG,
+                Vec3::new(trails.stern_x, trails.nacelle_y * side, 0.0),
+                RibbonCfg::from_feel(&trails.engine, trails.width_falloff),
             );
         }
         commands.entity(ship).insert(TrailsAttached);
@@ -388,15 +377,17 @@ pub fn attach_torpedo_trails(
     assets: Res<TrailAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     torpedoes: Query<Entity, (With<Torpedo>, Without<TrailsAttached>)>,
+    feel: Res<FeelTuning>,
 ) {
+    let trails = feel.trails;
     for torpedo in &torpedoes {
         spawn_ribbon(
             &mut commands,
             &mut meshes,
             &assets,
             torpedo,
-            Vec3::new(0.0, 0.0, TORPEDO_TAIL_Z),
-            TORPEDO_CFG,
+            Vec3::new(0.0, 0.0, trails.torpedo_tail_z),
+            RibbonCfg::from_feel(&trails.torpedo, trails.width_falloff),
         );
         commands.entity(torpedo).insert(TrailsAttached);
     }
@@ -420,7 +411,9 @@ pub fn update_trails(
         Option<&BoostDrive>,
         Has<Disabled>,
     )>,
+    feel: Res<FeelTuning>,
 ) {
+    let trails = feel.trails;
     let dt = time.delta_secs();
     for (entity, mut ribbon) in &mut ribbons {
         let Ok((transform, helm, velocity, stats, boost, disabled)) = sources.get(ribbon.source)
@@ -434,7 +427,17 @@ pub fn update_trails(
 
         // While the emitter burns, its live position is both committed to the
         // history (every `min_step`) and drawn as the ribbon's head every frame.
-        let head = burn(&cfg, helm, velocity, stats, boost, disabled).map(|(width, glow)| {
+        let head = burn(
+            &cfg,
+            helm,
+            velocity,
+            stats,
+            boost,
+            disabled,
+            trails.throttle_deadzone,
+            trails.boost_width,
+        )
+        .map(|(width, glow)| {
             let pos = transform.transform_point(ribbon.offset);
             commit_crumb(&mut ribbon.crumbs, pos, width, glow, &cfg);
             Crumb {
@@ -457,6 +460,7 @@ pub fn update_trails(
 /// A ship burns on forward throttle only (backing sails throw no plume) and
 /// never as a crippled hulk, since a cripple is a ship with a dead drive. A
 /// torpedo — anything with no [`Helm`] — burns flat out for its whole flight.
+#[allow(clippy::too_many_arguments)]
 fn burn(
     cfg: &RibbonCfg,
     helm: Option<&Helm>,
@@ -464,13 +468,15 @@ fn burn(
     stats: Option<&ShipStats>,
     boost: Option<&BoostDrive>,
     disabled: bool,
+    deadzone: f32,
+    boost_width: f32,
 ) -> Option<(f32, f32)> {
     let Some(helm) = helm else {
         return Some((cfg.width, 1.0));
     };
 
     let throttle = helm.throttle.clamp(0.0, 1.0);
-    if disabled || throttle <= THROTTLE_DEADZONE {
+    if disabled || throttle <= deadzone {
         return None;
     }
 
@@ -484,7 +490,7 @@ fn burn(
     let drive = throttle * (0.45 + 0.55 * speed_frac);
 
     let boosting = boost.is_some_and(BoostDrive::engaged);
-    let width = cfg.width * (0.5 + 0.5 * drive) * if boosting { BOOST_WIDTH } else { 1.0 };
+    let width = cfg.width * (0.5 + 0.5 * drive) * if boosting { boost_width } else { 1.0 };
     let glow = if boosting {
         1.0
     } else {
@@ -497,8 +503,13 @@ fn burn(
 mod tests {
     use super::*;
 
+    fn feel() -> crate::data::feel::TrailFeel {
+        crate::data::feel::TrailFeel::default()
+    }
+
     fn cfg() -> RibbonCfg {
-        ENGINE_CFG
+        let f = feel();
+        RibbonCfg::from_feel(&f.engine, f.width_falloff)
     }
 
     /// A crumb that hasn't cleared `min_step` isn't committed — and, crucially,
@@ -680,6 +691,7 @@ mod tests {
     #[test]
     fn a_cold_drive_lays_no_crumb() {
         let cfg = cfg();
+        let f = feel();
         let idle = Helm {
             throttle: 0.0,
             turn: 0.0,
@@ -693,21 +705,72 @@ mod tests {
             turn: 0.0,
         };
 
-        assert!(burn(&cfg, Some(&idle), None, None, None, false).is_none());
-        assert!(burn(&cfg, Some(&astern), None, None, None, false).is_none());
+        assert!(burn(
+            &cfg,
+            Some(&idle),
+            None,
+            None,
+            None,
+            false,
+            f.throttle_deadzone,
+            f.boost_width
+        )
+        .is_none());
+        assert!(burn(
+            &cfg,
+            Some(&astern),
+            None,
+            None,
+            None,
+            false,
+            f.throttle_deadzone,
+            f.boost_width
+        )
+        .is_none());
         assert!(
-            burn(&cfg, Some(&ahead), None, None, None, true).is_none(),
+            burn(
+                &cfg,
+                Some(&ahead),
+                None,
+                None,
+                None,
+                true,
+                f.throttle_deadzone,
+                f.boost_width
+            )
+            .is_none(),
             "a crippled hulk should not burn"
         );
-        assert!(burn(&cfg, Some(&ahead), None, None, None, false).is_some());
+        assert!(burn(
+            &cfg,
+            Some(&ahead),
+            None,
+            None,
+            None,
+            false,
+            f.throttle_deadzone,
+            f.boost_width
+        )
+        .is_some());
     }
 
     /// A torpedo has no helm — it burns flat out until it hits something.
     #[test]
     fn a_torpedo_always_burns() {
-        let (width, glow) = burn(&TORPEDO_CFG, None, None, None, None, false)
-            .expect("a torpedo should always lay a trail");
-        assert_eq!(width, TORPEDO_CFG.width);
+        let f = feel();
+        let torpedo = RibbonCfg::from_feel(&f.torpedo, f.width_falloff);
+        let (width, glow) = burn(
+            &torpedo,
+            None,
+            None,
+            None,
+            None,
+            false,
+            f.throttle_deadzone,
+            f.boost_width,
+        )
+        .expect("a torpedo should always lay a trail");
+        assert_eq!(width, torpedo.width);
         assert_eq!(glow, 1.0);
     }
 }

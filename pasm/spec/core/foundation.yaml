@@ -511,7 +511,7 @@ entities:
 
   - component: data-tuning
     core:
-      status: partially-implemented
+      status: implemented
       confidence: confirmed
       title: Data-Driven Tuning (RON + hot reload)
       summary: >-
@@ -525,8 +525,8 @@ entities:
         headless Harness needs no asset plumbing and shipped RON is asserted
         equal to Default in tests.
 
-        Landed so far: SimTuning and its RON file, loaded and hot-reloaded.
-        FeelTuning (the client's camera/juice/trail constants) is still to come.
+        SimTuning covers the sim's rules; FeelTuning covers the client's
+        bullet-time, screen shake, engine trails and camera. Both hot-reload.
       references: [void-and-thunder-simulation, test-harness, game-feel, bullet-time]
     implementation:
       status: declared
@@ -534,19 +534,32 @@ entities:
         [
           crates/vt_sim/src/tuning.rs,
           crates/vt_client/src/data/mod.rs,
+          crates/vt_client/src/data/feel.rs,
           crates/vt_client/assets/data/sim.tuning.ron,
+          crates/vt_client/assets/data/feel.tuning.ron,
         ]
       symbols:
         [
           SimTuning,
           AiTuning,
+          FeelTuning,
+          TimeFeel,
+          ImpactFeel,
+          CameraFeel,
+          TrailFeel,
+          RibbonFeel,
           DataPlugin,
           DataHandles,
           RonAssetLoader,
           SimTuningAsset,
           RonLoadError,
         ]
-      tests: [crates/vt_sim/src/tuning.rs, crates/vt_client/src/data/mod.rs]
+      tests:
+        [
+          crates/vt_sim/src/tuning.rs,
+          crates/vt_client/src/data/mod.rs,
+          crates/vt_client/src/data/feel.rs,
+        ]
 
   - component: scenarios
     core:

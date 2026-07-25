@@ -6,6 +6,8 @@ use bevy::time::Real;
 use std::f32::consts::PI;
 use vt_sim::prelude::*;
 
+use crate::data::feel::CameraFeel;
+use crate::data::FeelTuning;
 use crate::input::{deadzone, Aiming, InputMethod, Paused, PlayerAi};
 use crate::session::GameState;
 use crate::Player;
@@ -14,72 +16,23 @@ use crate::Player;
 #[derive(Component)]
 pub struct MainCamera;
 
-/// How far behind the ship the camera sits.
-pub const CAM_DISTANCE: f32 = 430.0;
-/// How high above the plane the camera sits — low, so the view is a shallow
-/// "slightly above, pointing slightly down" angle rather than top-down.
-pub const CAM_HEIGHT: f32 = 170.0;
-/// How quickly the camera yaw catches up to the ship's heading.
-const CAM_YAW_LERP: f32 = 2.5;
-/// Camera pitch (radians above horizontal): resting, minimum, maximum, and the
-/// value it eases to while aiming a broadside. As pitch rises the camera is
-/// raised and pulled in toward the ship (see `camera_orbit`).
-const CAM_PITCH_BASE: f32 = 0.85;
-const CAM_PITCH_MIN: f32 = 0.35;
-const CAM_PITCH_MAX: f32 = 1.2;
-/// Pitch while a broadside is held — low and near-horizontal, so the volley is
-/// sighted along the plane the way a gun crew would see it rather than looked
-/// down on from above.
-const CAM_AIM_PITCH: f32 = 0.28;
-/// How much closer the eye sits while sighting a broadside — the low angle wants
-/// to be near the hull to read as aiming along it rather than watching from afar.
-const CAM_AIM_DIST: f32 = 0.62;
-/// Near-top-down pitch used while aiming a torpedo volley or a microwarp — the
-/// camera rises directly over the ship and the aim becomes a top-down pointer.
-const CAM_TOPDOWN_PITCH: f32 = 1.5;
-/// How high the camera pulls out for the top-down (torpedo / microwarp) view —
-/// centred on the ship, tightened to 75% of the old reach.
-const CAM_TOPDOWN_DIST: f32 = 1125.0;
-/// Faster yaw/pitch ease while locked to an aim (broadside / microwarp).
-const CAM_AIM_LERP: f32 = 9.0;
-/// How quickly the eased camera distance catches its target.
-const CAM_DIST_LERP: f32 = 6.0;
-/// Gamepad free-look rate (radians/sec of yaw, units/sec of pitch, at full
-/// stick). The right stick moves the *view* like a mouse — deflection is a rate,
-/// not an absolute offset — while not aiming a broadside.
-const LOOK_YAW_RATE: f32 = 2.4;
-const LOOK_PITCH_RATE: f32 = 1.8;
+// Where the camera sits and how quickly it gets there is authored in
+// `FeelTuning::camera` (see `data/feel.rs`), so the whole rig can be reshaped
+// with the game running. The two values below stay compiled in: they are
+// structural rather than tuning.
+
 /// How far the gamepad free-look yaw may swing from dead-astern (radians) — a
 /// full half-turn, so the view can be swung all the way to the ship's front.
 const LOOK_YAW_LIMIT: f32 = PI;
-/// Seconds of no look input before the camera eases back to its default trailing
-/// position (behind the ship when moving forward, ahead of it when reversing).
+
+/// Seconds of no look input before a *pad* recentres the camera.
 ///
-/// A pad recentres almost at once. A stick springs back to centre on its own, so
-/// "no look input" means the player has physically let go and wants the view
-/// back behind the ship; waiting three seconds for that just leaves them flying
-/// sideways. A mouse holds wherever it was left, so its offset is deliberate and
-/// gets the long delay.
-const RECENTER_DELAY: f32 = 3.0;
+/// A stick springs back to centre on its own, so "no look input" from a pad
+/// means the player has physically let go and wants the view back behind the
+/// ship; waiting the full delay for that just leaves them flying sideways. A
+/// mouse holds wherever it was left, so its offset is deliberate and keeps the
+/// long `recenter_delay`.
 const RECENTER_DELAY_PAD: f32 = 0.1;
-/// How gently the idle camera eases back to its default position.
-const RECENTER_LERP: f32 = 1.6;
-/// How far ahead of the ship the camera looks, in seconds of travel. The focus
-/// leads the hull along its velocity so you see where you are going rather than
-/// where you already are.
-const LEAD_SECS: f32 = 0.25;
-/// Cap on that lead, so a microwarp or a boost can't fling the focus off the ship.
-const LEAD_MAX: f32 = 120.0;
-/// Vertical field of view at rest, and how far it widens at full boost — the
-/// view stretches as the drive bites, then relaxes.
-const BASE_FOV: f32 = std::f32::consts::FRAC_PI_4;
-const BOOST_FOV_GAIN: f32 = 0.14;
-/// How quickly the field of view eases toward its target.
-const FOV_LERP: f32 = 5.0;
-/// How fast the attract-screen camera drifts around the ship (radians/sec).
-const MENU_ORBIT_RATE: f32 = 0.15;
-/// How fast an impact kick decays back to nothing (fraction remaining per sec).
-const KICK_DECAY: f32 = 9.0;
 
 /// Persistent free-look offset for gamepad camera control. The right stick nudges
 /// these like a mouse (rate, not absolute); the camera yaw sits at
@@ -90,7 +43,8 @@ pub struct FreeLook {
     yaw_offset: f32,
     pitch: f32,
     /// Seconds since the player last moved the look control. After
-    /// [`RECENTER_DELAY`] the view eases back to its default trailing position.
+    /// `CameraFeel::recenter_delay` the view eases back to its default trailing
+    /// position.
     idle: f32,
     /// Last cursor position, to detect mouse look movement.
     last_cursor: Vec2,
@@ -100,7 +54,7 @@ impl Default for FreeLook {
     fn default() -> Self {
         Self {
             yaw_offset: 0.0,
-            pitch: CAM_PITCH_BASE,
+            pitch: CameraFeel::default().pitch_base,
             idle: 0.0,
             last_cursor: Vec2::ZERO,
         }
@@ -132,14 +86,17 @@ pub struct CameraRig {
 
 impl Default for CameraRig {
     fn default() -> Self {
+        // Seeded from the compiled-in feel; `camera_orbit` eases from here to
+        // whatever the loaded file says on the first frame.
+        let default_cam = CameraFeel::default();
         Self {
             target: Vec2::ZERO,
             yaw: 0.0,
-            pitch: CAM_PITCH_BASE,
-            dist: CAM_DISTANCE,
+            pitch: default_cam.pitch_base,
+            dist: default_cam.distance,
             trauma: 0.0,
             kick: Vec3::ZERO,
-            fov: BASE_FOV,
+            fov: default_cam.base_fov,
             menu_orbit: 0.0,
             seed: 0,
         }
@@ -197,6 +154,7 @@ pub fn camera_orbit(
         ),
         (With<Player>, Without<MainCamera>),
     >,
+    feel: Res<FeelTuning>,
     mut camera: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
 ) {
     // Camera runs on real time so it stays responsive during bullet-time; a pause
@@ -231,8 +189,9 @@ pub fn camera_orbit(
         }
     }
 
+    let cam = feel.camera;
     let (mut target_yaw, mut target_pitch, mut target_dist) =
-        (rig.yaw, CAM_PITCH_BASE, CAM_DISTANCE);
+        (rig.yaw, cam.pitch_base, cam.distance);
     let mut desired_focus = rig.target;
     let mut locked = false;
     let mut boosting = false;
@@ -243,7 +202,7 @@ pub fn camera_orbit(
         // Look where the ship is *going*, not where it is — a short lead along
         // the velocity, capped so a boost or a warp can't fling the focus off
         // the hull entirely.
-        desired_focus = pos + (velocity.0 * LEAD_SECS).clamp_length_max(LEAD_MAX);
+        desired_focus = pos + (velocity.0 * cam.lead_secs).clamp_length_max(cam.lead_max);
         // While the AI flies, the camera stays a free-look — it doesn't snap to
         // the AI's aiming.
         let manual = !player_ai.on;
@@ -253,16 +212,16 @@ pub fn camera_orbit(
             // title card. Focus stays on the hull itself — a lead off a frozen
             // ship would just sit the camera off-centre for no reason.
             desired_focus = pos;
-            rig.menu_orbit = wrap_angle(rig.menu_orbit + MENU_ORBIT_RATE * dt);
+            rig.menu_orbit = wrap_angle(rig.menu_orbit + cam.menu_orbit_rate * dt);
             target_yaw = heading.0 + rig.menu_orbit;
-            target_pitch = CAM_PITCH_BASE;
+            target_pitch = cam.pitch_base;
         } else if manual && (pilot.microwarp_hold || pilot.torpedo_hold) {
             // Directly overhead and high up — a top-down pointer view. Both the
             // torpedo and microwarp modes stay centred on the ship (the aim
             // reticle moves within the view, the camera doesn't chase it).
             target_yaw = heading.0;
-            target_pitch = CAM_TOPDOWN_PITCH;
-            target_dist = CAM_TOPDOWN_DIST;
+            target_pitch = cam.topdown_pitch;
+            target_dist = cam.topdown_dist;
             locked = true;
         } else if manual && aiming_broadside {
             // Lock the yaw along where the broadside points; the aim axis steers
@@ -271,8 +230,8 @@ pub fn camera_orbit(
             let aim_dir = (pilot.aim_point - pos).normalize_or_zero();
             let dir = broadside_direction(heading.0, is_port, Some(aim_dir), bank.arc);
             target_yaw = dir.to_angle();
-            target_pitch = CAM_AIM_PITCH;
-            target_dist = CAM_DISTANCE * CAM_AIM_DIST;
+            target_pitch = cam.aim_pitch;
+            target_dist = cam.distance * cam.aim_dist;
             locked = true;
         } else if use_pad {
             // Gamepad free-look: integrate the right stick into a persistent
@@ -280,17 +239,17 @@ pub fn camera_orbit(
             if let Some(pad) = gamepads.iter().next() {
                 let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
                 let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
-                freelook.yaw_offset = (freelook.yaw_offset - sx * LOOK_YAW_RATE * dt)
+                freelook.yaw_offset = (freelook.yaw_offset - sx * cam.look_yaw_rate * dt)
                     .clamp(-LOOK_YAW_LIMIT, LOOK_YAW_LIMIT);
-                freelook.pitch = (freelook.pitch - sy * LOOK_PITCH_RATE * dt)
-                    .clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
+                freelook.pitch = (freelook.pitch - sy * cam.look_pitch_rate * dt)
+                    .clamp(cam.pitch_min, cam.pitch_max);
             }
             target_yaw = heading.0 + freelook.yaw_offset;
             target_pitch = freelook.pitch;
         } else {
             // Mouse free-look: absolute offset from the heading (yaw not inverted).
             target_yaw = heading.0 - look_x * 0.9;
-            target_pitch = (CAM_PITCH_BASE + look_y * 0.5).clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
+            target_pitch = (cam.pitch_base + look_y * 0.5).clamp(cam.pitch_min, cam.pitch_max);
         }
 
         // Idle auto-recenter: after a few seconds without look input, ease the
@@ -305,25 +264,25 @@ pub fn camera_orbit(
         let recenter_delay = if use_pad {
             RECENTER_DELAY_PAD
         } else {
-            RECENTER_DELAY
+            cam.recenter_delay
         };
         if !locked && !on_menu && freelook.idle > recenter_delay {
             let forward = heading.forward();
             let reversing = velocity.0.dot(forward) < -5.0;
             let default_off = if reversing { PI } else { 0.0 };
-            let rk = 1.0 - (-RECENTER_LERP * dt).exp();
+            let rk = 1.0 - (-cam.recenter_lerp * dt).exp();
             freelook.yaw_offset += wrap_angle(default_off - freelook.yaw_offset) * rk;
-            freelook.pitch += (CAM_PITCH_BASE - freelook.pitch) * rk;
+            freelook.pitch += (cam.pitch_base - freelook.pitch) * rk;
             target_yaw = heading.0 + freelook.yaw_offset;
             target_pitch = freelook.pitch;
         }
     }
 
-    let lerp = if locked { CAM_AIM_LERP } else { CAM_YAW_LERP };
+    let lerp = if locked { cam.aim_lerp } else { cam.yaw_lerp };
     let k = 1.0 - (-lerp * dt).exp();
     rig.yaw = wrap_angle(rig.yaw + wrap_angle(target_yaw - rig.yaw) * k);
     rig.pitch += (target_pitch - rig.pitch) * k;
-    let dk = 1.0 - (-CAM_DIST_LERP * dt).exp();
+    let dk = 1.0 - (-cam.dist_lerp * dt).exp();
     rig.dist += (target_dist - rig.dist) * dk;
     // Ease the focus toward the ship (or the warp point) tightly.
     let fk = 1.0 - (-10.0 * dt).exp();
@@ -335,16 +294,16 @@ pub fn camera_orbit(
     let amount = rig.trauma * rig.trauma;
     let shake = Vec3::new(rig.noise(), rig.noise(), rig.noise() * 0.5) * 26.0 * amount;
     // Impact kick: a directional shove that springs back, on top of the noise.
-    rig.kick *= (-KICK_DECAY * dt).exp();
+    rig.kick *= (-cam.kick_decay * dt).exp();
     let kick = rig.kick;
 
     // Widen the view as the boost drive bites, then relax.
     let target_fov = if boosting {
-        BASE_FOV + BOOST_FOV_GAIN
+        cam.base_fov + cam.boost_fov_gain
     } else {
-        BASE_FOV
+        cam.base_fov
     };
-    rig.fov += (target_fov - rig.fov) * (1.0 - (-FOV_LERP * dt).exp());
+    rig.fov += (target_fov - rig.fov) * (1.0 - (-cam.fov_lerp * dt).exp());
 
     let Ok((mut camera, mut projection)) = camera.single_mut() else {
         return;

@@ -16,11 +16,11 @@ use vt_sim::prelude::{
     Broadside, ClassId, EmpWeapon, Hull, MicrowarpDrive, ShipStats, SimTuning, TorpedoBay,
 };
 
-use crate::data::{paths, ActiveScenario, DataHandles, SelectedScenario, ShipTable};
+use crate::data::{paths, ActiveScenario, DataHandles, FeelTuning, SelectedScenario, ShipTable};
 use crate::session::GameState;
 use crate::Player;
 
-use super::save::{save_ships, save_sim_tuning};
+use super::save::{save_feel, save_ships, save_sim_tuning};
 use super::walker::edit_value;
 use super::DevPanelFocus;
 
@@ -31,6 +31,7 @@ enum Tab {
     Class,
     Entity,
     Sim,
+    Feel,
 }
 
 /// The panel's own UI state.
@@ -43,6 +44,8 @@ pub struct DevPanel {
     pub dirty_ships: bool,
     /// Set when the sim tuning has been edited but not yet written to disk.
     pub dirty_tuning: bool,
+    /// Set when the feel tuning has been edited but not yet written to disk.
+    pub dirty_feel: bool,
     /// Last save result, shown in the panel. Failing silently would look
     /// identical to succeeding, which is the worst outcome for a Save button.
     status: Option<String>,
@@ -101,6 +104,7 @@ pub fn draw_panel(
     mut panel: ResMut<DevPanel>,
     mut table: ResMut<ShipTable>,
     mut tuning: ResMut<SimTuning>,
+    mut feel: ResMut<FeelTuning>,
     // For Revert: the last copy read from disk, which is what "revert" means.
     ship_assets: Res<Assets<ShipTable>>,
     handles: Res<DataHandles>,
@@ -139,6 +143,7 @@ pub fn draw_panel(
                 ui.selectable_value(&mut panel.tab, Tab::Class, "Ship class");
                 ui.selectable_value(&mut panel.tab, Tab::Entity, "This ship");
                 ui.selectable_value(&mut panel.tab, Tab::Sim, "Sim rules");
+                ui.selectable_value(&mut panel.tab, Tab::Feel, "Feel");
             });
             ui.separator();
 
@@ -148,6 +153,7 @@ pub fn draw_panel(
                 }
                 Tab::Entity => entity_tab(ui, &mut player),
                 Tab::Sim => sim_tab(ui, &mut panel, &mut tuning),
+                Tab::Feel => feel_tab(ui, &mut panel, &mut feel),
             }
         });
 }
@@ -322,6 +328,33 @@ fn sim_tab(ui: &mut egui::Ui, panel: &mut DevPanel, tuning: &mut ResMut<SimTunin
     if edit_value(ui, "sim", &mut copy, true) {
         **tuning = copy;
         panel.dirty_tuning = true;
+    }
+}
+
+/// Edit how the game feels — bullet-time, shake, trails, the camera.
+fn feel_tab(ui: &mut egui::Ui, panel: &mut DevPanel, feel: &mut ResMut<FeelTuning>) {
+    ui.horizontal(|ui| {
+        ui.label("Presentation only — changes no rule.");
+        if panel.dirty_feel {
+            ui.colored_label(egui::Color32::from_rgb(255, 178, 0), "*unsaved");
+        }
+    });
+    if ui.button("Save to feel.tuning.ron").clicked() {
+        match save_feel(feel) {
+            Ok(()) => {
+                panel.dirty_feel = false;
+                panel.set_status(true, format!("saved {}", paths::FEEL_TUNING));
+            }
+            Err(e) => panel.set_status(false, e),
+        }
+    }
+    panel.show_status(ui);
+    ui.separator();
+
+    let mut copy = **feel;
+    if edit_value(ui, "feel", &mut copy, true) {
+        **feel = copy;
+        panel.dirty_feel = true;
     }
 }
 

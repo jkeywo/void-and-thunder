@@ -1,0 +1,128 @@
+// How the game feels: bullet-time, screen shake, engine trails, the camera.
+//
+// Nothing here changes a rule — you cannot win a fight by tuning screen shake —
+// but these are the numbers worth iterating on with the game running.
+//
+// Any field, or any whole section, may be omitted to inherit the compiled-in
+// default. The copy below is exactly the defaults, and a test asserts it stays
+// that way.
+(
+    // ---- Slow motion and freeze frames ----
+    time: (
+        // Fraction of normal time while aiming. Lower is slower.
+        aim_timescale: 0.10,
+        // Fraction of normal time during a hitstop — near enough a freeze frame.
+        hitstop_timescale: 0.05,
+        // Seconds of aim time the battery holds, spent in *real* seconds so the
+        // window is the same length however slow the world is running.
+        battery_max: 5.0,
+        battery_drain_per_sec: 1.0,
+        battery_recharge_per_sec: 1.0,
+    ),
+
+    // ---- Impact: shake, kick, freeze frames, debris ----
+    impact: (
+        // Past this distance from the player, an event shakes nothing.
+        shake_range: 900.0,
+        // Being hit: a flat amount plus a bonus scaled by the damage taken.
+        own_hit_trauma: 0.18,
+        own_hit_trauma_per_damage: 0.010,
+        // How hard the view is shoved, along the line the shot came in on.
+        own_hit_kick: 22.0,
+        // A hit landing on someone else nearby.
+        nearby_hit_trauma: 0.10,
+        // Deaths shake much harder than hits.
+        own_death_trauma: 0.9,
+        nearby_death_trauma: 0.45,
+        // Freeze frames, in real seconds.
+        kill_hitstop: 0.06,
+        own_hit_hitstop: 0.04,
+        // Shrapnel thrown clear of a wreck.
+        debris_count: 8,
+        debris_speed_min: 90.0,
+        debris_speed_max: 220.0,
+        debris_life: 0.35,
+        // How long a muzzle flash lingers.
+        flash_time: 0.08,
+    ),
+
+    // ---- The camera rig ----
+    camera: (
+        // Resting distance behind, and height above, the ship. Low height keeps
+        // the view a shallow over-the-shoulder angle rather than top-down.
+        distance: 430.0,
+        height: 170.0,
+        yaw_lerp: 2.5,
+        // Pitch in radians above horizontal: resting, and the limits free-look
+        // may push it to.
+        pitch_base: 0.85,
+        pitch_min: 0.35,
+        pitch_max: 1.2,
+        // Sighting a broadside: low and near-horizontal, close in, so the volley
+        // is sighted along the plane the way a gun crew would see it.
+        aim_pitch: 0.28,
+        aim_dist: 0.62,
+        // Torpedoes and microwarp: the camera rises directly overhead and the
+        // aim becomes a top-down pointer.
+        topdown_pitch: 1.5,
+        topdown_dist: 1125.0,
+        // How fast the camera eases into an aim mode, and how fast distance follows.
+        aim_lerp: 9.0,
+        dist_lerp: 6.0,
+        // Free-look sensitivity (radians/sec at full stick).
+        look_yaw_rate: 2.4,
+        look_pitch_rate: 1.8,
+        // Seconds of no look input before the view eases back behind the ship.
+        recenter_delay: 3.0,
+        recenter_lerp: 1.6,
+        // The focus leads the hull along its velocity, so you see where you are
+        // going rather than where you already are. Capped so a microwarp or a
+        // boost cannot fling the focus off the ship entirely.
+        lead_secs: 0.25,
+        lead_max: 120.0,
+        // Vertical FOV at rest (pi/4), and the extra it gains at full boost —
+        // the view stretches as the drive bites, then relaxes.
+        base_fov: 0.7853982,
+        boost_fov_gain: 0.14,
+        fov_lerp: 5.0,
+        // How fast the attract-screen camera drifts around the parked ship.
+        menu_orbit_rate: 0.15,
+        // How quickly an impact kick decays back to nothing.
+        kick_decay: 9.0,
+    ),
+
+    // ---- Engine and torpedo trails ----
+    trails: (
+        // The drive plume: white-hot at the nozzle, cooling to deep ion blue.
+        engine: (
+            hot: (0.78, 0.93, 1.0),
+            cool: (0.12, 0.32, 0.9),
+            width: 5.0,
+            lifetime: 0.9,
+            max_crumbs: 64,
+            min_step: 5.0,
+        ),
+        // A torpedo's burn: shorter, tighter and angrier than a drive plume.
+        torpedo: (
+            hot: (1.0, 0.86, 0.55),
+            cool: (0.9, 0.28, 0.05),
+            width: 3.5,
+            lifetime: 0.45,
+            max_crumbs: 48,
+            min_step: 4.0,
+        ),
+        // Where the plumes attach: aft of centre, and out to each nacelle. Hulls
+        // are normalised to ~44 units long, so -20 is roughly the stern.
+        stern_x: -20.0,
+        nacelle_y: 6.0,
+        // Below this throttle the drives are cold and lay no trail at all.
+        throttle_deadzone: 0.05,
+        // How much wider the plume runs while the boost drive is engaged.
+        boost_width: 1.7,
+        // How far back along a torpedo's body its burn starts.
+        torpedo_tail_z: -13.0,
+        // How much of its width a crumb loses over its life, so the ribbon
+        // tapers to a point rather than ending in a blunt edge.
+        width_falloff: 0.55,
+    ),
+)

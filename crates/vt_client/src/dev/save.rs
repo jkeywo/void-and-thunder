@@ -29,7 +29,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use vt_sim::prelude::SimTuning;
 
-use crate::data::{paths, ShipTable};
+use crate::data::{paths, FeelTuning, ShipTable};
 
 /// Absolute path of an asset in the source tree.
 fn asset_path(relative: &str) -> PathBuf {
@@ -60,6 +60,12 @@ fn write_ron<T: Serialize>(relative: &str, value: &T) -> Result<(), String> {
 pub fn save_ships(table: &ShipTable) -> Result<(), String> {
     write_ron(paths::SHIPS.trim_start_matches("data/"), table)
         .map_err(|e| format!("could not save ship classes — {e}"))
+}
+
+/// Write the game-feel tuning to `feel.tuning.ron`.
+pub fn save_feel(feel: &FeelTuning) -> Result<(), String> {
+    write_ron(paths::FEEL_TUNING.trim_start_matches("data/"), feel)
+        .map_err(|e| format!("could not save feel tuning — {e}"))
 }
 
 /// Write the simulation rules to `sim.tuning.ron`.
