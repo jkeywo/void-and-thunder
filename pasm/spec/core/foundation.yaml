@@ -550,8 +550,8 @@ entities:
 
   - component: scenarios
     core:
-      status: proposed
-      confidence: provisional
+      status: implemented
+      confidence: confirmed
       title: Ship Classes & Scenarios
       summary: >-
         Ships become instances of named classes (ShipTable + a ClassId
@@ -563,6 +563,41 @@ entities:
         non-attacking, invulnerable target. Loading is a new GameState that
         gates spawning on the assets being ready.
       references: [spawn-director, session-lifecycle, data-tuning, piracy-finisher]
+    implementation:
+      status: declared
+      paths:
+        [
+          crates/vt_client/src/data/ships.rs,
+          crates/vt_client/src/data/scenario.rs,
+          crates/vt_client/src/session.rs,
+          crates/vt_client/assets/data/ships.ron,
+          crates/vt_client/assets/data/scenarios,
+          crates/vt_sim/src/components.rs,
+          crates/vt_sim/src/combat.rs,
+        ]
+      symbols:
+        [
+          ShipTable,
+          ShipClass,
+          NamedClass,
+          ClassId,
+          DirectorSpec,
+          Scenario,
+          PlacedShip,
+          ShipFlags,
+          spawn_scenario,
+          spawn_placed,
+          director_for,
+          set_director,
+          enter_scenario,
+          await_data,
+          clear_field,
+          Invulnerable,
+          Anchored,
+          apply_hull_damage,
+        ]
+      tests:
+        [crates/vt_client/src/data/scenario.rs, crates/vt_sim/src/harness.rs]
 
   - component: dev-panel
     core:

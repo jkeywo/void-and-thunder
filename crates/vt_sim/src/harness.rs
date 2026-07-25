@@ -126,9 +126,13 @@ fn drain_emp(mut m: ResMut<Messages<EmpImpact>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{AiController, EmpDefense, Faction, Hull, Protagonist, ShipStats};
+    use crate::components::{
+        AiController, Anchored, EmpDefense, Faction, Helm, Hull, Invulnerable, Protagonist,
+        ShipStats,
+    };
     use crate::spawn::{ship_bundle, ShipLoadout};
     use bevy_math::Vec2;
+    use bevy_transform::components::Transform;
 
     /// The core of the request: a *player-shaped* ship (Protagonist + full
     /// loadout) driven by the AI instead of the client. It should pilot itself
@@ -221,5 +225,96 @@ mod tests {
             None => true,
         };
         assert!(emped, "the AI pilot should EMP a targetable ship");
+    }
+
+    /// The test range's whole premise: something you can shoot at indefinitely
+    /// while tuning. An AI-piloted attacker empties its kit into an invulnerable
+    /// target for ~25s and the hull must not move a point.
+    #[test]
+    fn an_invulnerable_ship_takes_no_damage() {
+        let mut h = Harness::new();
+        h.world.spawn((
+            ship_bundle(
+                Faction::Corsairs,
+                ShipStats::default(),
+                100.0,
+                Vec2::ZERO,
+                0.0,
+                ShipLoadout::player(),
+            ),
+            Protagonist,
+            AiController::piloting(),
+        ));
+        let target = h
+            .world
+            .spawn((
+                ship_bundle(
+                    Faction::Houses,
+                    ShipStats::default(),
+                    100.0,
+                    Vec2::new(220.0, 0.0),
+                    0.0,
+                    ShipLoadout::enemy(),
+                ),
+                Invulnerable,
+                Anchored,
+            ))
+            .id();
+
+        h.run(1600, 1.0 / 64.0); // ~25 s — long enough for broadsides and torpedoes
+
+        let hull = h
+            .world
+            .get::<Hull>(target)
+            .expect("an invulnerable ship is never destroyed");
+        assert_eq!(
+            hull.current, hull.max,
+            "an invulnerable ship must not lose hull"
+        );
+    }
+
+    /// An anchored ship holds its mark even with the helm hard over — the point
+    /// being that nothing (a stray AI write, a design panel) can nudge a target
+    /// mid-measurement.
+    #[test]
+    fn an_anchored_ship_never_moves() {
+        let mut h = Harness::new();
+        let start = Vec2::new(120.0, -40.0);
+        let heading = std::f32::consts::FRAC_PI_2;
+        let ship = h
+            .world
+            .spawn((
+                ship_bundle(
+                    Faction::Houses,
+                    ShipStats::default(),
+                    100.0,
+                    start,
+                    heading,
+                    ShipLoadout::enemy(),
+                ),
+                Anchored,
+            ))
+            .id();
+        // Full throttle, hard over: without `Anchored` this would sail away.
+        *h.world.get_mut::<Helm>(ship).unwrap() = Helm {
+            throttle: 1.0,
+            turn: 1.0,
+        };
+
+        h.run(600, 1.0 / 64.0);
+
+        let tf = h.world.get::<Transform>(ship).unwrap();
+        assert!(
+            tf.translation.truncate().distance(start) < 1e-3,
+            "anchored ship drifted to {:?}",
+            tf.translation
+        );
+        // `movement_system` is the only thing that writes rotation from Heading,
+        // and it skips anchored ships — so the spawn must have set both.
+        let (_, _, yaw) = tf.rotation.to_euler(bevy_math::EulerRot::XYZ);
+        assert!(
+            (yaw - heading).abs() < 1e-4,
+            "anchored ship should render on its authored heading, yaw was {yaw}"
+        );
     }
 }

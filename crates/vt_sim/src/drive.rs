@@ -14,7 +14,7 @@ use bevy_time::Time;
 use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{EmpDefense, PilotIntent, Ship, SpeedScale, ENGAGEMENT_RANGE};
+use crate::components::{Anchored, EmpDefense, PilotIntent, Ship, SpeedScale, ENGAGEMENT_RANGE};
 
 /// A rechargeable overdrive. While `active` and `battery > 0`, the ship's speed
 /// is multiplied by `multiplier`. Config + live state live together so the
@@ -125,7 +125,7 @@ pub fn clamp_to_range(origin: Vec2, point: Vec2, range: f32) -> Vec2 {
 /// [`PilotIntent`], so player and AI ships share the system.
 pub fn microwarp_system(
     time: Res<Time>,
-    mut ships: Query<(&mut Transform, &mut MicrowarpDrive, &PilotIntent)>,
+    mut ships: Query<(&mut Transform, &mut MicrowarpDrive, &PilotIntent), Without<Anchored>>,
 ) {
     let dt = time.delta_secs();
     for (mut transform, mut drive, intent) in &mut ships {

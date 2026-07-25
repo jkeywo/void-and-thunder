@@ -1,0 +1,27 @@
+// The normal encounter: cast off alone and clear three escalating waves.
+//
+// The enemies list is empty because the director supplies them — waves ring the
+// system edge and arrive when the last one is cleared.
+(
+    name: "Skirmish",
+    bounds_radius: 1400.0,
+
+    player: (
+        class: "corsair_sloop",
+        faction: Corsairs,
+        // Offset from the star at the origin, bow toward it.
+        pos: (0.0, -520.0),
+        heading: 1.5707964,
+    ),
+
+    enemies: [],
+
+    director: Some((
+        max_waves: 3,
+        base_count: 2,
+        faction: Houses,
+        base_hull: 100.0,
+        hull_per_wave: 25.0,
+        enemy_class: "house_patrol",
+    )),
+)

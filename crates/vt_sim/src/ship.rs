@@ -11,7 +11,7 @@ use bevy_math::{Quat, Vec2};
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 
-use crate::components::{Heading, Helm, ShipStats, SpeedScale, Velocity};
+use crate::components::{Anchored, Heading, Helm, ShipStats, SpeedScale, Velocity};
 use crate::tuning::SimTuning;
 use crate::util::wrap_angle;
 
@@ -63,14 +63,19 @@ pub fn helm_step(
 pub fn movement_system(
     time: Res<Time>,
     tuning: Res<SimTuning>,
-    mut ships: Query<(
-        &mut Transform,
-        &mut Heading,
-        &mut Velocity,
-        &ShipStats,
-        &Helm,
-        &SpeedScale,
-    )>,
+    // `Anchored` ships never move: skipping them here is what makes a test-range
+    // target hold its mark even if something writes its Helm.
+    mut ships: Query<
+        (
+            &mut Transform,
+            &mut Heading,
+            &mut Velocity,
+            &ShipStats,
+            &Helm,
+            &SpeedScale,
+        ),
+        Without<Anchored>,
+    >,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {

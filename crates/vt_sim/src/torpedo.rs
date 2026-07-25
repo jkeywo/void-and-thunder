@@ -23,8 +23,10 @@ use bevy_time::Time;
 use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
-use crate::combat::{braced_damage, spheres_overlap};
-use crate::components::{Brace, Collider, Faction, Hull, PilotIntent, Ship, Ttl, ENGAGEMENT_RANGE};
+use crate::combat::{apply_hull_damage, spheres_overlap};
+use crate::components::{
+    Brace, Collider, Faction, Hull, Invulnerable, PilotIntent, Ship, Ttl, ENGAGEMENT_RANGE,
+};
 use crate::events::ShipHit;
 use crate::tuning::SimTuning;
 
@@ -421,12 +423,13 @@ pub fn torpedo_hit_system(
             &Faction,
             &mut Hull,
             Option<&Brace>,
+            Has<Invulnerable>,
         ),
         With<Ship>,
     >,
 ) {
     for (entity, transform, torp) in &torps {
-        for (ship_entity, ship_tf, collider, faction, mut hull, brace) in &mut ships {
+        for (ship_entity, ship_tf, collider, faction, mut hull, brace, invulnerable) in &mut ships {
             if !torp.faction.hostile_to(*faction) {
                 continue;
             }
@@ -436,9 +439,11 @@ pub fn torpedo_hit_system(
                 ship_tf.translation,
                 collider.radius,
             ) {
-                hull.current -= braced_damage(
+                apply_hull_damage(
+                    &mut hull,
                     torp.damage,
                     brace.is_some_and(|b| b.active),
+                    invulnerable,
                     tuning.brace_damage_factor,
                 );
                 hits.write(ShipHit {

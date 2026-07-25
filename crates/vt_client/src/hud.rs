@@ -119,7 +119,9 @@ fn gather_hud_state(
     mut snap: ResMut<HudSnapshot>,
 ) {
     let screen = match state.get() {
-        GameState::Menu => "start",
+        // Loading shows the title card too: it is a handful of frames while the
+        // scenario arrives, and flashing a separate screen would read as a bug.
+        GameState::Loading | GameState::Menu => "start",
         GameState::Playing => "playing",
         GameState::GameOver => "gameover",
     };

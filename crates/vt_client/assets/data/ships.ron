@@ -1,0 +1,86 @@
+// Ship classes. Every ship in the game is an instance of one of these, so
+// editing a class here (or in the design panel) changes every ship wearing it.
+//
+// Any field may be omitted to inherit the compiled-in default — a class only
+// needs to say how it differs. Live state (reload timers, loaded tubes, EMP
+// soak) is deliberately not writable here; it belongs to a running ship, not to
+// its class.
+//
+// Order matters: a ship refers to its class by position, so inserting a class in
+// the middle reassigns live ships until the next restart. Append rather than
+// insert while the game is running.
+(
+    classes: [
+        (
+            name: "corsair_sloop",
+            class: (
+                // The player's ship. Slow and stately, but handy: it is meant to
+                // be fought by out-turning the other ship, not out-running it.
+                stats: (
+                    thrust: 840.0,
+                    turn_rate: 0.6875,
+                    max_speed: 127.5,
+                    linear_drag: 6.0,
+                ),
+                hull: 100.0,
+                collider: (radius: 26.0),
+                emp_defense: (resist: 100.0, recovery_per_sec: 14.0),
+                loadout: (
+                    // A heavy 10s broadside: one big decision, not a stream of shots.
+                    broadside: (
+                        cooldown: 10.0,
+                        damage: 12.0,
+                        muzzle_speed: 325.0,
+                        guns: 3,
+                        // 67.5 deg either way — a 135 deg arc centred on the beam.
+                        arc: 1.1780972,
+                        charge_time: 0.0,
+                    ),
+                    emp: (),
+                    torpedoes: (),
+                    boost: (),
+                    // 20s: warping is an escape, not a manoeuvre.
+                    microwarp: (cooldown: 20.0),
+                ),
+                ai: (),
+            ),
+        ),
+        (
+            name: "house_patrol",
+            class: (
+                // The wave enemy. Heavier and slower than the sloop, and it
+                // telegraphs a 0.5s charge so its shot is dodgeable.
+                stats: (
+                    thrust: 660.0,
+                    turn_rate: 0.35,
+                    max_speed: 100.0,
+                    linear_drag: 6.0,
+                ),
+                hull: 100.0,
+                collider: (radius: 26.0),
+                emp_defense: (resist: 100.0, recovery_per_sec: 14.0),
+                loadout: (
+                    broadside: (
+                        cooldown: 2.8,
+                        damage: 12.0,
+                        muzzle_speed: 325.0,
+                        guns: 3,
+                        arc: 1.1780972,
+                        charge_time: 0.5,
+                    ),
+                    emp: (),
+                    torpedoes: (),
+                    boost: (),
+                    microwarp: (),
+                ),
+                ai: (
+                    engage_range: 300.0,
+                    fire_arc: 0.35,
+                    flee_hull_frac: 0.25,
+                    // Enemies fly the broadside only; the kit is the player's.
+                    use_abilities: false,
+                ),
+            ),
+        ),
+    ],
+)

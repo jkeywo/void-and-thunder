@@ -30,11 +30,26 @@ use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
 use vt_sim::prelude::SimTuning;
 
+pub mod scenario;
+pub mod ships;
+
+pub use scenario::{director_for, spawn_scenario, Scenario};
+pub use ships::{set_director, ShipTable};
+
 /// Every data file the client loads. One place, so a rename can't leave a
 /// mistyped path to be discovered as a confusing parse error at runtime.
 pub mod paths {
     /// Simulation rules — damage, ranges, AI gains.
     pub const SIM_TUNING: &str = "data/sim.tuning.ron";
+    /// The ship classes every ship is an instance of.
+    pub const SHIPS: &str = "data/ships.ron";
+    /// The normal encounter: a player, and three escalating waves.
+    pub const SKIRMISH: &str = "data/scenarios/skirmish.scn.ron";
+    /// One stationary, inert, invulnerable target — somewhere to tune against.
+    pub const TEST_RANGE: &str = "data/scenarios/test_range.scn.ron";
+
+    /// Every scenario, as `(label, path)`. The design panel lists these.
+    pub const SCENARIOS: &[(&str, &str)] = &[("Skirmish", SKIRMISH), ("Test Range", TEST_RANGE)];
 }
 
 /// A tuning file, as an asset.
@@ -146,26 +161,92 @@ impl<A: Asset + DeserializeOwned> AssetLoader for RonAssetLoader<A> {
 #[derive(Resource, Default)]
 pub struct DataHandles {
     pub sim_tuning: Handle<SimTuningAsset>,
+    pub ships: Handle<ShipTable>,
+    /// Both scenarios stay loaded so switching to the test range is instant and
+    /// a hot-reload watch stays on each.
+    pub scenarios: Vec<(&'static str, Handle<Scenario>)>,
 }
 
-/// Loads the tuning data and keeps the sim's resources in step with it.
+impl DataHandles {
+    /// The handle for a scenario path, if it is one we loaded.
+    pub fn scenario(&self, path: &str) -> Option<&Handle<Scenario>> {
+        self.scenarios
+            .iter()
+            .find(|(p, _)| *p == path)
+            .map(|(_, h)| h)
+    }
+}
+
+/// Which scenario the next run uses. Set by the title card and the design panel.
+#[derive(Resource, Debug, Clone)]
+pub struct SelectedScenario(pub &'static str);
+
+impl Default for SelectedScenario {
+    fn default() -> Self {
+        Self(paths::SKIRMISH)
+    }
+}
+
+/// The scenario currently in play, resolved. Held as a resource so a restart can
+/// replay it and the panel can show its name without touching the asset store.
+#[derive(Resource, Debug, Clone, Default)]
+pub struct ActiveScenario(pub Scenario);
+
+/// Loads the tuning and scenario data and keeps the sim's resources in step.
 pub struct DataPlugin;
 
 impl Plugin for DataPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<SimTuningAsset>()
+            .init_asset::<ShipTable>()
+            .init_asset::<Scenario>()
             .register_asset_loader(RonAssetLoader::<SimTuningAsset>::new(&["tuning.ron"]))
+            .register_asset_loader(RonAssetLoader::<ShipTable>::new(&["ron"]))
+            .register_asset_loader(RonAssetLoader::<Scenario>::new(&["scn.ron"]))
             .init_resource::<DataHandles>()
+            .init_resource::<SelectedScenario>()
+            .init_resource::<ActiveScenario>()
+            // The class table is a Resource as well as an Asset: the panel edits
+            // the resource, and the loader copies into it. One authoritative
+            // copy, whichever end the edit came from.
+            .init_resource::<ShipTable>()
             .add_systems(Startup, begin_load)
-            .add_systems(Update, apply_sim_tuning);
+            .add_systems(Update, (apply_sim_tuning, apply_ship_table));
     }
 }
 
-/// Kick off the loads. Nothing waits on them here — the sim runs on its
-/// `Default` tuning until the files arrive, which is the same thing that
-/// happens if they are missing entirely.
+/// Kick off the loads. Nothing waits on the tuning — the sim runs on its
+/// `Default` values until the file arrives, the same as if it were missing. The
+/// *scenario* is waited on, because spawning needs the class table (see
+/// `session::await_data`).
 fn begin_load(server: Res<AssetServer>, mut handles: ResMut<DataHandles>) {
     handles.sim_tuning = server.load(paths::SIM_TUNING);
+    handles.ships = server.load(paths::SHIPS);
+    handles.scenarios = paths::SCENARIOS
+        .iter()
+        .map(|(_, path)| (*path, server.load(*path)))
+        .collect();
+}
+
+/// Copy a loaded (or reloaded) class table into the resource everything reads.
+fn apply_ship_table(
+    mut events: MessageReader<AssetEvent<ShipTable>>,
+    assets: Res<Assets<ShipTable>>,
+    mut table: ResMut<ShipTable>,
+) {
+    for event in events.read() {
+        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = event else {
+            continue;
+        };
+        let Some(loaded) = assets.get(*id) else {
+            continue;
+        };
+        if *table == *loaded {
+            continue; // our own save came back around
+        }
+        *table = loaded.clone();
+        info!("ship classes reloaded from {}", paths::SHIPS);
+    }
 }
 
 /// Copy loaded (or reloaded) sim tuning into the resource the sim reads.
@@ -210,5 +291,51 @@ mod tests {
             SimTuning::default(),
             "assets/data/sim.tuning.ron has drifted from SimTuning::default()"
         );
+    }
+
+    /// The shipped classes must equal the fallback table, so a missing
+    /// `ships.ron` plays identically rather than subtly differently.
+    #[test]
+    fn shipped_ships_match_the_default_table() {
+        let text = include_str!("../../assets/data/ships.ron");
+        let parsed: ShipTable = ron::from_str(text).expect("ships.ron should parse");
+        assert_eq!(
+            parsed,
+            ShipTable::default(),
+            "assets/data/ships.ron has drifted from ShipTable::default()"
+        );
+    }
+
+    /// The skirmish is the encounter the game shipped with, as data.
+    #[test]
+    fn shipped_skirmish_matches_the_default_scenario() {
+        let text = include_str!("../../assets/data/scenarios/skirmish.scn.ron");
+        let parsed: Scenario = ron::from_str(text).expect("skirmish.scn.ron should parse");
+        assert_eq!(
+            parsed,
+            Scenario::default(),
+            "assets/data/scenarios/skirmish.scn.ron has drifted from Scenario::default()"
+        );
+    }
+
+    /// The test range is the point of the whole exercise: one target that never
+    /// dies, never fires and never moves, with no waves to interrupt tuning.
+    #[test]
+    fn the_test_range_is_one_inert_invulnerable_target() {
+        let text = include_str!("../../assets/data/scenarios/test_range.scn.ron");
+        let parsed: Scenario = ron::from_str(text).expect("test_range.scn.ron should parse");
+
+        assert!(parsed.director.is_none(), "the range must send no waves");
+        assert_eq!(parsed.enemies.len(), 1, "exactly one target");
+
+        let target = &parsed.enemies[0];
+        assert!(target.flags.invulnerable, "the target must survive tuning");
+        assert!(target.flags.inert, "the target must not shoot back");
+        assert!(target.flags.anchored, "the target must hold its mark");
+
+        // Both classes it names must exist, or the range spawns nothing.
+        let table = ShipTable::default();
+        assert!(table.find(&parsed.player.class).is_some());
+        assert!(table.find(&target.class).is_some());
     }
 }

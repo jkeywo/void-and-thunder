@@ -39,13 +39,13 @@ pub use plugin::{SimPlugin, SimSet};
 pub mod prelude {
     pub use crate::ai::desired_helm;
     pub use crate::combat::{
-        broadside_direction, broadside_volley, intercept_lead, BankState, Broadside, Lead,
-        ProjectileSpawn, PROJECTILE_TTL,
+        apply_hull_damage, broadside_direction, broadside_volley, intercept_lead, BankState,
+        Broadside, Lead, ProjectileSpawn, PROJECTILE_TTL,
     };
     pub use crate::components::{
-        AiController, Brace, Collider, Disabled, EmpDefense, Faction, FireOrders, Heading, Helm,
-        Hull, Landmark, PilotIntent, Projectile, Protagonist, Ship, ShipStats, SpeedScale, Ttl,
-        Velocity, ENGAGEMENT_RANGE,
+        AiController, Anchored, Brace, ClassId, Collider, Disabled, EmpDefense, Faction,
+        FireOrders, Heading, Helm, Hull, Invulnerable, Landmark, PilotIntent, Projectile,
+        Protagonist, Ship, ShipStats, SpeedScale, Ttl, Velocity, ENGAGEMENT_RANGE,
     };
     pub use crate::drive::{clamp_to_range, speed_scale, BoostDrive, MicrowarpDrive};
     pub use crate::emp::{EmpBolt, EmpWeapon};

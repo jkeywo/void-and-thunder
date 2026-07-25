@@ -10,7 +10,7 @@ use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    Brace, Collider, Faction, FireOrders, Heading, Hull, Projectile, Ttl, Velocity,
+    Brace, Collider, Faction, FireOrders, Heading, Hull, Invulnerable, Projectile, Ttl, Velocity,
 };
 use crate::events::{ShipDestroyed, ShipHit};
 use crate::tuning::SimTuning;
@@ -273,6 +273,27 @@ pub fn braced_damage(base_damage: f32, braced: bool, brace_factor: f32) -> f32 {
     base_damage * if braced { brace_factor } else { 1.0 }
 }
 
+/// Reduce a hull by one hit. **The only place in the sim a hull goes down.**
+///
+/// Every weapon funnels through here, so brace mitigation and invulnerability
+/// each have exactly one home. Invulnerability short-circuits the reduction
+/// rather than being handled in `destruction_system`: letting the hull go
+/// negative and refusing to despawn would quietly break every reader of the hull
+/// *fraction* — the HUD's low-hull vignette, the cripple threshold, and the AI's
+/// decision to flee.
+pub fn apply_hull_damage(
+    hull: &mut Hull,
+    base_damage: f32,
+    braced: bool,
+    invulnerable: bool,
+    brace_factor: f32,
+) {
+    if invulnerable {
+        return;
+    }
+    hull.current -= braced_damage(base_damage, braced, brace_factor);
+}
+
 /// Bevy system: fire aimed broadsides, with a per-bank charge/telegraph.
 ///
 /// [`FireOrders`] is a *request*, consumed here — raise a side and (if the bank
@@ -405,21 +426,26 @@ pub fn collision_system(
         &Faction,
         &mut Hull,
         Option<&Brace>,
+        Has<Invulnerable>,
     )>,
 ) {
     for (proj_entity, proj_tf, projectile) in &projectiles {
         let proj_pos = proj_tf.translation.truncate();
-        for (ship_entity, ship_tf, collider, faction, mut hull, brace) in &mut ships {
+        for (ship_entity, ship_tf, collider, faction, mut hull, brace, invulnerable) in &mut ships {
             if !projectile.faction.hostile_to(*faction) {
                 continue;
             }
             let ship_pos = ship_tf.translation.truncate();
             if circles_overlap(proj_pos, projectile.radius, ship_pos, collider.radius) {
-                hull.current -= braced_damage(
+                apply_hull_damage(
+                    &mut hull,
                     projectile.damage,
                     brace.is_some_and(|b| b.active),
+                    invulnerable,
                     tuning.brace_damage_factor,
                 );
+                // Announced (and the ball spent) even on an invulnerable target:
+                // the sparks and shake are how you see a shot land at all.
                 hits.write(ShipHit {
                     position: proj_pos,
                     ship: ship_entity,

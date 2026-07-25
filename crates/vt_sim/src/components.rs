@@ -181,6 +181,37 @@ pub struct Brace {
 #[derive(Component, Default)]
 pub struct Disabled;
 
+/// Which authored ship class this ship was built from.
+///
+/// The link between a live entity and the class definition it came from, so the
+/// design panel can push an edited class back onto every ship wearing it. An
+/// index rather than a name so the sim stays string-free and this stays `Copy`;
+/// the client owns the index-to-name mapping.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassId(pub u16);
+
+/// Takes no hull damage, from any weapon.
+///
+/// A test-range affordance, not a gameplay shield — nothing in the sim ever
+/// inserts this; only an authored scenario does. Hits still *register* (the
+/// sparks, the audio, the camera trauma all fire), they simply don't reduce the
+/// hull, which is the whole point of something to shoot at while tuning.
+#[derive(Component, Default)]
+pub struct Invulnerable;
+
+/// Never moves: movement, the boundary spring and the microwarp all skip it.
+///
+/// A ship with no controller already sits still by accident — nothing writes its
+/// [`Helm`], so it never accelerates. This makes it true on purpose, so that a
+/// stray write (from the AI, from a design panel, from anything) can't nudge a
+/// target off its mark mid-measurement.
+///
+/// Because [`movement_system`](crate::ship::movement_system) is the only thing
+/// that writes `Transform.rotation` from [`Heading`], an anchored ship depends on
+/// its spawn setting both — see [`ship_bundle`](crate::spawn::ship_bundle).
+#[derive(Component, Default)]
+pub struct Anchored;
+
 /// A fixed feature of the star system — the central star, a station, a planet.
 /// Spatial/visual anchor now; a collision/interaction target later. `radius` is
 /// its size for rendering and future hit tests.

@@ -13,7 +13,7 @@ use std::f32::consts::TAU;
 
 use crate::combat::Broadside;
 use crate::components::{
-    AiController, Brace, Collider, EmpDefense, Faction, FireOrders, Heading, Helm, Hull,
+    AiController, Brace, ClassId, Collider, EmpDefense, Faction, FireOrders, Heading, Helm, Hull,
     PilotIntent, Protagonist, Ship, ShipStats, SpeedScale, Velocity,
 };
 use crate::drive::{BoostDrive, MicrowarpDrive};
@@ -157,8 +157,14 @@ pub struct DirectorSettings {
     pub base_hull: f32,
     /// Extra hull each wave adds on top of `base_hull`.
     pub hull_per_wave: f32,
-    /// Handling of the ships that are sent.
+    /// Handling of the ships that are sent. Resolved from the scenario's named
+    /// ship class, so waves and placed ships describe a ship exactly one way.
     pub stats: ShipStats,
+    /// Weapons and drives of the ships that are sent, likewise resolved.
+    pub loadout: ShipLoadout,
+    /// Which class the above came from, stamped onto each spawned ship so a
+    /// class edited in the design panel reaches wave ships too.
+    pub class: ClassId,
 }
 
 impl Default for DirectorSettings {
@@ -176,6 +182,8 @@ impl Default for DirectorSettings {
                 max_speed: 100.0,
                 ..ShipStats::default()
             },
+            loadout: ShipLoadout::enemy(),
+            class: ClassId(0),
         }
     }
 }
@@ -293,8 +301,9 @@ pub fn director_system(
                 hull,
                 pos,
                 heading,
-                ShipLoadout::enemy(),
+                settings.loadout,
             ),
+            settings.class,
             AiController::default(),
         ));
     }

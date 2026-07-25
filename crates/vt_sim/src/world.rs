@@ -11,7 +11,7 @@ use bevy_time::Time;
 use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Ship, Velocity};
+use crate::components::{Anchored, Ship, Velocity};
 use crate::tuning::SimTuning;
 
 /// The bounds of the current star system: a disc of this radius around origin.
@@ -48,7 +48,7 @@ pub fn bounds_system(
     time: Res<Time>,
     bounds: Res<SystemBounds>,
     tuning: Res<SimTuning>,
-    mut ships: Query<(&Transform, &mut Velocity), With<Ship>>,
+    mut ships: Query<(&Transform, &mut Velocity), (With<Ship>, Without<Anchored>)>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {

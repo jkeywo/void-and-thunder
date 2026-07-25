@@ -102,7 +102,10 @@ mod bullet_time;
 use bullet_time::{aim_time_dilation, AimBattery, Hitstop};
 
 mod session;
-use session::{freeze_for_menu, restart, start_run, unfreeze_for_run, watch_outcome, GameState};
+use session::{
+    await_data, clear_field, freeze_for_menu, restart, start_run, unfreeze_for_run, watch_outcome,
+    GameState,
+};
 
 // ---- Presentation constants ----
 
@@ -223,6 +226,11 @@ fn main() {
         .init_resource::<ControlsPanel>()
         .init_resource::<Hitstop>()
         .add_systems(Startup, setup)
+        // Loading lays out the encounter from data. It clears the field on the
+        // way in, so re-entering it (picking the test range) swaps scenarios
+        // rather than stacking one on top of the other.
+        .add_systems(OnEnter(GameState::Loading), (clear_field, freeze_for_menu))
+        .add_systems(Update, await_data.run_if(in_state(GameState::Loading)))
         // The start screen freezes the sim; casting off thaws it.
         .add_systems(OnEnter(GameState::Menu), freeze_for_menu)
         .add_systems(OnEnter(GameState::Playing), unfreeze_for_run)
@@ -301,29 +309,6 @@ fn main() {
         // Game over: wait for a restart.
         .add_systems(Update, restart.run_if(in_state(GameState::GameOver)))
         .run();
-}
-
-/// The player's starting position, offset from the star at the origin.
-const PLAYER_START: Vec2 = Vec2::new(0.0, -520.0);
-/// Facing at the start: bow toward the star, and the action around it.
-const PLAYER_START_HEADING: f32 = std::f32::consts::FRAC_PI_2;
-
-/// Spawn the player's corsair sloop — the encounter's protagonist.
-fn spawn_player(commands: &mut Commands) {
-    // A player ship is an ordinary ship — the full kit comes from the loadout;
-    // the `Player` marker is what routes the client's input into its PilotIntent.
-    commands.spawn((
-        ship_bundle(
-            Faction::Corsairs,
-            ShipStats::default(),
-            100.0,
-            PLAYER_START,
-            PLAYER_START_HEADING,
-            ShipLoadout::player(),
-        ),
-        Player,
-        Protagonist,
-    ));
 }
 
 fn setup(
@@ -440,8 +425,8 @@ fn setup(
     commands.insert_resource(game_meshes);
     commands.insert_resource(game_materials);
 
-    // The player's corsair sloop. Enemy waves come from the sim's SpawnDirector.
-    spawn_player(&mut commands);
+    // Ships are not spawned here: they are authored. The `Loading` state lays
+    // out the scenario once its data has arrived (see `session::await_data`).
 
     // A pool of off-screen enemy markers, hidden until needed.
     for _ in 0..EDGE_MARKER_COUNT {

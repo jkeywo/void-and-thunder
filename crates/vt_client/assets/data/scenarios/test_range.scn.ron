@@ -1,0 +1,41 @@
+// A place to tune against: one target, and nothing else happening.
+//
+// The target is invulnerable, inert and anchored, which between them mean it
+// never dies, never shoots back, and never moves. Hits still register — sparks,
+// sound and screen shake all fire — so you can see exactly where your shots land
+// while dragging sliders in the design panel.
+//
+// `director: None` is what makes this a range rather than a fight: no waves at
+// all. The run can still be *lost* if you contrive to destroy yourself, but it
+// can never be "cleared", so nothing interrupts a tuning session.
+(
+    name: "Test Range",
+    bounds_radius: 1400.0,
+
+    player: (
+        class: "corsair_sloop",
+        faction: Corsairs,
+        // Close enough to the target to open fire immediately, far enough to
+        // have room to turn.
+        pos: (0.0, -320.0),
+        heading: 1.5707964,
+    ),
+
+    enemies: [
+        (
+            class: "house_patrol",
+            faction: Houses,
+            // Dead centre, beam-on to the player's approach so the whole
+            // silhouette is a target.
+            pos: (0.0, 0.0),
+            heading: 0.0,
+            flags: (
+                invulnerable: true,
+                inert: true,
+                anchored: true,
+            ),
+        ),
+    ],
+
+    director: None,
+)

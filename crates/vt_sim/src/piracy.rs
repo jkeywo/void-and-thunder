@@ -10,7 +10,9 @@ use bevy_ecs::prelude::*;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 
-use crate::components::{AiController, Disabled, FireOrders, Helm, Hull, Protagonist, Ship};
+use crate::components::{
+    AiController, Disabled, FireOrders, Helm, Hull, Invulnerable, Protagonist, Ship,
+};
 use crate::tuning::SimTuning;
 
 // Defaults for the piracy thresholds; the live values are the matching
@@ -60,6 +62,9 @@ pub fn cripple_system(
             With<AiController>,
             Without<Disabled>,
             Without<Protagonist>,
+            // Belt and braces: an invulnerable target can't reach the threshold
+            // on its own, but a design panel can set `Hull.current` by hand.
+            Without<Invulnerable>,
         ),
     >,
 ) {
@@ -83,7 +88,7 @@ pub fn boarding_system(
     mut plunder: ResMut<Plunder>,
     mut boarding: ResMut<Boarding>,
     protagonist: Query<&Transform, With<Protagonist>>,
-    disabled: Query<(Entity, &Transform), (With<Ship>, With<Disabled>)>,
+    disabled: Query<(Entity, &Transform), (With<Ship>, With<Disabled>, Without<Invulnerable>)>,
 ) {
     let Ok(protagonist) = protagonist.single() else {
         *boarding = Boarding::default();
