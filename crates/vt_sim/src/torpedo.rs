@@ -464,7 +464,6 @@ pub fn torpedo_hit_system(
 mod tests {
     use super::*;
     use crate::components::PilotIntent;
-    use bevy_ecs::prelude::*;
     use bevy_math::Vec2;
 
     /// A one-ship world for exercising [`torpedo_lock_system`] frame by frame.

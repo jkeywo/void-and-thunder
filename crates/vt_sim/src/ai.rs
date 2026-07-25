@@ -291,7 +291,6 @@ pub fn decide_abilities(
 
 /// Bevy system: for AI ships with `use_abilities`, drive the special kit through
 /// their [`PilotIntent`]. Ships without it (enemies) are untouched.
-#[allow(clippy::type_complexity)]
 pub fn ai_abilities_system(
     time: Res<Time>,
     tuning: Res<SimTuning>,

@@ -7,6 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Logic-only Bevy: ECS, App/Plugin, math, time, transform. No render/window/audio.
 # Deliberately *not* bevy_asset: this crate owns the tuning types and knows how

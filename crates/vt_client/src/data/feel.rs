@@ -237,24 +237,15 @@ impl Default for TrailFeel {
 /// Everything about how the game feels, in one resource.
 // `TypePath` is not derived here: `Reflect` already provides it, and asking for
 // both is a conflicting-impl error.
-#[derive(Asset, Resource, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
+#[derive(
+    Asset, Resource, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, Reflect,
+)]
 #[serde(default)]
 pub struct FeelTuning {
     pub time: TimeFeel,
     pub impact: ImpactFeel,
     pub camera: CameraFeel,
     pub trails: TrailFeel,
-}
-
-impl Default for FeelTuning {
-    fn default() -> Self {
-        Self {
-            time: TimeFeel::default(),
-            impact: ImpactFeel::default(),
-            camera: CameraFeel::default(),
-            trails: TrailFeel::default(),
-        }
-    }
 }
 
 #[cfg(test)]

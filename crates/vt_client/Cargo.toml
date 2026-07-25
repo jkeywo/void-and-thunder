@@ -9,6 +9,9 @@ repository.workspace = true
 
 # `wav` enables WAV decoding so the native audio backend can play the
 # procedurally-generated sound effects (see src/audio.rs).
+[lints]
+workspace = true
+
 [dependencies]
 bevy = { workspace = true, features = ["wav"] }
 vt_sim.workspace = true
