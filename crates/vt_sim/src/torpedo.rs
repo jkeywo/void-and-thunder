@@ -19,6 +19,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::{Quat, Vec3};
+use bevy_reflect::Reflect;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
@@ -44,7 +45,7 @@ pub const TORPEDO_TUBES: usize = 6;
 /// ([`TorpedoLock`]) and draining a staggered launch ([`TorpedoLaunchQueue`]) —
 /// are separate components, since they don't share a lifetime with each other
 /// or with this one (a volley can be mid-launch while a fresh aim starts).
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct TorpedoBay {
     /// Tubes available (magazine size).

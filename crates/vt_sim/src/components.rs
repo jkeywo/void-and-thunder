@@ -8,6 +8,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec2;
+use bevy_reflect::Reflect;
 use serde::{Deserialize, Serialize};
 
 /// How far the ship's top-down kit reaches — the microwarp's jump range and the
@@ -78,7 +79,7 @@ impl Heading {
 pub struct Velocity(pub Vec2);
 
 /// Handling characteristics of a hull. Tuned per ship class.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct ShipStats {
     /// Forward acceleration at full throttle (units/s²).
@@ -117,7 +118,7 @@ pub struct Helm {
 }
 
 /// Structural health. A ship is destroyed when `current <= 0`.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Hull {
     pub current: f32,
     pub max: f32,
@@ -156,7 +157,7 @@ pub struct Projectile {
 pub struct Ttl(pub f32);
 
 /// Collision radius of a ship, for projectile hit tests (broad-phase circle).
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct Collider {
     pub radius: f32,
@@ -236,7 +237,7 @@ impl Default for SpeedScale {
 /// approaches `resist` the ship's speed is inverse-lerped to zero; `damage`
 /// bleeds off at `recovery_per_sec`. All ships carry one so the player's EMP can
 /// slow anything.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct EmpDefense {
     /// EMP points to fully disable this ship's drive.
@@ -286,7 +287,7 @@ pub struct PilotIntent {
 /// writes this ship's [`Helm`] and [`FireOrders`]; a ship without it (the
 /// player) is driven by the client instead. This keeps the sim ignorant of who
 /// "the player" is — it only knows which ships steer themselves.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct AiController {
     /// Inside this distance the ship stops closing and turns to present a beam.

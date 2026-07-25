@@ -16,6 +16,7 @@
 //! resource, which is what keeps them testable without a `World`.
 
 use bevy_ecs::prelude::*;
+use bevy_reflect::Reflect;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::{
@@ -31,7 +32,7 @@ use crate::torpedo::TORPEDO_LAUNCH_INTERVAL;
 use crate::world::BOUNDS_SPRING;
 
 /// The AI's control gains and thresholds.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct AiTuning {
     /// Proportional gain turning a heading error (radians) into a helm command.
@@ -66,7 +67,7 @@ impl Default for AiTuning {
 /// `#[serde(default)]` throughout: a data file may omit any field and inherit the
 /// default, so files stay hand-editable without knowing the whole schema and
 /// adding a field never invalidates an existing file.
-#[derive(Resource, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct SimTuning {
     /// Fraction of damage a braced ship still takes.

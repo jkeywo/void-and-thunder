@@ -601,8 +601,8 @@ entities:
 
   - component: dev-panel
     core:
-      status: proposed
-      confidence: provisional
+      status: implemented
+      confidence: confirmed
       title: Design Panel (in-game tuning UI)
       summary: >-
         An egui panel, behind the non-default dev-panel feature, that walks the
@@ -614,3 +614,30 @@ entities:
         A DevPanelFocus resource gates game input while the panel has the
         pointer or keyboard.
       references: [data-tuning, scenarios, controller-input]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/dev]
+      symbols:
+        [
+          DevPanelPlugin,
+          DevPanelFocus,
+          DevPanel,
+          game_has_input,
+          game_has_pointer,
+          FieldSpec,
+          FieldKind,
+          spec_for,
+          owner_of,
+          edit_value,
+          merge_config,
+          apply_class_edits,
+          save_ships,
+          save_sim_tuning,
+        ]
+      tests:
+        [
+          crates/vt_client/src/dev/fields.rs,
+          crates/vt_client/src/dev/walker.rs,
+          crates/vt_client/src/dev/apply.rs,
+          crates/vt_client/src/dev/save.rs,
+        ]

@@ -7,6 +7,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::{Quat, Vec2};
+use bevy_reflect::Reflect;
 use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
 use std::f32::consts::TAU;
@@ -23,7 +24,7 @@ use crate::world::SystemBounds;
 
 /// A ship's full weapon/drive loadout. Every ship carries the same kit; presets
 /// differ only in tuning, so a player and an AI ship are the same entity shape.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct ShipLoadout {
     pub broadside: Broadside,

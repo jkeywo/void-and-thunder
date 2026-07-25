@@ -10,6 +10,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec2;
+use bevy_reflect::Reflect;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ use crate::components::{Anchored, EmpDefense, PilotIntent, Ship, SpeedScale, ENG
 /// A rechargeable overdrive. While `active` and `battery > 0`, the ship's speed
 /// is multiplied by `multiplier`. Config + live state live together so the
 /// client just flips `active`. Player-only for now.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct BoostDrive {
     pub multiplier: f32,
@@ -53,7 +54,7 @@ impl BoostDrive {
 
 /// A short-range teleport drive. Holding aim previews a destination within
 /// `range`; releasing warps there (gated by `cooldown`). Player-only.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct MicrowarpDrive {
     pub range: f32,

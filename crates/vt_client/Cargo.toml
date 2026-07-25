@@ -28,6 +28,9 @@ wasm-bindgen = "0.2"
 # but free for indies under their revenue/funding thresholds.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ul-next = { version = "0.5", optional = true }
+# The design panel's UI. Native-only: it is a development tool, and the web
+# build never enables `dev-panel` (index.html passes no cargo features).
+bevy_egui = { version = "0.41", optional = true }
 
 # Native-only: dynamic linking makes iterative debug builds much faster.
 # Enable with `cargo run --features fast-compile`. Never enabled for wasm.
@@ -40,6 +43,14 @@ fast-compile = ["bevy/dynamic_linking"]
 # forfeits the determinism `fixed-update-sim` buys — a run whose tuning moved
 # mid-flight is not reproducible from its inputs alone.
 hot-reload = ["bevy/file_watcher"]
+# The in-game design panel: pick an entity or a ship class and move its numbers
+# with sliders and text boxes, live, then save them back to assets/data/.
+# Implies hot-reload so an external edit and a panel edit behave the same.
+#
+# Only the *UI* is behind this feature. Data loading, the tuning resources and
+# scenarios are unconditional — gating those would mean a release build silently
+# ran on Default values while the tuned RON sat unread.
+dev-panel = ["dep:bevy_egui", "hot-reload"]
 # Render the HTML HUD (assets/ui/hud.html) on native desktop via Ultralight →
 # Bevy texture — the canonical HUD, matching the web build. Default-on so
 # plain `cargo run -p vt_client` shows a HUD; it downloads/links the Ultralight

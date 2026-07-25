@@ -5,6 +5,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::{Vec2, Vec3};
+use bevy_reflect::Reflect;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,7 @@ pub const MUZZLE_STANDOFF: f32 = 22.0;
 
 /// Per-side reload + telegraph state for one broadside bank. Port and starboard
 /// each carry their own, so the two sides reload and fire independently.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
 pub struct BankState {
     /// Remaining reload until this side can fire again (0 = ready).
     pub timer: f32,
@@ -49,7 +50,7 @@ pub struct BankState {
 /// steer each volley within `arc` of the beam; an enemy telegraphs a
 /// `charge_time` wind-up before firing. The two sides ([`BankState`]) reload on
 /// independent timers.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct Broadside {
     /// Seconds between volleys (per side).

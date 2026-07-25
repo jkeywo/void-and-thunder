@@ -16,7 +16,10 @@ bevy_app.workspace = true
 bevy_ecs.workspace = true
 # `serialize` is named explicitly rather than relied on via feature unification
 # with the client, so `cargo test -p vt_sim` on its own still gets Vec2: Serialize.
-bevy_math = { workspace = true, features = ["serialize"] }
+bevy_math = { workspace = true, features = ["serialize", "bevy_reflect"] }
+# The design panel walks these structs field by field rather than hard-coding a
+# UI per type, so a field added here shows up in the panel without further work.
+bevy_reflect.workspace = true
 bevy_time.workspace = true
 bevy_transform.workspace = true
 serde.workspace = true

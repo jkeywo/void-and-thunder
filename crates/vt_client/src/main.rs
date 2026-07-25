@@ -48,6 +48,9 @@ use vt_sim::prelude::*;
 mod data;
 use data::DataPlugin;
 
+mod dev;
+use dev::{game_has_input, game_has_pointer, DevPanelPlugin};
+
 mod audio;
 use audio::SfxPlugin;
 
@@ -208,6 +211,9 @@ fn main() {
         .add_plugins(SimPlugin)
         // After SimPlugin: it installs the tuning resources this loads over.
         .add_plugins(DataPlugin)
+        // A no-op without the `dev-panel` feature, but always mounted so the
+        // input guards below can be unconditional.
+        .add_plugins(DevPanelPlugin)
         .add_plugins(SfxPlugin)
         .add_plugins(SpaceSkyboxPlugin)
         .add_plugins(StarPlugin)
@@ -264,7 +270,7 @@ fn main() {
                 tick_hit_flash,
                 damage_tint.after(tick_hit_flash),
                 microwarp_ghost,
-                camera_orbit,
+                camera_orbit.run_if(game_has_pointer),
                 aim_time_dilation,
             )
                 .after(SmoothingSet),
@@ -298,16 +304,34 @@ fn main() {
             ),
         )
         // Playing: take input and watch for win/lose.
+        // Every input system yields to the design panel: without this, dragging
+        // a slider across the viewport also sweeps the broadside arc and fires
+        // on release, because these read the raw mouse and keyboard.
         .add_systems(
             Update,
-            (player_input, watch_outcome, toggle_player_ai, toggle_pause)
-                .run_if(in_state(GameState::Playing)),
+            (player_input, toggle_player_ai, toggle_pause)
+                .run_if(in_state(GameState::Playing))
+                .run_if(game_has_input),
         )
-        .add_systems(Update, (track_input_method, toggle_controls_panel))
+        .add_systems(Update, watch_outcome.run_if(in_state(GameState::Playing)))
+        .add_systems(
+            Update,
+            (track_input_method, toggle_controls_panel).run_if(game_has_input),
+        )
         // Start screen: wait for the player to cast off.
-        .add_systems(Update, start_run.run_if(in_state(GameState::Menu)))
+        .add_systems(
+            Update,
+            start_run
+                .run_if(in_state(GameState::Menu))
+                .run_if(game_has_input),
+        )
         // Game over: wait for a restart.
-        .add_systems(Update, restart.run_if(in_state(GameState::GameOver)))
+        .add_systems(
+            Update,
+            restart
+                .run_if(in_state(GameState::GameOver))
+                .run_if(game_has_input),
+        )
         .run();
 }
 
