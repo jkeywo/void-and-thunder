@@ -7,10 +7,16 @@ dependencies = [
     # PASM: models the intended shape of the codebase and checks the Rust
     # implementation against it, so an agent can't quietly invent a second way
     # of doing something that already exists. See pasm/spec/.
-    "pasm @ git+https://github.com/jkeywo/pasm",
+    #
+    # The tool lives in the fleet's shared repository (a subdirectory of
+    # vellum), pinned to a rev. Bumping the rev is part of a vellum bump PR —
+    # see vellum's docs/handbook/bump-workflow.md.
+    "pasm @ git+https://github.com/jkeywo/vellum@ece24ad86fa384d12279105f94f089da180f9d89#subdirectory=pasm",
 ]
 
 [tool.uv]
-# Local checkout override — comment out to pin to the git revision above.
+# Local checkout override — uncomment for work against a sibling vellum
+# checkout, re-comment before committing. The committed state always resolves
+# the pinned rev.
 # [tool.uv.sources]
-# pasm = { path = "../pasm", editable = true }
+# pasm = { path = "../vellum/pasm", editable = true }
