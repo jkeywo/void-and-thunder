@@ -9,6 +9,7 @@ use bevy_ecs::prelude::*;
 use bevy_math::Vec2;
 
 use crate::components::Faction;
+use crate::shield::DamageReport;
 
 /// A cannonball or torpedo struck a ship's hull.
 ///
@@ -25,6 +26,18 @@ pub struct ShipHit {
     pub faction: Faction,
     /// Damage the blow carried, before brace reduction.
     pub damage: f32,
+    /// Unit vector the blow was travelling along. The client sprays sparks back
+    /// against this, so a hit reads as having come from *somewhere* rather than
+    /// blooming symmetrically out of the hull. Every writer already knows it —
+    /// a shot has a velocity, a ram has a contact normal — so it costs nothing
+    /// to carry, and guessing it from the geometry downstream would be wrong for
+    /// a glancing blow.
+    pub direction: Vec2,
+    /// How the blow actually split between shield and hull, after bracing. A
+    /// shield turning a shot aside and a shot breaching the hull are different
+    /// events to the player and want different colours and weight, and only the
+    /// damage resolution knows which happened.
+    pub report: DamageReport,
 }
 
 /// A ship was destroyed (hull reduced to zero).
@@ -36,6 +49,13 @@ pub struct ShipDestroyed {
     pub ship: Entity,
     /// The faction of the ship that was destroyed.
     pub faction: Faction,
+    /// Where the bow was pointing, and how fast it was going, at the moment it
+    /// died. Carried because the entity is gone by the time anyone reads this:
+    /// without them a client cannot show a wreck that carries on along the
+    /// course the ship was making, and a corpse that stops dead on the spot
+    /// looks like the ship was deleted rather than killed.
+    pub heading: f32,
+    pub velocity: Vec2,
 }
 
 /// An EMP bolt struck a ship.

@@ -1,7 +1,7 @@
 # Void & Thunder — PASM specification
 
 This directory is the source of truth for Void & Thunder's system boundaries
-and gameplay design. [PASM](https://github.com/jkeywo/pasm) reads the model here
+and gameplay design. [PASM](https://github.com/jkeywo/vellum/tree/main/pasm) reads the model here
 and checks the Rust implementation against it, so a change to one part of the
 game can't quietly grow a second, parallel way of doing something that already
 exists.

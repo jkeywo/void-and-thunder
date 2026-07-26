@@ -9,11 +9,13 @@ use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
 use crate::ai::{ai_abilities_system, ai_system};
+use crate::collide::ram_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
 use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plunder};
+use crate::shield::{shield_refit_system, shield_regen_system};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
 use crate::torpedo::{
@@ -34,6 +36,10 @@ pub enum SimSet {
     Systems,
     /// Turn hulls and integrate positions.
     Movement,
+    /// Push overlapping hulls apart and resolve rams. After `Movement` because
+    /// it corrects the positions movement just wrote, and before `Bounds` so the
+    /// boundary spring always gets the last word on where a ship may be.
+    Contact,
     /// Keep ships inside the star system's soft boundary.
     Bounds,
     /// Fire broadsides/EMP, launch torpedoes, fly projectiles.
@@ -70,6 +76,7 @@ impl Plugin for SimPlugin {
                     SimSet::Ai,
                     SimSet::Systems,
                     SimSet::Movement,
+                    SimSet::Contact,
                     SimSet::Bounds,
                     SimSet::Weapons,
                     SimSet::Homing,
@@ -90,11 +97,14 @@ impl Plugin for SimPlugin {
                     torpedo_reload_system,
                     microwarp_system,
                     speed_scale_system,
+                    shield_refit_system,
+                    shield_regen_system,
                 )
                     .chain()
                     .in_set(SimSet::Systems),
             )
             .add_systems(FixedUpdate, movement_system.in_set(SimSet::Movement))
+            .add_systems(FixedUpdate, ram_system.in_set(SimSet::Contact))
             .add_systems(FixedUpdate, bounds_system.in_set(SimSet::Bounds))
             .add_systems(
                 FixedUpdate,

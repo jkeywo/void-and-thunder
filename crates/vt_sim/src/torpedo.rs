@@ -26,9 +26,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::combat::{apply_hull_damage, spheres_overlap};
 use crate::components::{
-    Brace, Collider, Faction, Hull, Invulnerable, PilotIntent, Ship, Ttl, ENGAGEMENT_RANGE,
+    Brace, Collider, Faction, Heading, Hull, Invulnerable, PilotIntent, Ship, Ttl, ENGAGEMENT_RANGE,
 };
 use crate::events::ShipHit;
+use crate::shield::{shield_arc, Shield};
 use crate::tuning::SimTuning;
 
 /// Default seconds between successive tube launches once a volley is released.
@@ -420,9 +421,11 @@ pub fn torpedo_hit_system(
         (
             Entity,
             &Transform,
+            &Heading,
             &Collider,
             &Faction,
             &mut Hull,
+            Option<&mut Shield>,
             Option<&Brace>,
             Has<Invulnerable>,
         ),
@@ -430,7 +433,18 @@ pub fn torpedo_hit_system(
     >,
 ) {
     for (entity, transform, torp) in &torps {
-        for (ship_entity, ship_tf, collider, faction, mut hull, brace, invulnerable) in &mut ships {
+        for (
+            ship_entity,
+            ship_tf,
+            ship_heading,
+            collider,
+            faction,
+            mut hull,
+            shield,
+            brace,
+            invulnerable,
+        ) in &mut ships
+        {
             if !torp.faction.hostile_to(*faction) {
                 continue;
             }
@@ -440,8 +454,14 @@ pub fn torpedo_hit_system(
                 ship_tf.translation,
                 collider.radius,
             ) {
-                apply_hull_damage(
+                // The torpedo's own position on the plane, not the hull centre:
+                // that is the side of the ship it actually ran into.
+                let impact = transform.translation.truncate();
+                let arc = shield_arc(ship_heading.0, ship_tf.translation.truncate(), impact);
+                let report = apply_hull_damage(
                     &mut hull,
+                    shield.map(Mut::into_inner),
+                    arc,
                     torp.damage,
                     brace.is_some_and(|b| b.active),
                     invulnerable,
@@ -452,6 +472,9 @@ pub fn torpedo_hit_system(
                     ship: ship_entity,
                     faction: *faction,
                     damage: torp.damage,
+                    // A torpedo flies in 3D; flatten its run onto the sim plane.
+                    direction: torp.vel.truncate().normalize_or_zero(),
+                    report,
                 });
                 commands.entity(entity).despawn();
                 break;

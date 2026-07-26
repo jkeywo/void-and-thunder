@@ -24,12 +24,12 @@
 
 use bevy::prelude::*;
 use vt_sim::prelude::{
-    Boarding, BoostDrive, Broadside, Encounter, Hull, MicrowarpDrive, Outcome, Plunder, SimTuning,
-    TorpedoBay, TorpedoLock,
+    agility_at, Boarding, BoostDrive, Broadside, Encounter, Hull, MicrowarpDrive, Outcome, Plunder,
+    Shield, ShieldArc, ShipStats, SimTuning, TorpedoBay, TorpedoLock, Velocity,
 };
 
 use crate::bullet_time::AimBattery;
-use crate::input::{ControlsPanel, InputMethod, Paused, PlayerAi};
+use crate::input::{ControlsPanel, InputMethod, Paused, PlayerAi, SailState};
 use crate::session::GameState;
 use crate::Player;
 
@@ -86,7 +86,12 @@ pub enum HudAction {
 /// `microwarpCd` as `{remaining,duration}` seconds, `torpedoes[]` of
 /// `{state, progress?}`, `torpedoLocks` (u32), `aimBattery` (0..1), `wave`,
 /// `enemiesRemaining`, `plunder`, `paused`/`aiPilot` (bool), `boarding`
-/// `{active,progress}`, `inputMethod` (`"kbm"`/`"gamepad"`), `outcome`
+/// `{active,progress}`, `shield` `{fitted,fore,aft}` (charges as fractions;
+/// `fitted` false means the hull carries none, which the HUD must not draw as
+/// two broken banks), `sail` `{helm,speed,agility}` (`helm` is a *string-table
+/// id* for the notch, which the HUD resolves itself; `speed` and `agility` are
+/// fractions of this hull's best), `inputMethod`
+/// (`"kbm"`/`"gamepad"`), `outcome`
 /// (`"in_progress"`/`"cleared"`/`"destroyed"`), `screen`
 /// (`"start"`/`"playing"`/`"gameover"` — which full-screen card, if any, the HUD
 /// shows), and `controlsOpen` (bool). All weapon components are optional so a
@@ -98,6 +103,9 @@ fn gather_hud_state(
         (
             &Transform,
             &Hull,
+            &Velocity,
+            &ShipStats,
+            Option<&Shield>,
             Option<&BoostDrive>,
             Option<&Broadside>,
             Option<&MicrowarpDrive>,
@@ -114,6 +122,7 @@ fn gather_hud_state(
     method: Res<InputMethod>,
     battery: Res<AimBattery>,
     controls_panel: Res<ControlsPanel>,
+    sail: Res<SailState>,
     tuning: Res<SimTuning>,
     state: Res<State<GameState>>,
     career: Res<crate::progress::Career>,
@@ -191,7 +200,9 @@ fn gather_hud_state(
     // Absent before the run starts and after it ends. The HUD retains the last
     // known value for anything missing, so these simply stop updating rather
     // than blanking out.
-    if let Ok((tf, hull, boost, broadside, warp, torps, torp_lock)) = player.single() {
+    if let Ok((tf, hull, vel, stats, shield, boost, broadside, warp, torps, torp_lock)) =
+        player.single()
+    {
         // The sim's plane is XY (see `translation.truncate()` uses elsewhere in
         // the client); z is height, ignored by the HUD.
         let (x, y) = (
@@ -202,6 +213,40 @@ fn gather_hud_state(
 
         let hull_frac = (hull.current / hull.max).clamp(0.0, 1.0);
         j.push_str(&format!(",\"hull\":{hull_frac:.4}"));
+
+        // Shields. `fitted` is emitted separately from the charges because "no
+        // shields on this hull" and "both banks flat" look identical as numbers
+        // and must not look identical on screen.
+        let fitted = shield.is_some_and(Shield::fitted);
+        let (fore, aft) = match shield.filter(|s| s.fitted()) {
+            Some(s) => (s.fraction(ShieldArc::Fore), s.fraction(ShieldArc::Aft)),
+            None => (0.0, 0.0),
+        };
+        j.push_str(&format!(
+            ",\"shield\":{{\"fitted\":{fitted},\"fore\":{fore:.4},\"aft\":{aft:.4}}}"
+        ));
+
+        // Sail setting and what it is costing. `helm` is the notch the keyboard
+        // ladder is on; `speed` and `agility` are what the ship is actually
+        // doing, so a pad player (who never touches the ladder) still sees the
+        // speed-for-turn-rate bargain they are making. `agility` is normalised
+        // against the best the hull can manage, so 1.0 reads as "as handy as
+        // this ship gets".
+        let speed = vel.0.length();
+        let speed_frac = if stats.max_speed > 0.0 {
+            (speed / stats.max_speed).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let agility_frac = if stats.turn_rate_slow > 0.0 {
+            (agility_at(stats, speed) / stats.turn_rate_slow).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        j.push_str(&format!(
+            ",\"sail\":{{\"helm\":\"{}\",\"speed\":{speed_frac:.4},\"agility\":{agility_frac:.4}}}",
+            sail.string_key()
+        ));
 
         if let Some(b) = boost {
             let frac = if b.battery_max > 0.0 {
@@ -356,14 +401,44 @@ mod native {
     #[derive(Component)]
     struct HudCanvas;
 
-    /// The HUD page with `bridge.js` inlined (no external file to resolve).
+    /// The HUD page with `bridge.js` and the string table inlined, so nothing
+    /// has to be resolved from disk.
+    ///
+    /// The strings matter as much as the bridge here. The page has two ways to
+    /// get them — handed over by the host, or fetched from `assets/strings/` —
+    /// and on this transport *neither* works on its own: only the wasm shim
+    /// implements `vtStrings`, and a document loaded from an in-memory string
+    /// has no base URL to resolve a relative `fetch` against. Elements with a
+    /// `data-i18n` attribute hide the problem by keeping their authored English,
+    /// but every lookup made at runtime — the RDY on a reloaded gun, the whole
+    /// controls panel — renders as the missing-string marker.
+    ///
+    /// Appending the call after the page's own script means the IIFE has already
+    /// published `window.__applyStrings` by the time this runs.
     fn hud_document() -> String {
         const HTML: &str = include_str!("../assets/ui/hud.html");
         const BRIDGE: &str = include_str!("../assets/ui/bridge.js");
-        HTML.replace(
+        let with_bridge = HTML.replace(
             "<script src=\"bridge.js\"></script>",
             &format!("<script>{BRIDGE}</script>"),
+        );
+        let table = js_string_literal(crate::strings::TABLE_JSON);
+        with_bridge.replace(
+            "</body>",
+            &format!("<script>window.__applyStrings('{table}');</script></body>"),
         )
+    }
+
+    /// Escape a string for embedding in a single-quoted JavaScript literal.
+    /// Shared by the string table and the per-frame snapshot push so the two
+    /// cannot disagree about what needs escaping.
+    fn js_string_literal(raw: &str) -> String {
+        raw.replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            // A literal newline inside a JS string literal is a syntax error,
+            // and an authored line is perfectly entitled to contain one.
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
     }
 
     /// Create the Ultralight renderer/view + target texture once the window
@@ -476,7 +551,7 @@ mod native {
 
         if snap.seq != hud.last_seq {
             hud.last_seq = snap.seq;
-            let esc = snap.json.replace('\\', "\\\\").replace('\'', "\\'");
+            let esc = js_string_literal(&snap.json);
             let _ = hud
                 .view
                 .evaluate_script(&format!("window.__applyHud('{esc}')"));

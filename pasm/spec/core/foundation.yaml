@@ -40,16 +40,88 @@ entities:
       confidence: confirmed
       title: Ship Movement
       summary: >-
-        Arcade helm physics — the throttle/turn intent in Helm rotates the hull,
-        thrusts along the bow, applies drag and clamps to a sail-set top speed,
-        then integrates position. Pure maths in helm_step; the ECS system wraps
-        it. Heading is the source of truth and is written into Transform.
-      references: [ship-combat]
+        Arcade helm physics with a Black-Flag speed-versus-agility bargain. The
+        Helm asks for a rate of turn scaled by agility_at — best at rest, worst
+        at top speed — and the hull eases onto it at turn_accel, so it has
+        rotational inertia rather than snapping. Thrust pushes along the bow;
+        drag is anisotropic (low forward_drag so the ship carries its way, high
+        lateral_drag so it bites sideways instead of skidding), then velocity is
+        clamped to a sail-set top speed and position integrated. Pure maths in
+        helm_step; the ECS system wraps it. Heading is the source of truth and is
+        written into Transform. Taking in sail is the core manoeuvre: at full
+        sail the corsair sloop needs ~8s and 623 units to come about, at all stop
+        ~3s and pivots on the spot.
+      references: [ship-combat, hull-contact]
     implementation:
       status: declared
       paths: [crates/vt_sim/src/ship.rs, crates/vt_sim/src/components.rs]
-      symbols: [helm_step, movement_system, ShipStats, Helm, Heading, Velocity]
+      symbols:
+        [
+          helm_step,
+          agility_at,
+          movement_system,
+          ShipStats,
+          Helm,
+          Heading,
+          Velocity,
+          AngularVelocity,
+        ]
       tests: [crates/vt_sim/src/ship.rs]
+
+  - component: hull-contact
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Hull Contact — Shoving and Ramming
+      summary: >-
+        Ships are solid. ram_system resolves every overlapping pair once per step
+        in SimSet::Contact, between Movement and Bounds: it eases the pair apart
+        (ram_separation), exchanges momentum along the contact normal with
+        ram_restitution, and above ram_damage_threshold hurts *both* hulls in
+        proportion to closing speed via apply_hull_damage. Anchored hulls absorb
+        the shove without moving. Each contact emits ShipHit, so the client's
+        existing trauma/kick/hitstop/spark chain fires for a ram without knowing
+        rams exist.
+      references: [ship-movement, ship-combat]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/collide.rs]
+      symbols: [ram_system, ram_damage]
+      tests: [crates/vt_sim/src/collide.rs, crates/vt_sim/src/harness.rs]
+
+  - component: directional-shields
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Directional Shields
+      summary: >-
+        Two independent 180-degree banks — everything forward of the beam, and
+        everything abaft it — that soak damage before the hull. shield_arc picks
+        the bank from where a blow landed relative to the bow, so facing decides
+        which pool pays. Any contact suppresses that bank's regeneration for
+        regen_delay, which is what makes a shield a resource rather than a flat
+        damage discount: under sustained fire the struck side stays flat and the
+        answer is to turn and present the other. A max of zero means no shields
+        fitted, so a class opts in with one authored number in ships.ron; the
+        player's sloop carries them and house_patrol does not. Resolution runs
+        inside apply_hull_damage — invulnerability, then brace, then shield, then
+        hull — and reports the split as a DamageReport so the client can flare a
+        turned shot differently from a breach.
+      references: [ship-combat, piracy-finisher]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/shield.rs]
+      symbols:
+        [
+          Shield,
+          ShieldArc,
+          ShieldBank,
+          DamageReport,
+          shield_arc,
+          shield_regen_system,
+          shield_refit_system,
+        ]
+      tests: [crates/vt_sim/src/shield.rs, crates/vt_sim/src/harness.rs]
 
   - component: ship-combat
     core:
@@ -64,8 +136,11 @@ entities:
         direction, then fires — 0 for the player, ~0.5s telegraphed for enemies.
         broadside_volley spreads shots along the hull, each inheriting ship
         momentum; projectiles fly, expire on a TTL, and on overlap damage
-        hostile-faction hulls (reduced while bracing); dead hulls despawn.
-      references: [ship-movement]
+        hostile-faction hulls; dead hulls despawn. apply_hull_damage is the one
+        place a hull goes down — invulnerability, brace mitigation and the struck
+        shield arc all compose there, in that order, and it returns how the blow
+        split between shield and hull.
+      references: [ship-movement, directional-shields]
     implementation:
       status: declared
       paths: [crates/vt_sim/src/combat.rs, crates/vt_sim/src/components.rs]
@@ -112,8 +187,10 @@ entities:
         in collision_system. cripple_system marks enemies below CRIPPLE_THRESHOLD
         hull as Disabled — they stop steering/firing (AI skips Disabled) and
         drift; boarding_system loots the nearest Disabled ship within BOARD_RANGE
-        of the Protagonist when BoardIntent is raised, tallying Plunder. Runs in
-        SimSet::Piracy after Resolution.
+        of the Protagonist when BoardIntent is raised, tallying Plunder and
+        repairing BOARD_REPAIR_FRAC of the protagonist's maximum hull — the only
+        way to recover hull, which makes piracy the sustain mechanic rather than
+        only the scoring one. Runs in SimSet::Piracy after Resolution.
       references: [ship-combat, enemy-ai, spawn-director]
     implementation:
       status: declared
@@ -411,6 +488,26 @@ entities:
           microwarp_ghost,
           MicrowarpGhost,
         ]
+
+  - component: status-ring
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Under-Ship Status Ring
+      summary: >-
+        A ship's condition drawn on the plane beneath its hull, in concentric
+        bands: hull integrity, the two shield arcs, the port and starboard
+        broadside firing arcs (lit when loaded, with a reload sweep), and one pip
+        per torpedo tube. The shield and broadside bands rotate with the hull
+        because facing is what they are about. It exists because the screen-edge
+        HUD is for glancing at between fights — mid-manoeuvre the player's eyes
+        are on their own ship, so that is where the state has to be. Enemies draw
+        a reduced ring (hull, and shields if fitted) to keep a wave readable.
+      references: [ship-combat, directional-shields, torpedoes, hud-bridge]
+    implementation:
+      status: declared
+      paths: [crates/vt_client/src/status_ring.rs]
+      symbols: [draw_player_status_ring, draw_enemy_status_rings]
 
   - component: session-lifecycle
     core:

@@ -42,6 +42,25 @@
         debris_speed_min: 90.0,
         debris_speed_max: 220.0,
         debris_life: 0.35,
+        // Sparks kicked back along a blow's travel, so a hit reads as having
+        // come from somewhere. Short-lived on purpose — any longer and they
+        // start looking like an explosion rather than an impact.
+        spark_count: 5,
+        spark_cone: 1.2,
+        spark_speed_min: 70.0,
+        spark_speed_max: 180.0,
+        spark_life: 0.18,
+        // The burning hulk left where a ship died. It keeps a little over half
+        // its way and tumbles out — a kill should have an aftermath, not just a
+        // hull blinking out.
+        wreck_life: 1.1,
+        wreck_spin: 3.0,
+        wreck_drift: 0.55,
+        // Pad rumble, derived from the same trauma the camera shake uses, so
+        // the two never drift apart. Only the player's own hull rumbles.
+        rumble_scale: 1.6,
+        rumble_hit_secs: 0.16,
+        rumble_death_secs: 0.55,
         // How long a muzzle flash lingers.
         flash_time: 0.08,
     ),
@@ -87,8 +106,41 @@
         fov_lerp: 5.0,
         // How fast the attract-screen camera drifts around the parked ship.
         menu_orbit_rate: 0.15,
-        // How quickly an impact kick decays back to nothing.
+        // How quickly an impact kick decays back to nothing, and the furthest
+        // one may ever shove the eye — without the cap a torpedo salvo throws
+        // the camera off the map.
         kick_decay: 9.0,
+        kick_max: 60.0,
+        // Screen shake. Trauma bleeds off at `trauma_decay` per second and is
+        // squared before use, so a shock hits hard and leaves quickly.
+        // `shake_freq` is how many times a second the noise picks a new target
+        // and eases toward it: sampling per *frame* instead would be white
+        // noise that changes character with the framerate.
+        trauma_decay: 1.4,
+        shake_magnitude: 26.0,
+        shake_freq: 34.0,
+        // How tightly the focus point chases the ship.
+        focus_lerp: 10.0,
+        // A pad recentres almost at once: a stick springs back on its own, so
+        // letting go *means* "put the view back". A mouse holds where it was
+        // left, so its offset is deliberate and keeps the long delay above.
+        recenter_delay_pad: 0.1,
+    ),
+
+    // ---- Controls: pointer sensitivity and stick shaping ----
+    controls: (
+        // How much of the broadside arc a pixel of mouse motion sweeps. At
+        // 0.0032 a drag of ~310px covers the full half-arc.
+        mouse_aim_sens: 0.0032,
+        // The pad's aim pointer: world units/sec at full stick, and how far
+        // from the ship it may be pushed.
+        aim_cursor_rate: 780.0,
+        aim_cursor_max: 1300.0,
+        // Stick shaping. The saturation matters: a real stick rarely reports a
+        // clean 1.0 on one axis, so without it a pad could never reach the full
+        // turn rate a keyboard gets for free.
+        deadzone: 0.05,
+        saturation: 0.90,
     ),
 
     // ---- Engine and torpedo trails ----

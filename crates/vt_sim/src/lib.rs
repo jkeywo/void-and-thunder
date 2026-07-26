@@ -18,6 +18,7 @@
 //! `FireOrders`; the sim does the rest.
 
 pub mod ai;
+pub mod collide;
 pub mod combat;
 pub mod components;
 pub mod drive;
@@ -26,6 +27,7 @@ pub mod events;
 pub mod harness;
 pub mod piracy;
 pub mod plugin;
+pub mod shield;
 pub mod ship;
 pub mod spawn;
 pub mod torpedo;
@@ -38,13 +40,14 @@ pub use plugin::{SimPlugin, SimSet};
 /// Common imports for consumers of the simulation.
 pub mod prelude {
     pub use crate::ai::desired_helm;
+    pub use crate::collide::{ram_damage, RAM_DAMAGE_THRESHOLD};
     pub use crate::combat::{
         apply_hull_damage, broadside_direction, broadside_volley, intercept_lead, BankState,
         Broadside, Lead, ProjectileSpawn, PROJECTILE_TTL,
     };
     pub use crate::components::{
-        AiController, Anchored, Brace, ClassId, Collider, Disabled, EmpDefense, Faction,
-        FireOrders, Heading, Helm, Hull, Invulnerable, Landmark, PilotIntent, Projectile,
+        AiController, Anchored, AngularVelocity, Brace, ClassId, Collider, Disabled, EmpDefense,
+        Faction, FireOrders, Heading, Helm, Hull, Invulnerable, Landmark, PilotIntent, Projectile,
         Protagonist, Ship, ShipStats, SpeedScale, Ttl, Velocity, ENGAGEMENT_RANGE,
     };
     pub use crate::drive::{clamp_to_range, speed_scale, BoostDrive, MicrowarpDrive};
@@ -55,6 +58,8 @@ pub mod prelude {
         BoardIntent, Boarding, Plunder, BOARD_DWELL, BOARD_RANGE, CRIPPLE_THRESHOLD,
     };
     pub use crate::plugin::{SimPlugin, SimSet};
+    pub use crate::shield::{shield_arc, DamageReport, Shield, ShieldArc, ShieldBank};
+    pub use crate::ship::{agility_at, helm_step};
     pub use crate::spawn::{
         reset_encounter, ship_bundle, DirectorSettings, Encounter, Outcome, ShipLoadout,
         SpawnDirector,

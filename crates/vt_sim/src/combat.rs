@@ -14,6 +14,7 @@ use crate::components::{
     Brace, Collider, Faction, FireOrders, Heading, Hull, Invulnerable, Projectile, Ttl, Velocity,
 };
 use crate::events::{ShipDestroyed, ShipHit};
+use crate::shield::{shield_arc, DamageReport, Shield, ShieldArc};
 use crate::tuning::SimTuning;
 use crate::util::wrap_angle;
 
@@ -274,25 +275,48 @@ pub fn braced_damage(base_damage: f32, braced: bool, brace_factor: f32) -> f32 {
     base_damage * if braced { brace_factor } else { 1.0 }
 }
 
-/// Reduce a hull by one hit. **The only place in the sim a hull goes down.**
+/// Resolve one blow against a ship. **The only place in the sim a hull goes
+/// down.**
 ///
-/// Every weapon funnels through here, so brace mitigation and invulnerability
-/// each have exactly one home. Invulnerability short-circuits the reduction
-/// rather than being handled in `destruction_system`: letting the hull go
-/// negative and refusing to despawn would quietly break every reader of the hull
-/// *fraction* — the HUD's low-hull vignette, the cripple threshold, and the AI's
-/// decision to flee.
+/// Every weapon funnels through here, so brace mitigation, shields and
+/// invulnerability each have exactly one home and compose in a fixed order:
+///
+/// 1. **Invulnerable** stops everything, including shield drain — a test-range
+///    target should read as untouched, not as one slowly losing its shields.
+/// 2. **Brace** reduces the blow first, so bracing makes a shield go further
+///    rather than only mattering once the shield is gone.
+/// 3. **The struck arc's shield** soaks what it can.
+/// 4. Whatever is left reaches the hull.
+///
+/// Invulnerability short-circuits rather than being handled in
+/// `destruction_system`: letting the hull go negative and refusing to despawn
+/// would quietly break every reader of the hull *fraction* — the HUD's low-hull
+/// vignette, the cripple threshold, and the AI's decision to flee.
+///
+/// Returns how the blow was split, so the client can flare a shield differently
+/// from a hull breach.
 pub fn apply_hull_damage(
     hull: &mut Hull,
+    shield: Option<&mut Shield>,
+    arc: ShieldArc,
     base_damage: f32,
     braced: bool,
     invulnerable: bool,
     brace_factor: f32,
-) {
+) -> DamageReport {
     if invulnerable {
-        return;
+        return DamageReport::default();
     }
-    hull.current -= braced_damage(base_damage, braced, brace_factor);
+    let incoming = braced_damage(base_damage, braced, brace_factor);
+    let through = match shield {
+        Some(shield) => shield.absorb(arc, incoming),
+        None => incoming,
+    };
+    hull.current -= through;
+    DamageReport {
+        to_shield: (incoming - through).max(0.0),
+        to_hull: through,
+    }
 }
 
 /// Bevy system: fire aimed broadsides, with a per-bank charge/telegraph.
@@ -419,27 +443,43 @@ pub fn collision_system(
     mut commands: Commands,
     tuning: Res<SimTuning>,
     mut hits: MessageWriter<ShipHit>,
-    projectiles: Query<(Entity, &Transform, &Projectile)>,
+    projectiles: Query<(Entity, &Transform, &Velocity, &Projectile)>,
     mut ships: Query<(
         Entity,
         &Transform,
+        &Heading,
         &Collider,
         &Faction,
         &mut Hull,
+        Option<&mut Shield>,
         Option<&Brace>,
         Has<Invulnerable>,
     )>,
 ) {
-    for (proj_entity, proj_tf, projectile) in &projectiles {
+    for (proj_entity, proj_tf, proj_vel, projectile) in &projectiles {
         let proj_pos = proj_tf.translation.truncate();
-        for (ship_entity, ship_tf, collider, faction, mut hull, brace, invulnerable) in &mut ships {
+        for (
+            ship_entity,
+            ship_tf,
+            ship_heading,
+            collider,
+            faction,
+            mut hull,
+            shield,
+            brace,
+            invulnerable,
+        ) in &mut ships
+        {
             if !projectile.faction.hostile_to(*faction) {
                 continue;
             }
             let ship_pos = ship_tf.translation.truncate();
             if circles_overlap(proj_pos, projectile.radius, ship_pos, collider.radius) {
-                apply_hull_damage(
+                let arc = shield_arc(ship_heading.0, ship_pos, proj_pos);
+                let report = apply_hull_damage(
                     &mut hull,
+                    shield.map(Mut::into_inner),
+                    arc,
                     projectile.damage,
                     brace.is_some_and(|b| b.active),
                     invulnerable,
@@ -452,6 +492,11 @@ pub fn collision_system(
                     ship: ship_entity,
                     faction: *faction,
                     damage: projectile.damage,
+                    // The ball's own heading — the truest impact direction there
+                    // is, and it makes a raking shot spray differently from a
+                    // square one.
+                    direction: proj_vel.0.normalize_or_zero(),
+                    report,
                 });
                 commands.entity(proj_entity).despawn();
                 break; // one ball, one hit
@@ -465,14 +510,16 @@ pub fn collision_system(
 pub fn destruction_system(
     mut commands: Commands,
     mut destroyed: MessageWriter<ShipDestroyed>,
-    ships: Query<(Entity, &Transform, &Faction, &Hull)>,
+    ships: Query<(Entity, &Transform, &Faction, &Hull, &Heading, &Velocity)>,
 ) {
-    for (entity, transform, faction, hull) in &ships {
+    for (entity, transform, faction, hull, heading, velocity) in &ships {
         if hull.current <= 0.0 {
             destroyed.write(ShipDestroyed {
                 position: transform.translation.truncate(),
                 ship: entity,
                 faction: *faction,
+                heading: heading.0,
+                velocity: velocity.0,
             });
             commands.entity(entity).despawn();
         }
@@ -737,6 +784,10 @@ mod tests {
         let ship = world
             .spawn((
                 Transform::default(),
+                // Bow along +X. Damage resolution needs the heading to work out
+                // which shield arc a blow landed on; this hull carries no
+                // shields, so it is only the arc bookkeeping that uses it.
+                Heading(0.0),
                 Collider { radius: 10.0 },
                 Faction::Houses,
                 Hull::new(100.0),
@@ -744,6 +795,10 @@ mod tests {
             .id();
         world.spawn((
             Transform::default(),
+            // Travelling along +X: every real shot has a velocity (the volley
+            // gives it one), and the hit carries its heading so the client can
+            // spray sparks back the way it came.
+            Velocity(Vec2::new(300.0, 0.0)),
             Projectile {
                 damage: 17.0,
                 faction: Faction::Corsairs,
@@ -766,6 +821,11 @@ mod tests {
             (hit.damage - 17.0).abs() < 1e-4,
             "the hit should carry the shot's damage, was {}",
             hit.damage
+        );
+        assert!(
+            (hit.direction - Vec2::X).length() < 1e-4,
+            "the hit should carry the shot's heading as a unit vector, was {}",
+            hit.direction
         );
     }
 }

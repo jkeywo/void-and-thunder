@@ -14,11 +14,12 @@ use std::f32::consts::TAU;
 
 use crate::combat::Broadside;
 use crate::components::{
-    AiController, Brace, ClassId, Collider, EmpDefense, Faction, FireOrders, Heading, Helm, Hull,
-    PilotIntent, Protagonist, Ship, ShipStats, SpeedScale, Velocity,
+    AiController, AngularVelocity, Brace, ClassId, Collider, EmpDefense, Faction, FireOrders,
+    Heading, Helm, Hull, PilotIntent, Protagonist, Ship, ShipStats, SpeedScale, Velocity,
 };
 use crate::drive::{BoostDrive, MicrowarpDrive};
 use crate::emp::EmpWeapon;
+use crate::shield::Shield;
 use crate::torpedo::{TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
 use crate::world::SystemBounds;
 
@@ -32,6 +33,10 @@ pub struct ShipLoadout {
     pub torpedoes: TorpedoBay,
     pub boost: BoostDrive,
     pub microwarp: MicrowarpDrive,
+    /// Fore/aft shields. Defaults to a `max` of zero — no shields fitted — so a
+    /// class opts in with one authored number and every existing hull is
+    /// unchanged.
+    pub shield: Shield,
 }
 
 impl ShipLoadout {
@@ -45,6 +50,14 @@ impl ShipLoadout {
             microwarp: MicrowarpDrive {
                 cooldown: 20.0,
                 ..MicrowarpDrive::default()
+            },
+            // Fore and aft banks of 45 against a 100-point hull: a
+            // well-presented side roughly doubles your effective health, a badly
+            // presented one gives you nothing. Enemies fit none (see `enemy`),
+            // which is a per-class decision rather than a rule.
+            shield: Shield {
+                max: 45.0,
+                ..Shield::default()
             },
             ..Self::default()
         }
@@ -83,13 +96,21 @@ pub fn ship_bundle(
         Ship,
         faction,
         stats,
-        Heading(heading),
-        Velocity::default(),
+        // Motion state, nested to stay inside Bevy's 15-element tuple limit.
+        (
+            Heading(heading),
+            Velocity::default(),
+            AngularVelocity::default(),
+        ),
         Helm::default(),
         FireOrders::default(),
         PilotIntent::default(),
         Brace::default(),
         Hull::new(hull_max),
+        // `charged` is what turns the authored *fit* into live state: the file
+        // says how big the banks are, and a ship always enters the field with
+        // them full.
+        loadout.shield.charged(),
         Collider::default(),
         EmpDefense::default(),
         SpeedScale::default(),
@@ -166,10 +187,14 @@ impl Default for DirectorSettings {
             hull_per_wave: 25.0,
             // A House patrol: heavier and slower than the player's sloop.
             stats: ShipStats {
-                thrust: 660.0,
+                thrust: 98.0,
                 turn_rate: 0.35,
                 max_speed: 100.0,
-                ..ShipStats::default()
+                forward_drag: 0.95,
+                lateral_drag: 5.0,
+                turn_rate_slow: 1.35,
+                turn_rate_fast: 0.5,
+                turn_accel: 3.2,
             },
             loadout: ShipLoadout::enemy(),
             class: ClassId(0),

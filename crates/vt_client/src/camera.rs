@@ -16,23 +16,14 @@ use crate::Player;
 #[derive(Component)]
 pub struct MainCamera;
 
-// Where the camera sits and how quickly it gets there is authored in
-// `FeelTuning::camera` (see `data/feel.rs`), so the whole rig can be reshaped
-// with the game running. The two values below stay compiled in: they are
+// Where the camera sits, how quickly it gets there, and how it shakes is all
+// authored in `FeelTuning::camera` (see `data/feel.rs`), so the whole rig can be
+// reshaped with the game running. The one value below stays compiled in: it is
 // structural rather than tuning.
 
 /// How far the gamepad free-look yaw may swing from dead-astern (radians) — a
 /// full half-turn, so the view can be swung all the way to the ship's front.
 const LOOK_YAW_LIMIT: f32 = PI;
-
-/// Seconds of no look input before a *pad* recentres the camera.
-///
-/// A stick springs back to centre on its own, so "no look input" from a pad
-/// means the player has physically let go and wants the view back behind the
-/// ship; waiting the full delay for that just leaves them flying sideways. A
-/// mouse holds wherever it was left, so its offset is deliberate and keeps the
-/// long `recenter_delay`.
-const RECENTER_DELAY_PAD: f32 = 0.1;
 
 /// Persistent free-look offset for gamepad camera control. The right stick nudges
 /// these like a mouse (rate, not absolute); the camera yaw sits at
@@ -82,6 +73,16 @@ pub struct CameraRig {
     /// Attract-screen orbit angle, advanced only while on the start screen.
     menu_orbit: f32,
     seed: u32,
+    /// Shake noise, sampled at a fixed rate and interpolated between samples.
+    ///
+    /// Drawing a fresh random offset every frame is white noise: it looks like
+    /// static, and worse, it changes character with framerate — the same trauma
+    /// reads as a different shake at 60 and 144 Hz. Holding a target and easing
+    /// toward it gives a shake with a *frequency*, which is what makes it read
+    /// as an impact travelling through the hull.
+    shake_from: Vec3,
+    shake_to: Vec3,
+    shake_phase: f32,
 }
 
 impl Default for CameraRig {
@@ -99,6 +100,9 @@ impl Default for CameraRig {
             fov: default_cam.base_fov,
             menu_orbit: 0.0,
             seed: 0,
+            shake_from: Vec3::ZERO,
+            shake_to: Vec3::ZERO,
+            shake_phase: 0.0,
         }
     }
 }
@@ -109,10 +113,11 @@ impl CameraRig {
     }
 
     /// Shove the eye `amount` world units along `dir` — the direction the blow
-    /// was travelling. Kicks accumulate, so a volley of hits piles up.
-    pub fn add_kick(&mut self, dir: Vec2, amount: f32) {
+    /// was travelling. Kicks accumulate, so a volley of hits piles up, but never
+    /// past `max`: without the cap a torpedo salvo throws the eye off the map.
+    pub fn add_kick(&mut self, dir: Vec2, amount: f32, max: f32) {
         self.kick += dir.normalize_or_zero().extend(0.0) * amount;
-        self.kick = self.kick.clamp_length_max(60.0);
+        self.kick = self.kick.clamp_length_max(max);
     }
 
     /// Where the camera is currently looking, in world space. Effects use this
@@ -124,6 +129,24 @@ impl CameraRig {
     /// Next pseudo-random float in `-1.0..1.0`.
     fn noise(&mut self) -> f32 {
         lcg_next(&mut self.seed) * 2.0 - 1.0
+    }
+
+    /// Advance the shake noise by `dt` and return the current offset, in the
+    /// range `-1..1` per axis. Samples a new target every `1/freq` seconds and
+    /// eases toward it with a smoothstep, so the motion has a defined frequency
+    /// instead of being framerate-dependent hash.
+    fn shake_offset(&mut self, dt: f32, freq: f32) -> Vec3 {
+        self.shake_phase += dt * freq.max(0.001);
+        while self.shake_phase >= 1.0 {
+            self.shake_phase -= 1.0;
+            self.shake_from = self.shake_to;
+            // Z is halved: throwing the eye up and down as hard as sideways
+            // reads as the camera bouncing rather than the ship being hit.
+            self.shake_to = Vec3::new(self.noise(), self.noise(), self.noise() * 0.5);
+        }
+        let t = self.shake_phase;
+        let smooth = t * t * (3.0 - 2.0 * t);
+        self.shake_from.lerp(self.shake_to, smooth)
     }
 }
 
@@ -183,8 +206,14 @@ pub fn camera_orbit(
     }
     if use_pad {
         if let Some(pad) = gamepads.iter().next() {
-            let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
-            let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
+            let sx = deadzone(
+                pad.get(GamepadAxis::RightStickX).unwrap_or(0.0),
+                &feel.controls,
+            );
+            let sy = deadzone(
+                pad.get(GamepadAxis::RightStickY).unwrap_or(0.0),
+                &feel.controls,
+            );
             look_active = sx != 0.0 || sy != 0.0;
         }
     }
@@ -237,8 +266,14 @@ pub fn camera_orbit(
             // Gamepad free-look: integrate the right stick into a persistent
             // offset (rate, like a mouse), then sit the view at heading + offset.
             if let Some(pad) = gamepads.iter().next() {
-                let sx = deadzone(pad.get(GamepadAxis::RightStickX).unwrap_or(0.0));
-                let sy = deadzone(pad.get(GamepadAxis::RightStickY).unwrap_or(0.0));
+                let sx = deadzone(
+                    pad.get(GamepadAxis::RightStickX).unwrap_or(0.0),
+                    &feel.controls,
+                );
+                let sy = deadzone(
+                    pad.get(GamepadAxis::RightStickY).unwrap_or(0.0),
+                    &feel.controls,
+                );
                 freelook.yaw_offset = (freelook.yaw_offset - sx * cam.look_yaw_rate * dt)
                     .clamp(-LOOK_YAW_LIMIT, LOOK_YAW_LIMIT);
                 freelook.pitch = (freelook.pitch - sy * cam.look_pitch_rate * dt)
@@ -262,7 +297,7 @@ pub fn camera_orbit(
             freelook.idle += dt;
         }
         let recenter_delay = if use_pad {
-            RECENTER_DELAY_PAD
+            cam.recenter_delay_pad
         } else {
             cam.recenter_delay
         };
@@ -285,14 +320,14 @@ pub fn camera_orbit(
     let dk = 1.0 - (-cam.dist_lerp * dt).exp();
     rig.dist += (target_dist - rig.dist) * dk;
     // Ease the focus toward the ship (or the warp point) tightly.
-    let fk = 1.0 - (-10.0 * dt).exp();
+    let fk = 1.0 - (-cam.focus_lerp * dt).exp();
     let focus_step = (desired_focus - rig.target) * fk;
     rig.target += focus_step;
 
     // Decay trauma; shake amount is trauma squared for a punchy falloff.
-    rig.trauma = (rig.trauma - dt * 1.4).clamp(0.0, 1.0);
+    rig.trauma = (rig.trauma - dt * cam.trauma_decay).clamp(0.0, 1.0);
     let amount = rig.trauma * rig.trauma;
-    let shake = Vec3::new(rig.noise(), rig.noise(), rig.noise() * 0.5) * 26.0 * amount;
+    let shake = rig.shake_offset(dt, cam.shake_freq) * cam.shake_magnitude * amount;
     // Impact kick: a directional shove that springs back, on top of the noise.
     rig.kick *= (-cam.kick_decay * dt).exp();
     let kick = rig.kick;

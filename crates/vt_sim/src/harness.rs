@@ -12,11 +12,13 @@ use bevy_time::Time;
 use std::time::Duration;
 
 use crate::ai::{ai_abilities_system, ai_system};
+use crate::collide::ram_system;
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
 use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plunder};
+use crate::shield::{shield_refit_system, shield_regen_system};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
 use crate::torpedo::{
@@ -67,9 +69,12 @@ impl Harness {
                     torpedo_reload_system,
                     microwarp_system,
                     speed_scale_system,
+                    shield_refit_system,
+                    shield_regen_system,
                 )
                     .chain(),
                 movement_system,
+                ram_system,
                 bounds_system,
                 (
                     weapons_system,
@@ -127,9 +132,10 @@ fn drain_emp(mut m: ResMut<Messages<EmpImpact>>) {
 mod tests {
     use super::*;
     use crate::components::{
-        AiController, Anchored, EmpDefense, Faction, Helm, Hull, Invulnerable, Protagonist,
-        ShipStats,
+        AiController, Anchored, Collider, EmpDefense, Faction, Helm, Hull, Invulnerable,
+        Protagonist, ShipStats, Velocity,
     };
+    use crate::shield::Shield;
     use crate::spawn::{ship_bundle, ShipLoadout};
     use bevy_math::Vec2;
     use bevy_transform::components::Transform;
@@ -225,6 +231,207 @@ mod tests {
             None => true,
         };
         assert!(emped, "the AI pilot should EMP a targetable ship");
+    }
+
+    /// Hulls are solid. Two ships driven into the same spot must end up apart,
+    /// not overlapping — the "ships pass through each other" era is over.
+    #[test]
+    fn hulls_do_not_pass_through_each_other() {
+        let mut h = Harness::new();
+        // Start them well inside one another to prove the separation runs at all.
+        let a = spawn_drifting(&mut h, Faction::Corsairs, Vec2::ZERO, Vec2::new(120.0, 0.0));
+        let b = spawn_drifting(
+            &mut h,
+            Faction::Houses,
+            Vec2::new(20.0, 0.0),
+            Vec2::new(-120.0, 0.0),
+        );
+
+        h.run(64, 1.0 / 64.0); // 1 s
+
+        let gap = position(&h, a).distance(position(&h, b));
+        let reach = Collider::default().radius * 2.0;
+        assert!(
+            gap >= reach * 0.9,
+            "the hulls should have pushed apart to ~{reach}, gap was {gap}"
+        );
+    }
+
+    /// A ram is a weapon. Driving two hulls together hard costs both of them
+    /// hull, and it does so through the ordinary damage path.
+    #[test]
+    fn a_hard_ram_damages_both_ships() {
+        let mut h = Harness::new();
+        let a = spawn_drifting(
+            &mut h,
+            Faction::Corsairs,
+            Vec2::new(-40.0, 0.0),
+            Vec2::new(150.0, 0.0),
+        );
+        let b = spawn_drifting(
+            &mut h,
+            Faction::Houses,
+            Vec2::new(40.0, 0.0),
+            Vec2::new(-150.0, 0.0),
+        );
+
+        h.run(64, 1.0 / 64.0);
+
+        for (entity, who) in [(a, "the rammer"), (b, "the rammed")] {
+            let hull = h.world.get::<Hull>(entity).expect("still afloat");
+            assert!(
+                hull.current < hull.max,
+                "{who} should have taken ram damage, hull was {}",
+                hull.current
+            );
+        }
+    }
+
+    /// Drifting into someone is not an attack. A slow contact separates the pair
+    /// without costing either of them a point of hull, so a scrum of ships
+    /// jostling for position does not grind itself down.
+    #[test]
+    fn a_slow_bump_costs_no_hull() {
+        let mut h = Harness::new();
+        let a = spawn_drifting(
+            &mut h,
+            Faction::Corsairs,
+            Vec2::new(-30.0, 0.0),
+            Vec2::new(8.0, 0.0),
+        );
+        let b = spawn_drifting(
+            &mut h,
+            Faction::Houses,
+            Vec2::new(30.0, 0.0),
+            Vec2::new(-8.0, 0.0),
+        );
+
+        h.run(256, 1.0 / 64.0); // 4 s — plenty of time to drift together
+
+        for entity in [a, b] {
+            let hull = h.world.get::<Hull>(entity).expect("still afloat");
+            assert_eq!(hull.current, hull.max, "a nudge must be free");
+        }
+    }
+
+    /// An anchored ship is scenery: it absorbs the shove rather than being moved
+    /// by it, so a test-range target stays exactly where it was placed even when
+    /// something drives into it.
+    #[test]
+    fn an_anchored_ship_is_not_shoved() {
+        let mut h = Harness::new();
+        spawn_drifting(
+            &mut h,
+            Faction::Corsairs,
+            Vec2::new(-40.0, 0.0),
+            Vec2::new(150.0, 0.0),
+        );
+        let post = h
+            .world
+            .spawn((
+                ship_bundle(
+                    Faction::Houses,
+                    ShipStats::default(),
+                    100.0,
+                    Vec2::ZERO,
+                    0.0,
+                    ShipLoadout::default(),
+                ),
+                Anchored,
+            ))
+            .id();
+
+        h.run(64, 1.0 / 64.0);
+
+        assert_eq!(
+            position(&h, post),
+            Vec2::ZERO,
+            "an anchored hull must hold its mark"
+        );
+    }
+
+    /// Shields stand between a blow and the hull, and only on the side that took
+    /// it. Driven through the full schedule so the whole chain — contact, arc
+    /// selection, absorption — is exercised the way the game runs it.
+    #[test]
+    fn a_shielded_hull_is_spared_on_the_side_that_holds() {
+        let mut h = Harness::new();
+        let shielded = ShipLoadout {
+            shield: Shield {
+                max: 500.0, // far more than the ram can spend, so nothing leaks
+                ..Default::default()
+            },
+            ..ShipLoadout::default()
+        };
+        // Bow-on into an anchored post: the blow lands forward.
+        let rammer = h
+            .world
+            .spawn(ship_bundle(
+                Faction::Corsairs,
+                ShipStats::default(),
+                100.0,
+                Vec2::new(-40.0, 0.0),
+                0.0,
+                shielded,
+            ))
+            .id();
+        h.world.get_mut::<Velocity>(rammer).unwrap().0 = Vec2::new(150.0, 0.0);
+        h.world.spawn((
+            ship_bundle(
+                Faction::Houses,
+                ShipStats::default(),
+                100.0,
+                Vec2::ZERO,
+                0.0,
+                ShipLoadout::default(),
+            ),
+            Anchored,
+        ));
+
+        h.run(64, 1.0 / 64.0);
+
+        let hull = h.world.get::<Hull>(rammer).expect("still afloat");
+        assert_eq!(
+            hull.current, hull.max,
+            "the fore shield should have taken the whole blow"
+        );
+        let shield = h.world.get::<Shield>(rammer).expect("still fitted");
+        assert!(
+            shield.fore.charge < shield.max,
+            "and paid for it: fore was {} of {}",
+            shield.fore.charge,
+            shield.max
+        );
+        assert_eq!(
+            shield.aft.charge, shield.max,
+            "while the stern bank is untouched"
+        );
+    }
+
+    /// A ship with no controller, given an initial velocity — the plain physics
+    /// body these contact tests need.
+    fn spawn_drifting(h: &mut Harness, faction: Faction, pos: Vec2, vel: Vec2) -> Entity {
+        let entity = h
+            .world
+            .spawn(ship_bundle(
+                faction,
+                ShipStats::default(),
+                100.0,
+                pos,
+                0.0,
+                ShipLoadout::default(),
+            ))
+            .id();
+        h.world.get_mut::<Velocity>(entity).expect("has velocity").0 = vel;
+        entity
+    }
+
+    fn position(h: &Harness, entity: Entity) -> Vec2 {
+        h.world
+            .get::<Transform>(entity)
+            .expect("still spawned")
+            .translation
+            .truncate()
     }
 
     /// The test range's whole premise: something you can shoot at indefinitely

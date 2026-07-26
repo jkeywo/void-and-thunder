@@ -17,10 +17,19 @@
                 // The player's ship. Slow and stately, but handy: it is meant to
                 // be fought by out-turning the other ship, not out-running it.
                 stats: (
-                    thrust: 840.0,
+                    thrust: 115.0,
                     turn_rate: 0.6875,
                     max_speed: 127.5,
-                    linear_drag: 6.0,
+                    // Thrust is sized to just hold max_speed against forward drag
+                    // (eq = 115 / 0.9 = 128). Lateral drag is 5x higher, so the
+                    // hull leans through a turn instead of skidding.
+                    forward_drag: 0.9,
+                    lateral_drag: 4.5,
+                    // Nearly 3x handier at a standstill than at full sail: spill
+                    // your way, pivot, then make sail again.
+                    turn_rate_slow: 1.55,
+                    turn_rate_fast: 0.55,
+                    turn_accel: 4.0,
                 ),
                 hull: 100.0,
                 collider: (radius: 26.0),
@@ -41,6 +50,13 @@
                     boost: (),
                     // 20s: warping is an escape, not a manoeuvre.
                     microwarp: (cooldown: 20.0),
+                    // Fore and aft banks of 45 against a 100-point hull, so a
+                    // well-presented side roughly doubles your effective health
+                    // and a badly-presented one gives you nothing. The 2.5s
+                    // suppression is what stops it being a flat damage
+                    // reduction: under sustained fire the struck bank stays at
+                    // zero, so the answer is always to turn.
+                    shield: (max: 45.0, regen_per_sec: 7.0, regen_delay: 2.5),
                 ),
                 ai: (),
             ),
@@ -51,10 +67,16 @@
                 // The wave enemy. Heavier and slower than the sloop, and it
                 // telegraphs a 0.5s charge so its shot is dodgeable.
                 stats: (
-                    thrust: 660.0,
+                    thrust: 98.0,
                     turn_rate: 0.35,
                     max_speed: 100.0,
-                    linear_drag: 6.0,
+                    // Heavier than the sloop: grips harder, swings onto a new
+                    // heading more slowly, and gains less from spilling way.
+                    forward_drag: 0.95,
+                    lateral_drag: 5.0,
+                    turn_rate_slow: 1.35,
+                    turn_rate_fast: 0.5,
+                    turn_accel: 3.2,
                 ),
                 hull: 100.0,
                 collider: (radius: 26.0),

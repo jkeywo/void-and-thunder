@@ -68,6 +68,25 @@ pub struct ImpactFeel {
     pub debris_speed_min: f32,
     pub debris_speed_max: f32,
     pub debris_life: f32,
+    /// Sparks thrown back along a blow's travel when a hull is struck. Short and
+    /// fast: this is the cue for *where the shot came from*, so it wants to be
+    /// gone before the eye starts reading it as an explosion.
+    pub spark_count: u32,
+    /// Width of the spatter cone, in radians.
+    pub spark_cone: f32,
+    pub spark_speed_min: f32,
+    pub spark_speed_max: f32,
+    pub spark_life: f32,
+    /// The wreck left where a ship died: how long it burns out over, how fast it
+    /// tumbles (rad/s, each axis), and what fraction of the ship's way it keeps.
+    pub wreck_life: f32,
+    pub wreck_spin: f32,
+    pub wreck_drift: f32,
+    /// Gamepad rumble. `rumble_scale` turns the shake trauma of an event into a
+    /// motor strength, so the pad and the camera stay in step by construction.
+    pub rumble_scale: f32,
+    pub rumble_hit_secs: f32,
+    pub rumble_death_secs: f32,
     /// How long a muzzle flash lingers.
     pub flash_time: f32,
 }
@@ -88,6 +107,17 @@ impl Default for ImpactFeel {
             debris_speed_min: 90.0,
             debris_speed_max: 220.0,
             debris_life: 0.35,
+            spark_count: 5,
+            spark_cone: 1.2,
+            spark_speed_min: 70.0,
+            spark_speed_max: 180.0,
+            spark_life: 0.18,
+            wreck_life: 1.1,
+            wreck_spin: 3.0,
+            wreck_drift: 0.55,
+            rumble_scale: 1.6,
+            rumble_hit_secs: 0.16,
+            rumble_death_secs: 0.55,
             flash_time: 0.08,
         }
     }
@@ -131,8 +161,23 @@ pub struct CameraFeel {
     pub fov_lerp: f32,
     /// How fast the menu camera orbits the parked ship.
     pub menu_orbit_rate: f32,
-    /// How quickly an impact kick decays.
+    /// How quickly an impact kick decays, and how far one may ever shove the eye.
     pub kick_decay: f32,
+    pub kick_max: f32,
+    /// Screen shake. `trauma_decay` is how fast a shock bleeds off (per second),
+    /// `shake_magnitude` how far the eye is thrown at full trauma, and
+    /// `shake_freq` how many times a second the noise picks a new target — the
+    /// rig interpolates between them, so this is the difference between a shake
+    /// that reads as an impact and one that reads as television static.
+    pub trauma_decay: f32,
+    pub shake_magnitude: f32,
+    pub shake_freq: f32,
+    /// How tightly the camera's focus point chases the ship.
+    pub focus_lerp: f32,
+    /// Seconds of no look input before a *pad* recentres. Much shorter than
+    /// `recenter_delay`: a stick springs back on its own, so letting go is a
+    /// deliberate "put the view back", where a mouse holds where it was left.
+    pub recenter_delay_pad: f32,
 }
 
 impl Default for CameraFeel {
@@ -161,6 +206,45 @@ impl Default for CameraFeel {
             fov_lerp: 5.0,
             menu_orbit_rate: 0.15,
             kick_decay: 9.0,
+            kick_max: 60.0,
+            trauma_decay: 1.4,
+            shake_magnitude: 26.0,
+            shake_freq: 34.0,
+            focus_lerp: 10.0,
+            recenter_delay_pad: 0.1,
+        }
+    }
+}
+
+/// How the controls read: pointer sensitivity and stick shaping.
+///
+/// These were compiled in, which meant the two numbers a player is most likely
+/// to want changed — mouse sensitivity and stick deadzone — were the only ones
+/// in the game that needed a rebuild, while trail colours were hot-reloadable.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
+#[serde(default)]
+pub struct ControlFeel {
+    /// How much of the broadside arc a pixel of mouse motion sweeps.
+    pub mouse_aim_sens: f32,
+    /// How fast the pad drives the aim cursor, and how far from the ship it may
+    /// be pushed.
+    pub aim_cursor_rate: f32,
+    pub aim_cursor_max: f32,
+    /// Stick shaping: everything under `deadzone` reads as centred, everything
+    /// over `saturation` reads as fully deflected, and the span between is
+    /// rescaled across the whole range.
+    pub deadzone: f32,
+    pub saturation: f32,
+}
+
+impl Default for ControlFeel {
+    fn default() -> Self {
+        Self {
+            mouse_aim_sens: 0.0032,
+            aim_cursor_rate: 780.0,
+            aim_cursor_max: 1300.0,
+            deadzone: 0.05,
+            saturation: 0.90,
         }
     }
 }
@@ -245,6 +329,7 @@ pub struct FeelTuning {
     pub time: TimeFeel,
     pub impact: ImpactFeel,
     pub camera: CameraFeel,
+    pub controls: ControlFeel,
     pub trails: TrailFeel,
 }
 

@@ -37,6 +37,11 @@ use crate::util::wrap_angle as wrap;
 pub const TURN_GAIN: f32 = 2.5;
 /// Throttle while jockeying for a broadside — mostly turning, holding station.
 pub const STATION_THROTTLE: f32 = 0.3;
+/// Fraction of throttle spilled at a full 180° of heading error, to buy turn
+/// rate. Without this an AI at full sail can only manage a turn radius wider
+/// than its own engagement range, so it orbits its target forever and never
+/// closes — the same trap a player falls into before learning to drop sail.
+pub const TURN_EASE: f32 = 0.75;
 
 /// Decide the [`Helm`] and [`FireOrders`] for one AI ship against one target.
 ///
@@ -62,8 +67,8 @@ pub fn desired_helm(
     let fleeing = hull_frac < ai.flee_hull_frac;
     let in_range = dist <= ai.engage_range;
 
-    // Pick a heading to steer toward, and a throttle.
-    let (desired_heading, throttle) = if fleeing {
+    // Pick a heading to steer toward, and the throttle we would like to hold.
+    let (desired_heading, cruise) = if fleeing {
         // Bow away from the threat, run.
         (wrap(bearing + PI), 1.0)
     } else if in_range {
@@ -81,6 +86,16 @@ pub fn desired_helm(
 
     let heading_err = wrap(desired_heading - heading);
     let turn = (heading_err * tuning.turn_gain).clamp(-1.0, 1.0);
+
+    // Spill way to turn. A hull answers the helm far better slowly than at full
+    // sail, so the sharper the turn wanted, the more throttle we give up to get
+    // it. Fleeing is exempt: running away is worth a wide turn.
+    let throttle = if fleeing {
+        cruise
+    } else {
+        let sharpness = (heading_err.abs() / PI).clamp(0.0, 1.0);
+        cruise * (1.0 - tuning.turn_ease * sharpness)
+    };
 
     // Fire a beam when the target is within its firing arc — never while fleeing.
     let mut orders = FireOrders::default();
@@ -390,6 +405,48 @@ mod tests {
         assert_eq!(helm.throttle, 1.0);
         assert!(helm.turn.abs() < 1e-3, "turn was {}", helm.turn);
         assert!(!orders.port && !orders.starboard);
+    }
+
+    /// The AI has to make the same speed-versus-agility bargain the player does.
+    /// At full sail a hull's turn radius is wider than its own engagement range,
+    /// so an AI that never slows just orbits its target forever without closing.
+    #[test]
+    fn spills_way_to_make_a_hard_turn() {
+        let tuning = AiTuning::default();
+        // Target dead astern: the sharpest turn there is.
+        let (astern, _) = desired_helm(
+            Vec2::ZERO,
+            0.0,
+            1.0,
+            Vec2::new(-1000.0, 0.0),
+            &ai(),
+            &tuning,
+        );
+        // Same distance, but already lined up.
+        let (ahead, _) = desired_helm(Vec2::ZERO, 0.0, 1.0, Vec2::new(1000.0, 0.0), &ai(), &tuning);
+        assert!(
+            astern.throttle < ahead.throttle * 0.5,
+            "a 180 turn should cost most of the throttle: {} vs {}",
+            astern.throttle,
+            ahead.throttle
+        );
+        assert!(astern.throttle > 0.0, "it should still be making way");
+    }
+
+    /// Running away is worth a wide turn — a fleeing ship wants distance, not
+    /// a tight one, so it must not throttle down to come about.
+    #[test]
+    fn a_fleeing_ship_keeps_full_throttle_through_the_turn() {
+        let (helm, orders) = desired_helm(
+            Vec2::ZERO,
+            0.0,
+            0.1, // below flee_hull_frac
+            Vec2::new(50.0, 0.0),
+            &ai(),
+            &AiTuning::default(),
+        );
+        assert_eq!(helm.throttle, 1.0, "a fleeing ship runs flat out");
+        assert!(!orders.port && !orders.starboard, "and holds its fire");
     }
 
     #[test]

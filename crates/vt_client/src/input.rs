@@ -10,6 +10,8 @@ use std::f32::consts::FRAC_PI_2;
 use vt_sim::prelude::*;
 
 use crate::camera::MainCamera;
+use crate::data::feel::ControlFeel;
+use crate::data::FeelTuning;
 use crate::Player;
 
 /// Which broadsides the player is currently *holding* (aiming). Purely
@@ -47,6 +49,66 @@ pub struct ControlsPanel {
     pub open: bool,
 }
 
+/// The keyboard's sail setting: a Black-Flag ladder of discrete notches rather
+/// than a held axis.
+///
+/// A key is not an analog stick, and pretending otherwise is what made the
+/// keyboard ship feel like a cursor — `W` was a step function straight into the
+/// helm. Notching it means the keyboard player *chooses* a speed and lives with
+/// its turn rate, which is the same decision the stick offers by degree. Both
+/// paths still write a plain `-1..=1` [`Helm::throttle`], so the sim, the AI and
+/// the dev panel neither know nor care which one is driving.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SailState {
+    /// Backing sails — the weak reverse.
+    Backing,
+    AllStop,
+    /// The default: handy, and where most of a fight is fought.
+    #[default]
+    HalfSail,
+    FullSail,
+}
+
+impl SailState {
+    /// The ladder, slowest first. Indexing this is what makes stepping trivial.
+    const LADDER: [SailState; 4] = [
+        SailState::Backing,
+        SailState::AllStop,
+        SailState::HalfSail,
+        SailState::FullSail,
+    ];
+
+    /// The `Helm::throttle` this notch commands.
+    pub fn throttle(self) -> f32 {
+        match self {
+            SailState::Backing => -1.0,
+            SailState::AllStop => 0.0,
+            SailState::HalfSail => 0.5,
+            SailState::FullSail => 1.0,
+        }
+    }
+
+    /// String-table id for this notch's HUD label. A key rather than the English
+    /// text: every player-facing line lives in `assets/strings/*.csv`, and the
+    /// HUD resolves it through its own `t()`.
+    pub fn string_key(self) -> &'static str {
+        match self {
+            SailState::Backing => "hud.sail.backing",
+            SailState::AllStop => "hud.sail.all_stop",
+            SailState::HalfSail => "hud.sail.half",
+            SailState::FullSail => "hud.sail.full",
+        }
+    }
+
+    /// Step one notch up (`+1`) or down (`-1`) the ladder, saturating at the ends
+    /// so holding a key never wraps from full sail round to backing sails.
+    pub fn stepped(self, delta: i32) -> Self {
+        let at = Self::LADDER.iter().position(|&s| s == self).unwrap_or(2) as i32;
+        let next = (at + delta).clamp(0, Self::LADDER.len() as i32 - 1);
+        Self::LADDER[next as usize]
+    }
+}
+
 /// The broadside arc offset (-1..1 across the bank's arc) while a broadside is
 /// held, driven by yaw *input*: the gamepad stick sets it absolutely
 /// (spring-centred); the mouse accumulates motion into it so you steer with
@@ -66,15 +128,10 @@ pub struct AimCursor {
     pub world: Vec2,
 }
 
-/// How much a pixel of mouse motion sweeps the broadside arc offset (-1..1). At
-/// ~0.0032 a rightward drag of ~310px covers the full half-arc. Motion-driven,
-/// not cursor-position-driven, so the aim never sticks where the cursor sat.
-const MOUSE_AIM_SENS: f32 = 0.0032;
-/// Gamepad aim-pointer speed (world units/sec at full stick) for the top-down
-/// torpedo / microwarp pointer and the EMP aim — rate-based, like a mouse.
-const AIM_CURSOR_RATE: f32 = 780.0;
-/// How far from the ship the gamepad aim pointer may stray.
-const AIM_CURSOR_MAX: f32 = 1300.0;
+// Pointer sensitivity and stick shaping are authored in `FeelTuning::controls`
+// (see `data/feel.rs`). They used to be the consts below, which made mouse
+// sensitivity and stick deadzone — the two numbers a player is most likely to
+// want changed — the only ones in the game that needed a recompile.
 
 /// Radial deadzone below which the stick reads zero, above which it is rescaled
 /// so motion starts smoothly just past the edge (5% → ~0) and *saturates* before
@@ -84,15 +141,31 @@ const AIM_CURSOR_MAX: f32 = 1300.0;
 /// the gate is round and the springs wear — so without it a pad could never
 /// reach the full turn rate a keyboard gets for free, and steering felt sluggish
 /// by comparison.
-pub fn deadzone(v: f32) -> f32 {
-    const DZ: f32 = 0.05;
-    const SATURATION: f32 = 0.90;
+pub fn deadzone(v: f32, controls: &ControlFeel) -> f32 {
+    let dz = controls.deadzone;
+    // Guard the divide: a file that sets saturation at or below the deadzone
+    // would otherwise make every stick axis NaN, which is a very confusing way
+    // to discover a typo.
+    let span = (controls.saturation - dz).max(1e-3);
     let a = v.abs();
-    if a < DZ {
+    if a < dz {
         0.0
     } else {
-        v.signum() * ((a - DZ) / (SATURATION - DZ)).min(1.0)
+        v.signum() * ((a - dz) / span).min(1.0)
     }
+}
+
+/// The three resources that together hold "what the player is aiming at".
+///
+/// Grouped into one [`SystemParam`] rather than taken separately because
+/// `player_input` is at Bevy's sixteen-parameter ceiling — and because they are
+/// genuinely one thing: every write to any of them happens in the same place,
+/// off the same [`AimDecision`].
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct AimState<'w> {
+    pub aiming: ResMut<'w, Aiming>,
+    pub cursor: ResMut<'w, AimCursor>,
+    pub broadside: ResMut<'w, BroadsideAim>,
 }
 
 /// One frame's aim decision: where the reticle sits, and the broadside arc
@@ -202,10 +275,10 @@ pub fn player_input(
     paused: Res<Paused>,
     player_ai: Res<PlayerAi>,
     mouse_motion: Res<AccumulatedMouseMotion>,
+    feel: Res<FeelTuning>,
     mut board: ResMut<BoardIntent>,
-    mut aiming: ResMut<Aiming>,
-    mut aim_cursor: ResMut<AimCursor>,
-    mut broadside_aim: ResMut<BroadsideAim>,
+    mut sail: ResMut<SailState>,
+    mut aim: AimState,
     mut player: Query<
         (
             &mut Helm,
@@ -232,14 +305,19 @@ pub fn player_input(
         return;
     };
 
+    let controls = feel.controls;
+
     // --- Keyboard ---
-    let mut throttle = 0.0;
-    if keys.pressed(KeyCode::KeyW) {
-        throttle += 1.0;
+    // W/S step the sail ladder on the key *edge*; the notch then holds until it
+    // is changed again, so the keyboard commands a speed rather than pinning the
+    // throttle open for as long as a finger is down.
+    if keys.just_pressed(KeyCode::KeyW) {
+        *sail = sail.stepped(1);
     }
-    if keys.pressed(KeyCode::KeyS) {
-        throttle -= 1.0;
+    if keys.just_pressed(KeyCode::KeyS) {
+        *sail = sail.stepped(-1);
     }
+    let mut throttle = sail.throttle();
 
     let mut turn = 0.0;
     if keys.pressed(KeyCode::KeyA) {
@@ -264,9 +342,17 @@ pub fn player_input(
     // --- Gamepad (first connected pad): the final scheme ---
     let pad = gamepads.iter().next();
     if let Some(pad) = pad {
-        throttle += deadzone(pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0));
+        // The stick is analog and *overrides* the sail notch rather than adding
+        // to it: summing them would let a half-sail keyboard notch plus a shoved
+        // stick ask for 1.5 and clamp, so the last third of the stick would do
+        // nothing. Off-centre means the pad is flying; centred hands the ship
+        // back to whatever notch the ladder is on.
+        let stick = deadzone(pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0), &controls);
+        if stick != 0.0 {
+            throttle = stick;
+        }
         // Stick right (+X) steers starboard (negative turn).
-        turn -= deadzone(pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0));
+        turn -= deadzone(pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0), &controls);
 
         aim_port |= pad.pressed(GamepadButton::LeftTrigger2); // LT
         aim_starboard |= pad.pressed(GamepadButton::RightTrigger2); // RT
@@ -282,8 +368,8 @@ pub fn player_input(
 
     helm.throttle = throttle.clamp(-1.0, 1.0);
     helm.turn = turn.clamp(-1.0, 1.0);
-    aiming.port = aim_port;
-    aiming.starboard = aim_starboard;
+    aim.aiming.port = aim_port;
+    aim.aiming.starboard = aim_starboard;
 
     // The microwarp can't even be *aimed* while it's recharging — suppress the
     // hold so the top-down view, ghost preview and aim-battery drain never engage
@@ -297,12 +383,13 @@ pub fn player_input(
     let aiming_broadside = aim_port || aim_starboard;
     let kit_active = emp_fire || torpedo_hold || microwarp_hold;
     let rest_point = ship + heading.forward() * 320.0;
-    let right_stick = |axis: GamepadAxis| pad.map_or(0.0, |p| deadzone(p.get(axis).unwrap_or(0.0)));
+    let right_stick =
+        |axis: GamepadAxis| pad.map_or(0.0, |p| deadzone(p.get(axis).unwrap_or(0.0), &controls));
 
     let yaw_input = if use_pad {
         right_stick(GamepadAxis::RightStickX)
     } else {
-        mouse_motion.delta.x * MOUSE_AIM_SENS
+        mouse_motion.delta.x * controls.mouse_aim_sens
     };
 
     let pad_cursor_delta = if use_pad && kit_active {
@@ -311,7 +398,7 @@ pub fn player_input(
             let up = cam_gt.up().truncate().normalize_or_zero();
             let sx = right_stick(GamepadAxis::RightStickX);
             let sy = right_stick(GamepadAxis::RightStickY);
-            (right * sx + up * sy) * AIM_CURSOR_RATE * dt
+            (right * sx + up * sy) * controls.aim_cursor_rate * dt
         } else {
             Vec2::ZERO
         }
@@ -346,19 +433,19 @@ pub fn player_input(
         fire_starboard,
         kit_active,
         use_pad,
-        broadside_aim.offset,
-        aim_cursor.world,
+        aim.broadside.offset,
+        aim.cursor.world,
         yaw_input,
         pad_cursor_delta,
         mouse_pick,
         rest_point,
-        AIM_CURSOR_MAX,
+        controls.aim_cursor_max,
     );
-    broadside_aim.offset = decision.broadside_offset;
+    aim.broadside.offset = decision.broadside_offset;
     if !aiming_broadside {
         // While aiming a broadside the pointer cursor is irrelevant — leave it
         // as last set, so switching back to a kit weapon resumes from there.
-        aim_cursor.world = decision.aim_point;
+        aim.cursor.world = decision.aim_point;
     }
 
     if fire_port {
@@ -509,6 +596,74 @@ mod tests {
     use super::*;
 
     const ARC: f32 = 0.6;
+
+    #[test]
+    fn the_sail_ladder_saturates_at_both_ends() {
+        // Holding a key must never wrap full sail round to backing sails.
+        let mut s = SailState::FullSail;
+        for _ in 0..5 {
+            s = s.stepped(1);
+        }
+        assert_eq!(s, SailState::FullSail);
+        for _ in 0..9 {
+            s = s.stepped(-1);
+        }
+        assert_eq!(s, SailState::Backing);
+    }
+
+    #[test]
+    fn the_ladder_steps_one_notch_at_a_time_from_half_sail() {
+        let s = SailState::default();
+        assert_eq!(s, SailState::HalfSail, "a fresh ship starts at half sail");
+        assert_eq!(s.stepped(1), SailState::FullSail);
+        assert_eq!(s.stepped(-1), SailState::AllStop);
+        assert_eq!(s.stepped(-1).stepped(-1), SailState::Backing);
+    }
+
+    #[test]
+    fn sail_throttles_are_ordered_and_in_range() {
+        let ladder = [
+            SailState::Backing,
+            SailState::AllStop,
+            SailState::HalfSail,
+            SailState::FullSail,
+        ];
+        for pair in ladder.windows(2) {
+            assert!(
+                pair[0].throttle() < pair[1].throttle(),
+                "{:?} should be slower than {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        for notch in ladder {
+            let t = notch.throttle();
+            assert!(
+                (-1.0..=1.0).contains(&t),
+                "{notch:?} throttle {t} is out of range"
+            );
+        }
+        assert_eq!(SailState::AllStop.throttle(), 0.0, "all stop means stopped");
+    }
+
+    /// Every notch must resolve to a real line in the string table, or the HUD
+    /// shows `!!MISSING STRING!!` where the sail setting should be.
+    #[test]
+    fn every_sail_notch_has_a_string() {
+        let csv = include_str!("../assets/strings/en.csv");
+        for notch in [
+            SailState::Backing,
+            SailState::AllStop,
+            SailState::HalfSail,
+            SailState::FullSail,
+        ] {
+            let key = notch.string_key();
+            assert!(
+                csv.lines().any(|l| l.starts_with(&format!("{key},"))),
+                "{key} is missing from en.csv"
+            );
+        }
+    }
 
     #[test]
     fn decide_aim_defaults_to_broadside_mode_while_holding_a_side() {

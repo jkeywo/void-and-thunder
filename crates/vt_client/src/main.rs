@@ -43,7 +43,12 @@
 //! X EMP, A boost, Y brace, Start pause (restart on the game-over screen).
 
 use bevy::asset::AssetPath;
+// Bevy 0.19 moved bloom out of the core pipeline into `bevy_post_process`, and
+// HDR from a `Camera` field to a marker component on the camera entity.
+use bevy::camera::Hdr;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::gltf::GltfAssetLabel;
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use vt_sim::prelude::*;
 
@@ -87,7 +92,7 @@ mod input;
 use input::{
     player_input, toggle_controls_panel, toggle_fullscreen, toggle_pause, toggle_player_ai,
     track_input_method, AimCursor, Aiming, BroadsideAim, ControlsPanel, InputMethod, Paused,
-    PlayerAi,
+    PlayerAi, SailState,
 };
 
 mod gizmos;
@@ -97,9 +102,13 @@ use gizmos::{
     MicrowarpGhost,
 };
 
+mod status_ring;
+use status_ring::{draw_enemy_status_rings, draw_player_status_ring};
+
 mod effects;
 use effects::{
-    muzzle_flashes, spawn_destroy_effects, spawn_emp_effects, spawn_hit_effects, update_effects,
+    impact_rumble, muzzle_flashes, spawn_destroy_effects, spawn_emp_effects, spawn_hit_effects,
+    update_effects, update_wrecks,
 };
 
 mod edge_markers;
@@ -257,6 +266,7 @@ fn main() {
         .init_resource::<AimCursor>()
         .init_resource::<BroadsideAim>()
         .init_resource::<ControlsPanel>()
+        .init_resource::<SailState>()
         .init_resource::<Hitstop>()
         .add_systems(Startup, setup)
         // Loading lays out the encounter from data. It clears the field on the
@@ -316,6 +326,10 @@ fn main() {
                 draw_boarding,
                 draw_microwarp_range,
                 update_offscreen_markers,
+                // The status rings go last so they sit over the grid rather
+                // than being crossed by it.
+                draw_enemy_status_rings,
+                draw_player_status_ring,
             )
                 .after(SmoothingSet),
         )
@@ -328,6 +342,8 @@ fn main() {
                 spawn_destroy_effects,
                 spawn_emp_effects,
                 update_effects,
+                update_wrecks,
+                impact_rumble,
             ),
         )
         // Playing: take input and watch for win/lose.
@@ -412,6 +428,19 @@ fn setup(
     let cam = data::feel::CameraFeel::default();
     commands.spawn((
         Camera3d::default(),
+        // HDR is what makes bloom mean anything: without it every emissive
+        // surface clamps at white before the bloom pass ever sees how bright it
+        // actually was, and the glow comes out uniform.
+        Hdr,
+        // Muzzle flashes, engine ribbons, the star and every effect sphere are
+        // unlit emissive geometry that was being drawn flat. A restrained bloom
+        // is the difference between "a yellow circle" and "a gun going off";
+        // kept low so the HUD and hull read normally.
+        Bloom {
+            intensity: 0.18,
+            ..Bloom::NATURAL
+        },
+        Tonemapping::TonyMcMapface,
         Projection::from(PerspectiveProjection {
             far: 30_000.0,
             ..default()

@@ -34,10 +34,21 @@ pub use vellum_editor::{FieldKind, FieldSpec};
 /// roughly a third to half way — so there is room to push a number both ways.
 static FIELDS: SpecTable = SpecTable::new(&[
     // ShipStats — how a hull handles.
-    ("ShipStats", "thrust", FieldSpec::config(0.0, 3000.0)),
+    ("ShipStats", "thrust", FieldSpec::config(0.0, 400.0)),
     ("ShipStats", "turn_rate", FieldSpec::config(0.0, 4.0)),
     ("ShipStats", "max_speed", FieldSpec::config(0.0, 400.0)),
-    ("ShipStats", "linear_drag", FieldSpec::config(0.0, 20.0)),
+    ("ShipStats", "forward_drag", FieldSpec::config(0.0, 4.0)),
+    ("ShipStats", "lateral_drag", FieldSpec::config(0.0, 20.0)),
+    // The speed/agility bargain: the gap between these two is the whole reason
+    // to ever slow down, so both want plenty of slider either side.
+    ("ShipStats", "turn_rate_slow", FieldSpec::config(0.5, 4.0)),
+    ("ShipStats", "turn_rate_fast", FieldSpec::config(0.0, 2.0)),
+    ("ShipStats", "turn_accel", FieldSpec::config(0.5, 16.0)),
+    // Shields. `max` starts at the bottom of its range because zero is a
+    // meaningful setting — it is how a class says "no shields fitted".
+    ("Shield", "max", FieldSpec::config(0.0, 200.0)),
+    ("Shield", "regen_per_sec", FieldSpec::config(0.0, 40.0)),
+    ("Shield", "regen_delay", FieldSpec::config(0.0, 10.0)),
     // Broadside.
     ("Broadside", "cooldown", FieldSpec::config(0.0, 20.0)),
     ("Broadside", "damage", FieldSpec::config(0.0, 100.0)),
@@ -241,7 +252,11 @@ mod tests {
             ("thrust", stats.thrust),
             ("turn_rate", stats.turn_rate),
             ("max_speed", stats.max_speed),
-            ("linear_drag", stats.linear_drag),
+            ("forward_drag", stats.forward_drag),
+            ("lateral_drag", stats.lateral_drag),
+            ("turn_rate_slow", stats.turn_rate_slow),
+            ("turn_rate_fast", stats.turn_rate_fast),
+            ("turn_accel", stats.turn_accel),
         ] {
             let spec = spec_for("ShipStats", name, value);
             assert!(

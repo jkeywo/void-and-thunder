@@ -94,10 +94,14 @@ impl Default for ShipTable {
                     name: "house_patrol".into(),
                     class: ShipClass {
                         stats: ShipStats {
-                            thrust: 660.0,
+                            thrust: 98.0,
                             turn_rate: 0.35,
                             max_speed: 100.0,
-                            ..ShipStats::default()
+                            forward_drag: 0.95,
+                            lateral_drag: 5.0,
+                            turn_rate_slow: 1.35,
+                            turn_rate_fast: 0.5,
+                            turn_accel: 3.2,
                         },
                         loadout: ShipLoadout::enemy(),
                         ..ShipClass::default()
@@ -213,7 +217,21 @@ mod tests {
         let (_, enemy) = table.find("house_patrol").expect("enemy class");
         assert_eq!(player.loadout, ShipLoadout::player());
         assert_eq!(enemy.loadout, ShipLoadout::enemy());
-        assert_eq!(enemy.stats.thrust, 660.0);
+    }
+
+    /// The compiled-in fallback and the shipped file must describe the *same*
+    /// ships. Asserting against the file rather than against copied literals is
+    /// what stops the two drifting the next time a hull is retuned — with
+    /// literals, only the one you remembered to edit moves.
+    #[test]
+    fn the_default_table_matches_the_shipped_file() {
+        let text = include_str!("../../assets/data/ships.ron");
+        let shipped: ShipTable = ron::from_str(text).expect("ships.ron should parse");
+        assert_eq!(
+            shipped,
+            ShipTable::default(),
+            "assets/data/ships.ron has drifted from ShipTable::default()"
+        );
     }
 
     #[test]

@@ -20,13 +20,15 @@ use bevy_reflect::Reflect;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::{
-    STATION_THROTTLE, SURROUND_COUNT, SURROUND_RADIUS, TORPEDO_MIN_VOLLEY, TURN_GAIN, WARP_PRIME,
+    STATION_THROTTLE, SURROUND_COUNT, SURROUND_RADIUS, TORPEDO_MIN_VOLLEY, TURN_EASE, TURN_GAIN,
+    WARP_PRIME,
 };
+use crate::collide::{RAM_DAMAGE_PER_SPEED, RAM_DAMAGE_THRESHOLD, RAM_RESTITUTION, RAM_SEPARATION};
 use crate::combat::{
     BRACE_DAMAGE_FACTOR, HULL_LENGTH, MUZZLE_STANDOFF, PROJECTILE_RADIUS, PROJECTILE_TTL,
 };
 use crate::components::ENGAGEMENT_RANGE;
-use crate::piracy::{BOARD_DWELL, BOARD_RANGE, CRIPPLE_THRESHOLD};
+use crate::piracy::{BOARD_DWELL, BOARD_RANGE, BOARD_REPAIR_FRAC, CRIPPLE_THRESHOLD};
 use crate::ship::REVERSE_THROTTLE;
 use crate::torpedo::TORPEDO_LAUNCH_INTERVAL;
 use crate::world::BOUNDS_SPRING;
@@ -39,6 +41,10 @@ pub struct AiTuning {
     pub turn_gain: f32,
     /// Throttle while jockeying for a broadside — mostly turning, holding station.
     pub station_throttle: f32,
+    /// How much of its throttle the AI spills to buy turn rate, at a full 180°
+    /// of heading error. `0.0` means it never slows to turn (and, at full sail,
+    /// orbits its target forever without ever closing).
+    pub turn_ease: f32,
     /// Enemies within this radius count toward being "surrounded".
     pub surround_radius: f32,
     /// This many nearby hostiles triggers a microwarp escape.
@@ -54,6 +60,7 @@ impl Default for AiTuning {
         Self {
             turn_gain: TURN_GAIN,
             station_throttle: STATION_THROTTLE,
+            turn_ease: TURN_EASE,
             surround_radius: SURROUND_RADIUS,
             surround_count: SURROUND_COUNT as u32,
             warp_prime: WARP_PRIME,
@@ -95,6 +102,16 @@ pub struct SimTuning {
     pub board_range: f32,
     /// Seconds the protagonist must hold position in range to claim a prize.
     pub board_dwell: f32,
+    /// Fraction of maximum hull a boarding repairs.
+    pub board_repair_frac: f32,
+    /// Fraction of closing speed given back as bounce when hulls collide.
+    pub ram_restitution: f32,
+    /// Closing speed below which a hull-to-hull contact costs nothing.
+    pub ram_damage_threshold: f32,
+    /// Hull damage per unit of closing speed above the ram threshold.
+    pub ram_damage_per_speed: f32,
+    /// Fraction of a hull overlap corrected per step.
+    pub ram_separation: f32,
     /// The AI's control gains.
     pub ai: AiTuning,
 }
@@ -114,6 +131,11 @@ impl Default for SimTuning {
             cripple_threshold: CRIPPLE_THRESHOLD,
             board_range: BOARD_RANGE,
             board_dwell: BOARD_DWELL,
+            board_repair_frac: BOARD_REPAIR_FRAC,
+            ram_restitution: RAM_RESTITUTION,
+            ram_damage_threshold: RAM_DAMAGE_THRESHOLD,
+            ram_damage_per_speed: RAM_DAMAGE_PER_SPEED,
+            ram_separation: RAM_SEPARATION,
             ai: AiTuning::default(),
         }
     }
@@ -140,6 +162,9 @@ mod tests {
         assert_eq!(t.cripple_threshold, 0.25);
         assert_eq!(t.board_range, 95.0);
         assert_eq!(t.board_dwell, 3.0);
+        assert_eq!(t.board_repair_frac, 0.10);
+        assert_eq!(t.ram_restitution, 0.35);
+        assert_eq!(t.ram_damage_threshold, 45.0);
         assert_eq!(t.ai.turn_gain, 2.5);
         assert_eq!(t.ai.surround_count, 2);
         assert_eq!(t.ai.torpedo_min_volley, 3);

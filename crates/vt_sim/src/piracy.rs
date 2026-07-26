@@ -25,6 +25,15 @@ pub const BOARD_RANGE: f32 = 95.0;
 /// How long the protagonist must hold position within [`BOARD_RANGE`] of a
 /// crippled ship to claim it (seconds).
 pub const BOARD_DWELL: f32 = 3.0;
+/// Fraction of *maximum* hull a boarding repairs, as the prize crew strips the
+/// hulk for plate and spares.
+///
+/// A fraction of the maximum rather than of what is left, so the repair is worth
+/// the same whether you board at 90% or at 10% — a wounded ship should not get a
+/// smaller reward for taking the larger risk. It is also the only way to get
+/// hull back, which is what makes piracy the sustain mechanic rather than just
+/// the scoring one.
+pub const BOARD_REPAIR_FRAC: f32 = 0.10;
 
 /// Running tally of ships boarded (looted) this run — the piracy score.
 #[derive(Resource, Clone, Copy, Debug, Default)]
@@ -87,10 +96,10 @@ pub fn boarding_system(
     mut commands: Commands,
     mut plunder: ResMut<Plunder>,
     mut boarding: ResMut<Boarding>,
-    protagonist: Query<&Transform, With<Protagonist>>,
+    mut protagonist: Query<(&Transform, &mut Hull), With<Protagonist>>,
     disabled: Query<(Entity, &Transform), (With<Ship>, With<Disabled>, Without<Invulnerable>)>,
 ) {
-    let Ok(protagonist) = protagonist.single() else {
+    let Ok((protagonist, mut own_hull)) = protagonist.single_mut() else {
         *boarding = Boarding::default();
         return;
     };
@@ -119,6 +128,12 @@ pub fn boarding_system(
             if boarding.progress >= tuning.board_dwell {
                 commands.entity(entity).despawn();
                 plunder.ships_boarded += 1;
+                // Strip the prize for plate: a boarding is the only way to get
+                // hull back, so a long run is sustained by taking ships rather
+                // than by avoiding damage. Capped at the maximum — you cannot
+                // over-repair, and a full hull simply wastes the salvage.
+                let repair = own_hull.max * tuning.board_repair_frac;
+                own_hull.current = (own_hull.current + repair).min(own_hull.max);
                 boarding.target = None;
                 boarding.progress = 0.0;
             }
@@ -197,7 +212,16 @@ mod tests {
         world.insert_resource(SimTuning::default());
         world.insert_resource(Plunder::default());
         world.insert_resource(Boarding::default());
-        world.spawn((Protagonist, Transform::from_xyz(0.0, 0.0, 0.0)));
+        world.spawn((
+            Protagonist,
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            // Damaged on purpose: boarding repairs the hull, so the protagonist
+            // needs room for the repair to land somewhere observable.
+            Hull {
+                current: 50.0,
+                max: 100.0,
+            },
+        ));
         let enemy = crippled_enemy(&mut world, Vec2::new(40.0, 0.0)); // within BOARD_RANGE
 
         let mut schedule = Schedule::default();
@@ -220,6 +244,74 @@ mod tests {
         assert_eq!(world.resource::<Plunder>().ships_boarded, 1);
     }
 
+    /// Taking a prize strips it for plate. This is the only way to get hull
+    /// back, so it is what makes a long run survivable.
+    #[test]
+    fn boarding_repairs_the_protagonists_hull() {
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(SimTuning::default());
+        world.insert_resource(Plunder::default());
+        world.insert_resource(Boarding::default());
+        let me = world
+            .spawn((
+                Protagonist,
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Hull {
+                    current: 50.0,
+                    max: 100.0,
+                },
+            ))
+            .id();
+        crippled_enemy(&mut world, Vec2::new(40.0, 0.0));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(boarding_system);
+        step(&mut world, &mut schedule, 1.0);
+        assert_eq!(
+            world.get::<Hull>(me).unwrap().current,
+            50.0,
+            "no repair before the prize is actually taken"
+        );
+
+        step(&mut world, &mut schedule, BOARD_DWELL);
+        assert_eq!(
+            world.get::<Hull>(me).unwrap().current,
+            60.0,
+            "boarding should repair 10% of maximum hull"
+        );
+    }
+
+    /// A repair must never push a hull past its maximum — an intact ship simply
+    /// wastes the salvage rather than banking overheal.
+    #[test]
+    fn a_boarding_repair_cannot_overfill_the_hull() {
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(SimTuning::default());
+        world.insert_resource(Plunder::default());
+        world.insert_resource(Boarding::default());
+        let me = world
+            .spawn((
+                Protagonist,
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Hull {
+                    current: 97.0,
+                    max: 100.0,
+                },
+            ))
+            .id();
+        crippled_enemy(&mut world, Vec2::new(40.0, 0.0));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(boarding_system);
+        step(&mut world, &mut schedule, 1.0);
+        step(&mut world, &mut schedule, BOARD_DWELL);
+
+        let hull = world.get::<Hull>(me).unwrap();
+        assert_eq!(hull.current, hull.max, "capped at full, not 107");
+    }
+
     #[test]
     fn leaving_range_resets_boarding_progress() {
         let mut world = World::new();
@@ -228,7 +320,14 @@ mod tests {
         world.insert_resource(Plunder::default());
         world.insert_resource(Boarding::default());
         let protagonist = world
-            .spawn((Protagonist, Transform::from_xyz(0.0, 0.0, 0.0)))
+            .spawn((
+                Protagonist,
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Hull {
+                    current: 50.0,
+                    max: 100.0,
+                },
+            ))
             .id();
         crippled_enemy(&mut world, Vec2::new(40.0, 0.0)); // in range
 
@@ -261,7 +360,16 @@ mod tests {
         world.insert_resource(SimTuning::default());
         world.insert_resource(Plunder::default());
         world.insert_resource(Boarding::default());
-        world.spawn((Protagonist, Transform::from_xyz(0.0, 0.0, 0.0)));
+        world.spawn((
+            Protagonist,
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            // Damaged on purpose: boarding repairs the hull, so the protagonist
+            // needs room for the repair to land somewhere observable.
+            Hull {
+                current: 50.0,
+                max: 100.0,
+            },
+        ));
         let enemy = crippled_enemy(&mut world, Vec2::new(500.0, 0.0)); // too far
 
         let mut schedule = Schedule::default();

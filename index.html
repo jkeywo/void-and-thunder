@@ -86,53 +86,123 @@
           src.buffer = buf;
           return src;
         }
-        window.vtPlaySound = function (name) {
+        // pitch scales every frequency and shortens the sound; gain scales the
+        // whole thing. Both come from Rust so the web and native builds make the
+        // same variation decisions — only the synthesis differs.
+        window.vtPlaySound = function (name, pitch, gain) {
           const c = audioCtx();
           const t = c.currentTime;
+          const p = (typeof pitch === 'number' && pitch > 0) ? pitch : 1;
+          const v = (typeof gain === 'number' && gain >= 0) ? gain : 1;
+          if (v <= 0.001) return;
+          // Everything is mixed through one gain node so `v` needs applying once.
+          const out = c.createGain();
+          out.gain.value = v;
+          out.connect(c.destination);
+          const dur = (s) => s / p;   // a higher pitch is a shorter sound
           if (name === 'hit') {
             const o = c.createOscillator();
             o.type = 'square';
-            o.frequency.value = 760;
+            o.frequency.value = 760 * p;
             const g = c.createGain();
-            env(g, t, 0.08, 0.12);
-            o.connect(g).connect(c.destination);
-            o.start(t); o.stop(t + 0.09);
+            env(g, t, dur(0.08), 0.12);
+            o.connect(g).connect(out);
+            o.start(t); o.stop(t + dur(0.09));
           } else if (name === 'broadside') {
-            const src = noise(c, 0.28);
+            const src = noise(c, dur(0.28));
             const f = c.createBiquadFilter();
-            f.type = 'lowpass'; f.frequency.value = 500;
+            f.type = 'lowpass'; f.frequency.value = 500 * p;
             const g = c.createGain();
-            env(g, t, 0.28, 0.3);
-            src.connect(f).connect(g).connect(c.destination);
+            env(g, t, dur(0.28), 0.3);
+            src.connect(f).connect(g).connect(out);
             src.start(t);
             const o = c.createOscillator();
             o.type = 'sine';
-            o.frequency.setValueAtTime(120, t);
-            o.frequency.exponentialRampToValueAtTime(50, t + 0.22);
+            o.frequency.setValueAtTime(120 * p, t);
+            o.frequency.exponentialRampToValueAtTime(50 * p, t + dur(0.22));
             const g2 = c.createGain();
-            env(g2, t, 0.22, 0.35);
-            o.connect(g2).connect(c.destination);
-            o.start(t); o.stop(t + 0.24);
+            env(g2, t, dur(0.22), 0.35);
+            o.connect(g2).connect(out);
+            o.start(t); o.stop(t + dur(0.24));
           } else if (name === 'explosion') {
-            const src = noise(c, 0.5);
+            const src = noise(c, dur(0.5));
             const f = c.createBiquadFilter();
             f.type = 'lowpass';
-            f.frequency.setValueAtTime(1400, t);
-            f.frequency.exponentialRampToValueAtTime(200, t + 0.4);
+            f.frequency.setValueAtTime(1400 * p, t);
+            f.frequency.exponentialRampToValueAtTime(200 * p, t + dur(0.4));
             const g = c.createGain();
-            env(g, t, 0.5, 0.45);
-            src.connect(f).connect(g).connect(c.destination);
+            env(g, t, dur(0.5), 0.45);
+            src.connect(f).connect(g).connect(out);
             src.start(t);
           } else if (name === 'board') {
             [523, 784].forEach((freq, i) => {
               const o = c.createOscillator();
               o.type = 'triangle';
-              o.frequency.value = freq;
+              o.frequency.value = freq * p;
               const g = c.createGain();
-              const tt = t + i * 0.12;
-              env(g, tt, 0.18, 0.22);
-              o.connect(g).connect(c.destination);
-              o.start(tt); o.stop(tt + 0.2);
+              const tt = t + i * dur(0.12);
+              env(g, tt, dur(0.18), 0.22);
+              o.connect(g).connect(out);
+              o.start(tt); o.stop(tt + dur(0.2));
+            });
+          } else if (name === 'boost') {
+            // Noise swept up through an opening filter: the drive spooling up.
+            const d = dur(0.45);
+            const src = noise(c, d);
+            const f = c.createBiquadFilter();
+            f.type = 'lowpass';
+            f.frequency.setValueAtTime(200 * p, t);
+            f.frequency.exponentialRampToValueAtTime(2200 * p, t + d);
+            const g = c.createGain();
+            env(g, t, d, 0.3);
+            src.connect(f).connect(g).connect(out);
+            src.start(t);
+            const o = c.createOscillator();
+            o.type = 'sawtooth';
+            o.frequency.setValueAtTime(90 * p, t);
+            o.frequency.exponentialRampToValueAtTime(350 * p, t + d);
+            const g2 = c.createGain();
+            env(g2, t, d, 0.14);
+            o.connect(g2).connect(out);
+            o.start(t); o.stop(t + d);
+          } else if (name === 'warp') {
+            // Falling pitch: departure.
+            const d = dur(0.38);
+            const o = c.createOscillator();
+            o.type = 'sine';
+            o.frequency.setValueAtTime(960 * p, t);
+            o.frequency.exponentialRampToValueAtTime(80 * p, t + d);
+            const g = c.createGain();
+            env(g, t, d, 0.3);
+            o.connect(g).connect(out);
+            o.start(t); o.stop(t + d);
+            const src = noise(c, dur(0.04));
+            const g2 = c.createGain();
+            env(g2, t, dur(0.04), 0.2);
+            src.connect(g2).connect(out);
+            src.start(t);
+          } else if (name === 'brace') {
+            // Two detuned partials beating: shutters coming down.
+            [320, 487].forEach((freq, i) => {
+              const o = c.createOscillator();
+              o.type = 'triangle';
+              o.frequency.value = freq * p;
+              const g = c.createGain();
+              env(g, t, dur(0.2), i === 0 ? 0.22 : 0.15);
+              o.connect(g).connect(out);
+              o.start(t); o.stop(t + dur(0.22));
+            });
+          } else if (name === 'hullwarn') {
+            // Low, dull, two pulses. It repeats, so it must not grate.
+            [0, 0.15].forEach((off) => {
+              const o = c.createOscillator();
+              o.type = 'sine';
+              o.frequency.value = 196 * p;
+              const g = c.createGain();
+              const tt = t + dur(off);
+              env(g, tt, dur(0.12), 0.16);
+              o.connect(g).connect(out);
+              o.start(tt); o.stop(tt + dur(0.13));
             });
           }
         };

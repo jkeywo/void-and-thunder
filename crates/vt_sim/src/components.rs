@@ -78,32 +78,54 @@ impl Heading {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Velocity(pub Vec2);
 
+/// Rate of turn in radians per second. The helm sets a *target* rate and the hull
+/// eases toward it at [`ShipStats::turn_accel`], so a ship has rotational inertia:
+/// it leans into a turn and keeps swinging for a moment after the helm centres.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct AngularVelocity(pub f32);
+
 /// Handling characteristics of a hull. Tuned per ship class.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct ShipStats {
     /// Forward acceleration at full throttle (units/s²).
     pub thrust: f32,
-    /// Maximum turn rate at full helm (radians/s).
+    /// Turn rate at full helm and *half* speed (radians/s). The rate actually
+    /// achieved is this scaled by [`ShipStats::turn_rate_slow`] ..
+    /// [`ShipStats::turn_rate_fast`] according to how fast the ship is going.
     pub turn_rate: f32,
     /// Speed cap (units/s). Black-Flag ships accelerate to a sail-set top speed.
     pub max_speed: f32,
-    /// Fraction of speed bled off per second when coasting (0..1-ish).
-    pub linear_drag: f32,
+    /// Drag along the bow, per second. Low: the hull keeps its way and coasts.
+    pub forward_drag: f32,
+    /// Drag across the beam, per second. High: the hull bites sideways rather
+    /// than sliding, which is the difference between a ship and a hockey puck.
+    pub lateral_drag: f32,
+    /// Turn-rate multiplier at a standstill (> 1: handier).
+    pub turn_rate_slow: f32,
+    /// Turn-rate multiplier at `max_speed` (< 1: stiffer). The gap between these
+    /// two is the whole speed-versus-agility decision — drop sail to pivot.
+    pub turn_rate_fast: f32,
+    /// How quickly the rate of turn reaches the rate the helm is asking for.
+    /// Low values give a heavy hull that takes a moment to swing.
+    pub turn_accel: f32,
 }
 
 impl Default for ShipStats {
     fn default() -> Self {
-        // A corsair sloop. Slow and stately, but handy: it turns 25% quicker than
-        // it used to and runs 25% slower, so a duel is fought by out-turning the
-        // other ship rather than out-running it. Drag is high (little
-        // coast/drift); thrust is scaled with it so the ship still reaches
-        // `max_speed` (eq ≈ thrust/drag).
+        // A corsair sloop. Slow and stately, but handy. Forward drag is low so the
+        // hull carries its way (time constant ≈ 1.1 s) and thrust is sized to hold
+        // `max_speed` against it (eq ≈ thrust / forward_drag); lateral drag is
+        // several times higher so a turn reads as a lean, not a skid.
         Self {
-            thrust: 840.0,
+            thrust: 115.0,
             turn_rate: 0.6875,
             max_speed: 127.5,
-            linear_drag: 6.0,
+            forward_drag: 0.9,
+            lateral_drag: 4.5,
+            turn_rate_slow: 1.55,
+            turn_rate_fast: 0.55,
+            turn_accel: 4.0,
         }
     }
 }

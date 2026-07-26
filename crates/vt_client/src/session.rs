@@ -10,6 +10,7 @@ use crate::data::{
     director_for, paths, set_director, spawn_scenario, ActiveScenario, DataHandles, Scenario,
     SelectedScenario, ShipTable,
 };
+use crate::input::SailState;
 
 /// Where the session is: waiting on data, parked on the title card, mid-run, or
 /// resolved.
@@ -43,6 +44,7 @@ pub fn clear_field(
     mut plunder: ResMut<Plunder>,
     mut board: ResMut<BoardIntent>,
     mut boarding: ResMut<Boarding>,
+    mut sail: ResMut<SailState>,
 ) {
     for entity in ships.iter().chain(&projectiles) {
         commands.entity(entity).despawn();
@@ -51,6 +53,9 @@ pub fn clear_field(
     *plunder = Plunder::default();
     *board = BoardIntent::default();
     *boarding = Boarding::default();
+    // The new ship is a new ship: it starts at half sail, not at whatever the
+    // last one happened to be set to when it died.
+    *sail = SailState::default();
 }
 
 /// Freeze the simulation while the title card is up.
@@ -200,6 +205,7 @@ pub fn restart(
     mut encounter: ResMut<Encounter>,
     mut plunder: ResMut<Plunder>,
     mut board: ResMut<BoardIntent>,
+    mut sail: ResMut<SailState>,
     mut next: ResMut<NextState<GameState>>,
 ) {
     let pad_restart = gamepads.iter().any(|pad| {
@@ -214,6 +220,7 @@ pub fn restart(
     reset_encounter(&mut director, &mut encounter);
     *plunder = Plunder::default();
     *board = BoardIntent::default();
+    *sail = SailState::default();
     // Re-lay the *same* scenario, through the same path a fresh load uses — a
     // restarted test range must not quietly grow waves.
     let scenario = active.0.clone();
