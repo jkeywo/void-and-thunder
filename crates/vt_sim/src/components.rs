@@ -94,7 +94,8 @@ pub struct ShipStats {
     /// achieved is this scaled by [`ShipStats::turn_rate_slow`] ..
     /// [`ShipStats::turn_rate_fast`] according to how fast the ship is going.
     pub turn_rate: f32,
-    /// Speed cap (units/s). Black-Flag ships accelerate to a sail-set top speed.
+    /// Speed cap (units/s). A ship accelerates to the top speed its thrust
+    /// notch sets.
     pub max_speed: f32,
     /// Drag along the bow, per second. Low: the hull keeps its way and coasts.
     pub forward_drag: f32,
@@ -104,7 +105,7 @@ pub struct ShipStats {
     /// Turn-rate multiplier at a standstill (> 1: handier).
     pub turn_rate_slow: f32,
     /// Turn-rate multiplier at `max_speed` (< 1: stiffer). The gap between these
-    /// two is the whole speed-versus-agility decision — drop sail to pivot.
+    /// two is the whole speed-versus-agility decision — cut thrust to pivot.
     pub turn_rate_fast: f32,
     /// How quickly the rate of turn reaches the rate the helm is asking for.
     /// Low values give a heavy hull that takes a moment to swing.

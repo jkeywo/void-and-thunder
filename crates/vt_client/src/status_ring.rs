@@ -1,340 +1,238 @@
-//! The status ring: a ship's condition drawn on the plane beneath its hull.
+//! Status rings: each ship's condition, projected onto the plane beneath its
+//! hull and drawn by the HTML HUD.
 //!
 //! Everything the player needs mid-manoeuvre is here, in the one place their
 //! eyes already are. The HUD at the screen edge is for glancing at between
 //! fights; during one, looking away from your own ship to read a bar in the
-//! corner is exactly when you lose the ship. So the ring carries hull, shields,
-//! broadside readiness *and their arcs*, and torpedo tubes, concentrically:
+//! corner is exactly when you lose the ship.
 //!
-//! ```text
-//!   r=34  hull            a full circle, draining anticlockwise, amber -> red
-//!   r=42  shields         two 180-deg arcs, fore and aft, bright with charge
-//!   r=52  broadsides      the port and starboard firing arcs, lit when loaded
-//!   r=60  torpedo tubes   one pip per tube, filled when that tube is ready
-//! ```
+//! **The ring is HTML, not a gizmo.** It used to be drawn with Bevy gizmos
+//! directly on the plane, which was simple but meant the design was Rust line
+//! segments — impossible to restyle without a rebuild, and impossible to author
+//! anywhere else. Instead this module does only the geometry: it projects each
+//! ship onto the screen and hands the page a transform that maps a *flat,
+//! authored* ring onto the ground plane in perspective. The page owns what the
+//! ring looks like; this owns where it goes.
 //!
-//! The shield and broadside rings **rotate with the hull**, because that is the
-//! whole point of them: which way you are facing decides which bank takes the
-//! next blow and where your guns can reach. The hull ring does not — it is a
-//! gauge, not a direction.
+//! ## The transform contract
 //!
-//! Enemies get a reduced ring (hull, and shields if fitted). A wave of four
-//! ships each drawing gun arcs and tube pips would bury the aim beams and lead
-//! diamonds that are already competing for the same space.
+//! A ring is authored as a **200×200 box, centred at (100,100), outer radius
+//! 100** — a plain flat circle, no perspective baked in. For each ship we emit
+//! three normalised screen-space vectors:
+//!
+//! - `o` — where the ship's centre lands on screen
+//! - `x` — where a world **+X** offset of one ring radius lands, relative to `o`
+//! - `y` — the same for world **−Y**
+//!
+//! `y` is the image of *minus* world Y on purpose. SVG's y-axis points down the
+//! page while the world's +Y points up the plane, so mapping them directly would
+//! silently mirror the artwork — fine for a plain ring, wrong the moment anyone
+//! adds a chevron or a letter. Negating it means a design drawn the right way up
+//! in a vector editor lands the right way up on the deck.
+//!
+//! Ship-relative features (the shield banks, the gun arcs, the tube ticks) need
+//! to know where the bow is, so each ring also carries `h`: the bow's direction
+//! **in ring-local degrees**, already converted into the SVG's clockwise-from-
+//! east convention. Nothing downstream has to think about handedness again.
+//!
+//! Those two vectors are the image of the ring's own axes under the camera, so
+//! feeding them into a CSS `matrix()` lays the flat artwork onto the plane with
+//! exactly the perspective the 3D view has. A circle becomes the correct
+//! ellipse, and it stays correct as the camera pitches, orbits and zooms,
+//! without the page knowing anything about cameras.
+//!
+//! Values are **fractions of the viewport**, not pixels, because the two HUD
+//! transports do not agree on what a pixel is: the native Ultralight view is
+//! sized in *physical* pixels while the web overlay is laid out in *CSS* pixels.
+//! The page multiplies by whatever its own viewport is and both are right.
+//!
+//! ## Why this does not thrash the HUD texture
+//!
+//! On native the HUD is an Ultralight page rasterised into a Bevy texture, and
+//! that copy is already gated on the surface's dirty bounds — it only costs
+//! anything on a frame the page actually repainted. A ring that rewrote its
+//! styles every frame would defeat that, so two things keep it honest: the
+//! script is not evaluated at all unless the payload changed since last frame,
+//! and the page compares each value before touching the DOM. A ship sitting
+//! still with full shields repaints nothing.
 
 use bevy::prelude::*;
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::fmt::Write as _;
 use vt_sim::prelude::*;
 
+use crate::camera::MainCamera;
 use crate::Player;
 
-/// Radii of the concentric bands, outward from the hull. The player's collider
-/// is 26 units, so the innermost band clears it.
-const R_HULL: f32 = 34.0;
-const R_SHIELD: f32 = 42.0;
-const R_BROADSIDE: f32 = 52.0;
-const R_TUBES: f32 = 60.0;
-
-/// Just under the hull and well above the grid at -9, so the ring reads as
-/// painted on the deck beneath the ship rather than floating around it.
-const RING_Z: f32 = -4.0;
-
-/// Segments per full turn. Enough that a 180° arc is smooth at the radii here.
-const SEGMENTS: usize = 72;
-
-/// Draw an arc on the plane, centred on `centre`, from `from` to `to` radians.
+/// World radius the authored ring's outer edge maps to, for the player.
 ///
-/// Handles either winding: the caller says where the arc starts and ends, and
-/// the segment count follows the span so a short arc is not oversampled.
-fn arc(gizmos: &mut Gizmos, centre: Vec2, r: f32, from: f32, to: f32, color: Color) {
-    let span = to - from;
-    if span.abs() < 1e-4 || r <= 0.0 {
-        return;
-    }
-    let steps = ((span.abs() / TAU) * SEGMENTS as f32).ceil().max(1.0) as usize;
-    for i in 0..steps {
-        let a0 = from + span * (i as f32 / steps as f32);
-        let a1 = from + span * ((i + 1) as f32 / steps as f32);
-        let p0 = centre + Vec2::from_angle(a0) * r;
-        let p1 = centre + Vec2::from_angle(a1) * r;
-        gizmos.line(p0.extend(RING_Z), p1.extend(RING_Z), color);
-    }
-}
+/// The hull collider is 26 units, so this clears it with room for the outer
+/// bands to sit clear of the model.
+const PLAYER_RING_RADIUS: f32 = 62.0;
 
-/// A short radial tick, for marking the ends of an arc.
-fn tick(gizmos: &mut Gizmos, centre: Vec2, angle: f32, inner: f32, outer: f32, color: Color) {
-    let dir = Vec2::from_angle(angle);
-    gizmos.line(
-        (centre + dir * inner).extend(RING_Z),
-        (centre + dir * outer).extend(RING_Z),
-        color,
-    );
-}
+/// The same for other ships. Smaller so the player's own ring is never confused
+/// with a target's at a glance.
+const ENEMY_RING_RADIUS: f32 = 46.0;
 
-/// Hull colour: amber while healthy, through orange, to red as it fails. The
-/// same reading the HUD bar gives, so the two never disagree.
-fn hull_color(frac: f32, alpha: f32) -> Color {
-    let g = 0.20 + 0.55 * frac;
-    Color::srgba(1.0, g, 0.18, alpha)
-}
+/// Height the ring is projected at — just under the hull, well above the grid
+/// at -9, so it reads as painted on the deck beneath the ship.
+const RING_PLANE_Z: f32 = -2.0;
 
-/// The hull band: a full ring showing what is left, drained anticlockwise from
-/// the top so it empties the way a clock unwinds.
-fn draw_hull_band(gizmos: &mut Gizmos, pos: Vec2, frac: f32) {
-    // The empty remainder, so the ring is always a complete circle and the
-    // missing portion reads as damage rather than as nothing being drawn.
-    arc(
-        gizmos,
-        pos,
-        R_HULL,
-        FRAC_PI_2,
-        FRAC_PI_2 + TAU,
-        Color::srgba(0.35, 0.30, 0.30, 0.22),
-    );
-    arc(
-        gizmos,
-        pos,
-        R_HULL,
-        FRAC_PI_2,
-        FRAC_PI_2 + TAU * frac,
-        hull_color(frac, 0.95),
-    );
-}
-
-/// The shield band: fore and aft half-circles that brighten with charge.
+/// The per-frame ring payload, ready to hand to the page.
 ///
-/// Both arcs are always drawn, faintly, even at zero — a bank you cannot see is
-/// a bank you forget you have, and "my stern is bare" is the single most useful
-/// thing this ring tells you.
-fn draw_shield_band(gizmos: &mut Gizmos, pos: Vec2, heading: f32, shield: &Shield) {
-    if !shield.fitted() {
-        return;
-    }
-    for (arc_id, centre_angle) in [
-        (ShieldArc::Fore, heading),
-        (ShieldArc::Aft, heading + std::f32::consts::PI),
-    ] {
-        let frac = shield.fraction(arc_id);
-        let from = centre_angle - FRAC_PI_2;
-        let to = centre_angle + FRAC_PI_2;
-        // The empty half, always present.
-        arc(
-            gizmos,
-            pos,
-            R_SHIELD,
-            from,
-            to,
-            Color::srgba(0.30, 0.55, 0.80, 0.20),
-        );
-        if frac <= 0.0 {
-            continue;
-        }
-        // The charge grows from the middle of the arc outward to both ends, so a
-        // half-full bank reads as "covering the centre of that side" rather than
-        // as an arbitrary slice.
-        let half = FRAC_PI_2 * frac;
-        arc(
-            gizmos,
-            pos,
-            R_SHIELD,
-            centre_angle - half,
-            centre_angle + half,
-            Color::srgba(0.55, 0.85, 1.0, 0.35 + 0.6 * frac),
-        );
-    }
-    // Ticks on the beam mark where one bank ends and the other begins.
-    for side in [FRAC_PI_2, -FRAC_PI_2] {
-        tick(
-            gizmos,
-            pos,
-            heading + side,
-            R_SHIELD - 3.0,
-            R_SHIELD + 3.0,
-            Color::srgba(0.55, 0.85, 1.0, 0.5),
-        );
-    }
+/// Separate from [`HudSnapshot`](crate::hud::HudSnapshot) because the two change
+/// at completely different rates: the readouts change when something happens,
+/// the ring transforms change whenever the ship or camera moves, which is most
+/// frames. Pushing them together would mean the whole HUD snapshot churned every
+/// frame and its own change-gating would never fire.
+#[derive(Resource, Default)]
+pub struct RingSnapshot {
+    pub json: String,
+    /// Bumped only when `json` actually differs, so a transport can skip the
+    /// script evaluation entirely on an unchanged frame.
+    pub seq: u64,
 }
 
-/// The broadside band: each bank's actual firing arc, lit when it can fire.
+/// Project one world point to normalised viewport coordinates (x right, y down,
+/// both `0..1` across the visible area).
 ///
-/// The arc drawn is the sim's own `Broadside::arc` about the beam, so what you
-/// see is exactly where a volley could be thrown — the same geometry the aim
-/// beams use, at a glance and without having to hold the button down.
-fn draw_broadside_band(gizmos: &mut Gizmos, pos: Vec2, heading: f32, bank: &Broadside) {
-    for (is_port, side) in [(true, FRAC_PI_2), (false, -FRAC_PI_2)] {
-        let beam = heading + side;
-        let ready = bank.ready(is_port);
-        let color = if ready {
-            Color::srgba(1.0, 0.72, 0.25, 0.85)
-        } else {
-            // Dim red while reloading — the same language the aim beams use.
-            Color::srgba(0.7, 0.25, 0.20, 0.45)
-        };
-        arc(
-            gizmos,
-            pos,
-            R_BROADSIDE,
-            beam - bank.arc,
-            beam + bank.arc,
-            color,
-        );
-        // End ticks, so the edge of the arc is unambiguous where it meets the
-        // dark plane rather than just fading out.
-        for end in [beam - bank.arc, beam + bank.arc] {
-            tick(
-                gizmos,
-                pos,
-                end,
-                R_BROADSIDE - 4.0,
-                R_BROADSIDE + 4.0,
-                color,
-            );
-        }
-
-        // A reloading bank sweeps a filler arc from the beam outward as it
-        // recharges, so the wait is legible without reading a number.
-        if !ready && bank.cooldown > 0.0 {
-            let remaining = bank.side(is_port).timer / bank.cooldown;
-            let done = (1.0 - remaining).clamp(0.0, 1.0);
-            arc(
-                gizmos,
-                pos,
-                R_BROADSIDE,
-                beam - bank.arc * done,
-                beam + bank.arc * done,
-                Color::srgba(1.0, 0.72, 0.25, 0.5),
-            );
-        }
+/// `None` when the point is not in front of the camera — Bevy's NDC depth is
+/// reverse-Z, so anything outside `0..=1` is behind the eye or beyond the far
+/// plane and must not be drawn at a mirrored position on screen.
+fn project(camera: &Camera, camera_tf: &GlobalTransform, world: Vec3) -> Option<Vec2> {
+    let ndc = camera.world_to_ndc(camera_tf, world)?;
+    if !(0.0..=1.0).contains(&ndc.z) || !ndc.is_finite() {
+        return None;
     }
+    Some(Vec2::new(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5))
 }
 
-/// The torpedo band: one pip per tube around the bow, filled when loaded.
-///
-/// Spread across the forward arc rather than the whole circle because that is
-/// where torpedoes go, and because the after half of the ring belongs to the
-/// aft shield.
-fn draw_tube_band(gizmos: &mut Gizmos, pos: Vec2, heading: f32, bay: &TorpedoBay) {
-    let tubes = bay.tubes_max;
-    if tubes == 0 {
-        return;
-    }
-    // `loaded` is fractional: the whole part is tubes ready, the fraction is the
-    // one currently reloading. Same reading the HUD tube row gives.
-    let ready = bay.loaded.floor().max(0.0) as u32;
-    let loading = bay.loaded - bay.loaded.floor();
-
-    let spread = TAU * 0.42; // a little under half the circle, centred on the bow
-    for i in 0..tubes {
-        // Single-tube bays sit dead ahead instead of dividing by zero.
-        let t = if tubes == 1 {
-            0.5
-        } else {
-            i as f32 / (tubes - 1) as f32
-        };
-        let angle = heading - spread * 0.5 + spread * t;
-        let (inner, outer, color) = if i < ready {
-            (
-                R_TUBES - 4.0,
-                R_TUBES + 4.0,
-                Color::srgba(0.55, 1.0, 0.75, 0.9),
-            )
-        } else if i == ready && loading > 0.0 {
-            // The tube mid-reload grows from nothing to full length.
-            (
-                R_TUBES - 4.0,
-                R_TUBES - 4.0 + 8.0 * loading,
-                Color::srgba(0.55, 1.0, 0.75, 0.5),
-            )
-        } else {
-            (
-                R_TUBES - 1.5,
-                R_TUBES + 1.5,
-                Color::srgba(0.35, 0.5, 0.42, 0.35),
-            )
-        };
-        tick(gizmos, pos, angle, inner, outer, color);
-    }
-}
-
-/// Draw the player's full status ring.
-pub fn draw_player_status_ring(
-    mut gizmos: Gizmos,
-    player: Query<
+/// Build the ring payload for every ship the camera can see.
+pub fn gather_ring_state(
+    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    ships: Query<
         (
+            Entity,
             &Transform,
             &Heading,
             &Hull,
             Option<&Shield>,
             Option<&Broadside>,
             Option<&TorpedoBay>,
+            Has<Player>,
         ),
-        With<Player>,
+        With<Ship>,
     >,
+    mut snap: ResMut<RingSnapshot>,
 ) {
-    let Ok((transform, heading, hull, shield, bank, tubes)) = player.single() else {
+    let Ok((camera, camera_tf)) = camera.single() else {
         return;
     };
-    let pos = transform.translation.truncate();
-    let frac = (hull.current / hull.max).clamp(0.0, 1.0);
 
-    draw_hull_band(&mut gizmos, pos, frac);
-    if let Some(shield) = shield {
-        draw_shield_band(&mut gizmos, pos, heading.0, shield);
-    }
-    if let Some(bank) = bank {
-        draw_broadside_band(&mut gizmos, pos, heading.0, bank);
-    }
-    if let Some(tubes) = tubes {
-        draw_tube_band(&mut gizmos, pos, heading.0, tubes);
-    }
-}
+    let mut j = String::with_capacity(512);
+    j.push('[');
+    let mut first = true;
 
-/// Draw the reduced ring on every ship that is not the player: hull, and shield
-/// arcs if the hull carries any.
-///
-/// Enough to pick a target and to see which side of it is soft, without the
-/// gun-arc and tube clutter that would make a four-ship wave unreadable. Drawn
-/// smaller than the player's so the two are never confused at a glance.
-pub fn draw_enemy_status_rings(
-    mut gizmos: Gizmos,
-    ships: Query<(&Transform, &Heading, &Hull, Option<&Shield>), (With<Ship>, Without<Player>)>,
-) {
-    for (transform, heading, hull, shield) in &ships {
-        let pos = transform.translation.truncate();
-        let frac = (hull.current / hull.max).clamp(0.0, 1.0);
+    for (entity, transform, heading, hull, shield, bank, tubes, is_player) in &ships {
+        let radius = if is_player {
+            PLAYER_RING_RADIUS
+        } else {
+            ENEMY_RING_RADIUS
+        };
+        let centre = transform.translation.truncate().extend(RING_PLANE_Z);
 
-        // A single arc rather than the player's ring-plus-remainder: at this
-        // size the empty portion just reads as noise.
-        arc(
-            &mut gizmos,
-            pos,
-            R_HULL * 0.85,
-            FRAC_PI_2,
-            FRAC_PI_2 + TAU * frac,
-            hull_color(frac, 0.55),
+        // The ring's own axes, as the camera sees them. Projecting the offsets
+        // rather than deriving them from the camera's pitch is what keeps the
+        // ellipse exact: it inherits the real projection, including the
+        // perspective divide, which a flat rotateX approximation would not.
+        let (Some(o), Some(px), Some(py)) = (
+            project(camera, camera_tf, centre),
+            project(camera, camera_tf, centre + Vec3::X * radius),
+            // Minus Y: see the handedness note in the module docs.
+            project(camera, camera_tf, centre - Vec3::Y * radius),
+        ) else {
+            continue; // behind the camera, or otherwise unprojectable
+        };
+        let (ex, ey) = (px - o, py - o);
+
+        if !first {
+            j.push(',');
+        }
+        first = false;
+
+        let hull_frac = (hull.current / hull.max).clamp(0.0, 1.0);
+        // `id` is the entity index: stable for a ship's whole life, so the page
+        // can keep one element per ship instead of rebuilding the set each frame.
+        let _ = write!(
+            j,
+            "{{\"id\":{},\"me\":{},\"o\":[{:.5},{:.5}],\"x\":[{:.5},{:.5}],\"y\":[{:.5},{:.5}],\"h\":{:.2},\"hull\":{:.4}",
+            entity.index(),
+            is_player,
+            o.x,
+            o.y,
+            ex.x,
+            ex.y,
+            ey.x,
+            ey.y,
+            // Into the SVG's clockwise-from-east convention, so the page can use
+            // it as a rotation without knowing which way the world's Y points.
+            -heading.0.to_degrees(),
+            hull_frac
         );
 
-        let Some(shield) = shield else { continue };
-        if !shield.fitted() {
-            continue;
-        }
-        for (arc_id, centre_angle) in [
-            (ShieldArc::Fore, heading.0),
-            (ShieldArc::Aft, heading.0 + std::f32::consts::PI),
-        ] {
-            let charge = shield.fraction(arc_id);
-            if charge <= 0.0 {
-                continue;
-            }
-            let half = FRAC_PI_2 * charge;
-            arc(
-                &mut gizmos,
-                pos,
-                R_SHIELD * 0.85,
-                centre_angle - half,
-                centre_angle + half,
-                Color::srgba(0.55, 0.85, 1.0, 0.20 + 0.4 * charge),
+        // Shields, when the hull carries any. `fitted` is separate from the
+        // charges because "none fitted" and "both flat" must not look alike.
+        if let Some(shield) = shield.filter(|s| s.fitted()) {
+            let _ = write!(
+                j,
+                ",\"shield\":{{\"fore\":{:.4},\"aft\":{:.4}}}",
+                shield.fraction(ShieldArc::Fore),
+                shield.fraction(ShieldArc::Aft)
             );
         }
+
+        // The gun and tube bands are the player's alone. A wave of enemies each
+        // drawing firing arcs and tube pips would bury the aim beams and lead
+        // diamonds already competing for that space.
+        if is_player {
+            if let Some(bank) = bank {
+                for (is_port, key) in [(true, "port"), (false, "stbd")] {
+                    let side = bank.side(is_port);
+                    // How far through the reload, so the page can sweep an arc
+                    // rather than print a number.
+                    let loaded = if bank.cooldown > 0.0 {
+                        (1.0 - side.timer / bank.cooldown).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    let _ = write!(
+                        j,
+                        ",\"{key}\":{{\"ready\":{},\"arc\":{:.4},\"loaded\":{loaded:.3}}}",
+                        bank.ready(is_port),
+                        bank.arc
+                    );
+                }
+            }
+            if let Some(tubes) = tubes {
+                // `loaded` is fractional: the whole part is tubes ready, the
+                // fraction is the one currently reloading.
+                let ready = tubes.loaded.floor().max(0.0) as u32;
+                let loading = tubes.loaded - tubes.loaded.floor();
+                let _ = write!(
+                    j,
+                    ",\"tubes\":{{\"max\":{},\"ready\":{ready},\"loading\":{loading:.3}}}",
+                    tubes.tubes_max
+                );
+            }
+        }
+        j.push('}');
+    }
+    j.push(']');
+
+    // Only bump the sequence when something actually moved. This is what lets a
+    // still scene skip the script evaluation, and with it the page repaint and
+    // the texture upload behind it.
+    if j != snap.json {
+        snap.json = j;
+        snap.seq = snap.seq.wrapping_add(1);
     }
 }

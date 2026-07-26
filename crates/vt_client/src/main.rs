@@ -92,7 +92,7 @@ mod input;
 use input::{
     player_input, toggle_controls_panel, toggle_fullscreen, toggle_pause, toggle_player_ai,
     track_input_method, AimCursor, Aiming, BroadsideAim, ControlsPanel, InputMethod, Paused,
-    PlayerAi, SailState,
+    PlayerAi, ThrustState,
 };
 
 mod gizmos;
@@ -103,7 +103,6 @@ use gizmos::{
 };
 
 mod status_ring;
-use status_ring::{draw_enemy_status_rings, draw_player_status_ring};
 
 mod effects;
 use effects::{
@@ -266,7 +265,7 @@ fn main() {
         .init_resource::<AimCursor>()
         .init_resource::<BroadsideAim>()
         .init_resource::<ControlsPanel>()
-        .init_resource::<SailState>()
+        .init_resource::<ThrustState>()
         .init_resource::<Hitstop>()
         .add_systems(Startup, setup)
         // Loading lays out the encounter from data. It clears the field on the
@@ -326,10 +325,6 @@ fn main() {
                 draw_boarding,
                 draw_microwarp_range,
                 update_offscreen_markers,
-                // The status rings go last so they sit over the grid rather
-                // than being crossed by it.
-                draw_enemy_status_rings,
-                draw_player_status_ring,
             )
                 .after(SmoothingSet),
         )

@@ -38,9 +38,9 @@ pub const TURN_GAIN: f32 = 2.5;
 /// Throttle while jockeying for a broadside — mostly turning, holding station.
 pub const STATION_THROTTLE: f32 = 0.3;
 /// Fraction of throttle spilled at a full 180° of heading error, to buy turn
-/// rate. Without this an AI at full sail can only manage a turn radius wider
+/// rate. Without this an AI at full thrust can only manage a turn radius wider
 /// than its own engagement range, so it orbits its target forever and never
-/// closes — the same trap a player falls into before learning to drop sail.
+/// closes — the same trap a player falls into before learning to cut thrust.
 pub const TURN_EASE: f32 = 0.75;
 
 /// Decide the [`Helm`] and [`FireOrders`] for one AI ship against one target.
@@ -88,7 +88,7 @@ pub fn desired_helm(
     let turn = (heading_err * tuning.turn_gain).clamp(-1.0, 1.0);
 
     // Spill way to turn. A hull answers the helm far better slowly than at full
-    // sail, so the sharper the turn wanted, the more throttle we give up to get
+    // thrust, so the sharper the turn wanted, the more throttle we give up to get
     // it. Fleeing is exempt: running away is worth a wide turn.
     let throttle = if fleeing {
         cruise
@@ -408,7 +408,7 @@ mod tests {
     }
 
     /// The AI has to make the same speed-versus-agility bargain the player does.
-    /// At full sail a hull's turn radius is wider than its own engagement range,
+    /// At full thrust a hull's turn radius is wider than its own engagement range,
     /// so an AI that never slows just orbits its target forever without closing.
     #[test]
     fn spills_way_to_make_a_hard_turn() {

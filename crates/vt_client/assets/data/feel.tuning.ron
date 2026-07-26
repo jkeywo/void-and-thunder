@@ -127,6 +127,15 @@
         recenter_delay_pad: 0.1,
     ),
 
+    // ---- Status rings (drawn on the plane under each ship) ----
+    rings: (
+        // Opacity of the whole ring layer. Half strength: at full opacity a
+        // charged shield band is a solid disc lying across the hull it belongs
+        // to, and the ship has to stay the thing you are looking at. Applied to
+        // the element as a whole so the bands keep their relative weight.
+        opacity: 0.5,
+    ),
+
     // ---- Controls: pointer sensitivity and stick shaping ----
     controls: (
         // How much of the broadside arc a pixel of mouse motion sweeps. At

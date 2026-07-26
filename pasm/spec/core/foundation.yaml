@@ -497,17 +497,28 @@ entities:
       summary: >-
         A ship's condition drawn on the plane beneath its hull, in concentric
         bands: hull integrity, the two shield arcs, the port and starboard
-        broadside firing arcs (lit when loaded, with a reload sweep), and one pip
-        per torpedo tube. The shield and broadside bands rotate with the hull
+        broadside firing arcs (lit when loaded, with a reload sweep), and one
+        tick per torpedo tube. The bow-relative bands rotate with the hull
         because facing is what they are about. It exists because the screen-edge
         HUD is for glancing at between fights — mid-manoeuvre the player's eyes
         are on their own ship, so that is where the state has to be. Enemies draw
         a reduced ring (hull, and shields if fitted) to keep a wave readable.
+
+        The ring is *drawn by the HTML HUD*, not by gizmos: gather_ring_state
+        does geometry only, projecting each ship and emitting normalised screen
+        vectors for the ring's own axes, which the page feeds to a CSS matrix to
+        lay flat authored artwork onto the ground plane in the camera's exact
+        perspective. That split is what lets the visual layer be authored
+        outside the codebase (see docs/status-ring-design-brief.md). The payload
+        rides its own channel and bumps its sequence only when it actually
+        changed, and the page diffs every write, so a still scene mutates no DOM
+        and the Ultralight texture upload — already gated on the surface's dirty
+        bounds — never fires.
       references: [ship-combat, directional-shields, torpedoes, hud-bridge]
     implementation:
       status: declared
       paths: [crates/vt_client/src/status_ring.rs]
-      symbols: [draw_player_status_ring, draw_enemy_status_rings]
+      symbols: [gather_ring_state, RingSnapshot]
 
   - component: session-lifecycle
     core:

@@ -23,8 +23,8 @@
     - BOTTOM-LEFT : L-shaped frame — port & starboard broadside cooldowns
                     (left-justified, narrow top of the L) above a wider row of
                     torpedo tubes (the foot of the L), with a lock count
-    - BOTTOM-RIGHT: thrusters (boost battery), bullet-time charge and the helm
-                    (sail notch + turn rate) on three lines, warp cooldown
+    - BOTTOM-RIGHT: battery (boost charge), bullet-time charge and the helm
+                    (thrust notch + turn rate) on three lines, warp cooldown
                     gauge on the far right
     - RIGHT EDGE (Tab) : a sliding controls panel with the keybind scheme for
                     the active input method
@@ -44,7 +44,7 @@
     updateHud({
       coords:       { x: -1423, y: 8821 },  // integers
       hull:         0.72,   // 0..1  (1 = intact, 0 = destroyed)
-      boostBattery: 0.45,   // 0..1  (1 = full charge)  -> "THRUSTERS"
+      boostBattery: 0.45,   // 0..1  (1 = full charge)  -> "BATTERY"
       portCd:       { remaining: 0.0, duration: 1.5 },  // seconds; 0 remaining = READY
       starboardCd:  { remaining: 0.9, duration: 1.5 },  // gauge core shows remaining seconds
       microwarpCd:  { remaining: 1.2, duration: 2.0 },  // duration drives the arc fill
@@ -62,7 +62,7 @@
         aft:    0.35         // 0..1 charge of the after bank
       },
       sail: {                // the helm readout
-        helm:    "hud.sail.half", // STRING-TABLE ID, not display text
+        helm:    "hud.helm.half", // STRING-TABLE ID, not display text
         speed:   0.5,        // 0..1 of this hull's top speed
         agility: 0.72        // 0..1 of this hull's best turn rate -> the bar
       },
@@ -77,8 +77,83 @@
       screen:       "playing",  // "start" | "playing" | "gameover" -> which full-screen card
                                 //   is up. "start" also hides the readout clusters, so the
                                 //   title card sits alone over the parked ship.
-      controlsOpen: false    // toggle the keybind side panel (bound to Tab by the host)
+      controlsOpen: false,   // toggle the keybind side panel (bound to Tab by the host)
+      ringOpacity:  0.5      // 0..1, opacity of the WHOLE status-ring layer
     })
+
+  STATUS RINGS (separate channel):
+
+    window.__applyRings('<json array>')
+
+    One entry per visible ship, pushed only on frames where something moved.
+    The host projects each ship through the game camera and sends the geometry;
+    this page only draws.
+
+      [{ id: 12,                  // entity index — stable for a ship's life,
+                                  //   used to pool one element per ship
+         me: true,                // the player's own ship
+         o: [0.51, 0.62],         // ring centre, as a FRACTION of the viewport
+         x: [0.031, 0.009],       // screen image of a world +X offset of one
+                                  //   ring radius, relative to o (also fractions)
+         y: [-0.008, 0.019],      // the same for world MINUS Y (see below)
+         h: -37.5,                // bow direction, in ring-local degrees
+         hull: 0.72,              // 0..1
+         shield: { fore: 0.8, aft: 0.35 },   // omitted entirely if none fitted
+         port: { ready:true, arc:1.178, loaded:1.0 },   // player only; arc is
+         stbd: { ready:false, arc:1.178, loaded:0.4 },  //   the HALF-width, rad
+         tubes:{ max:6, ready:4, loading:0.3 }          // player only
+      }]
+
+  ---- RING CONTRACT (read before restyling the ring artwork) ----------------
+
+    The ring is authored FLAT, as a 200x200 SVG with its centre at (100,100)
+    and an outer radius of 100. It is never drawn flat: the host's matrix lays
+    it onto the ground plane in the game's own perspective, so a circle becomes
+    the correct ellipse and stays correct as the camera pitches and orbits.
+
+    The whole <g class="ring"> is rotated to the bow by script, so everything
+    inside is authored bow-along-local-+x and no band needs its own rotation.
+
+    HOW EACH BAND IS DRIVEN — the bands are radial rather than concentric
+    hairlines, because radial reads through heavy foreshortening and a stack of
+    thin arcs does not:
+
+      .ringHull        a FILLED circle whose r swells 0 -> 42 as hull is lost.
+                       Gains .warn under 50%, .crit under 25%.
+      .ringHullHalo    parked at r 0; moves just outside the core and pulses
+                       (CSS) only while .crit.
+      .ringTrack       the hull envelope at r 42. Static, never written.
+      .ringShieldTrack fixed fore/aft half-circles at r 72. Set once at
+        .fore/.aft    creation, never written again.
+      .ringShieldFore  half-circles whose STROKE-WIDTH grows 0 -> 30 with charge,
+      .ringShieldAft   centred so the band fills outward from r 42 to r 72.
+                       Nothing is drawn at zero.
+      .ringGunTrack    the bank's full firing arc at r 94, from the sim's own
+        .port/.stbd    Broadside::arc — so a retuned hull shows a true arc.
+      .ringGunArc      the loaded portion of it, filling from each side's
+        .port/.stbd    forward edge so the two mirror. Gains .reloading.
+      .ringTubes       emptied and refilled with one <circle class="ringTube">
+                       per tube, in two clusters either side of the bow.
+                       Unloaded tubes gain .empty.
+
+    Consequences for anyone redesigning it:
+
+    * DESIGN IT FORESHORTENED-SAFE. The camera sits ~50 degrees above the
+      plane, so vertical extent is squashed to roughly 60% and can go much
+      further when the view lifts overhead for torpedoes.
+    * NO TEXT. It would be squashed, rotated with the world, and unreadable.
+    * ANGLES ARE CLOCKWISE FROM EAST (SVG convention). Local +x is world +X and
+      local +y is world MINUS Y, which is what keeps artwork from arriving
+      mirrored — and is why the bow chevron and the wear scuffs can be
+      asymmetric without coming out back-to-front.
+    * RADII LIVE IN TWO PLACES: the r= attributes in #ringTemplate and the
+      R_HULL_MAX / R_SH_MIN / R_SH_MAX / R_GUN / R_TUBE constants in the script.
+      Change them together.
+    * EVERY WRITE IS DIFFED. On native this page is rasterised into a texture
+      and the upload is skipped unless the page repainted, so a ring that
+      rewrites unchanged attributes would cost real frame time. Use attrIf and
+      classIf, never unconditional assignment. The crit halo is the single
+      deliberate exception: it animates, and is meant to.
 
   IPC / CLICKABLE CONTROLS:
     Readout-only — NO clickable controls, NO ipc actions emitted.
@@ -251,6 +326,88 @@
   #vignette.crit{ animation:vignettePulse 1.1s ease-in-out infinite; }
   @keyframes vignettePulse{ 0%,100%{ filter:brightness(.75); } 50%{ filter:brightness(1.35); } }
 
+  /* ---- Status rings -------------------------------------------------------
+     Each ring is a flat 200x200 SVG that the host's matrix lays onto the ground
+     plane. `transform-origin:0 0` and `left/top:0` are required: the matrix is
+     absolute screen space, so any offset of our own would be applied twice. */
+  #rings{ position:fixed; inset:0; z-index:4; pointer-events:none; overflow:hidden; }
+  #rings .ringHolder{ position:absolute; left:0; top:0; width:200px; height:200px;
+    transform-origin:0 0; will-change:transform; }
+  #rings svg.ringSvg{ position:absolute; left:0; top:0; overflow:visible; }
+
+  .ring{ fill:none; stroke-linecap:butt; }
+
+  /* deck plate & bezel */
+  .ringBezel{ stroke:#5a4a33; stroke-width:2.5; }
+  .ringBezelIn{ stroke:rgba(255,178,0,.12); stroke-width:1.5; }
+  .ringTicks{ stroke:rgba(255,178,0,.4); stroke-width:4; stroke-dasharray:1.6 11.5; }
+  .ringTickMajor{ stroke:rgba(255,178,0,.55); stroke-width:3; }
+  .ringWear{ stroke:rgba(255,178,0,.07); stroke-width:3; stroke-linecap:round; }
+  .ringBowMark{ stroke:#ffb200; stroke-width:3.4;
+    filter:drop-shadow(0 0 2px rgba(255,178,0,.55)); }
+
+  /* HULL — a filled core that swells as the hull is lost. Script writes r
+     (0 at full health, 42 at zero) and toggles .warn/.crit. */
+  .ringTrack{ stroke:rgba(255,178,0,.16); stroke-width:3; stroke-dasharray:2.5 7; }
+  .ringHull{ fill:rgba(255,178,0,.30); stroke:#ffb200; stroke-width:3.5;
+    filter:drop-shadow(0 0 4px rgba(255,178,0,.45)); }
+  .ringHull.warn{ fill:rgba(255,122,24,.34); stroke:#ff7a18;
+    filter:drop-shadow(0 0 5px rgba(255,122,24,.55)); }
+  .ringHull.crit{ fill:rgba(255,47,20,.42); stroke:#ff2f14; stroke-width:4.5;
+    filter:drop-shadow(0 0 7px rgba(255,47,20,.7)); }
+
+  /* The one deliberate exception to "no animation on the rings": a hull under
+     25% pulses. It costs a repaint per frame, but only in the state where the
+     player most needs the HUD shouting at them, and the low-hull vignette is
+     already pulsing alongside it. Everything else stays static. */
+  .ringHullHalo{ stroke:rgba(255,47,20,0); stroke-width:3; fill:none; }
+  .ringHull.crit ~ .ringHullHalo{ stroke:#ff2f14;
+    animation:ringHaloPulse 1.05s ease-in-out infinite; }
+  @keyframes ringHaloPulse{ 0%,100%{ stroke-opacity:.12 } 50%{ stroke-opacity:.65 } }
+  @media (prefers-reduced-motion: reduce){
+    .ringHull.crit ~ .ringHullHalo{ animation:none; stroke-opacity:.45; }
+  }
+
+  /* SHIELDS — fixed fore/aft halves whose band thickness grows with charge. */
+  .ringShieldTrack{ stroke:rgba(150,215,255,.14); stroke-width:3.5; stroke-dasharray:3 6; }
+  .ringShieldFore, .ringShieldAft{ stroke:#96d7ff; stroke-opacity:.5;
+    filter:drop-shadow(0 0 4px rgba(150,215,255,.5)); }
+
+  /* BROADSIDE COOLDOWN — outermost rim, port and starboard halves. */
+  .ringGunTrack{ stroke:rgba(255,178,0,.13); stroke-width:5; }
+  .ringGunArc{ stroke:#ffb200; stroke-width:5;
+    filter:drop-shadow(0 0 3px rgba(255,178,0,.45)); }
+  .ringGunArc.reloading{ stroke:rgba(140,110,64,.6); stroke-width:3.5; filter:none; }
+
+  /* TORPEDO TUBES — green pips in two clusters, one per side. */
+  .ringTube{ fill:rgba(120,255,190,.85); stroke:#78ffbe; stroke-width:1.6;
+    filter:drop-shadow(0 0 3px rgba(120,255,190,.5)); }
+  .ringTube.empty{ fill:none; stroke:rgba(120,255,190,.22); stroke-width:1.6; filter:none; }
+
+  /* Enemy rings are quieter across the board, and drop every glow filter —
+     a wave of four must not compete with the player's own ship, and the
+     drop-shadows are the expensive part when the page is rasterised. */
+  .ring.them .ringHull{ fill:rgba(255,178,0,.14); stroke:#b07a2c; stroke-width:3; filter:none; }
+  .ring.them .ringHull.warn{ fill:rgba(255,122,24,.16); stroke:#b3561a; filter:none; }
+  .ring.them .ringHull.crit{ fill:rgba(255,47,20,.18); stroke:#b02613; stroke-width:3.5; filter:none; }
+  .ring.them .ringHull.crit ~ .ringHullHalo{ stroke:rgba(255,47,20,.22); animation:none; }
+  .ring.them .ringTrack{ stroke:rgba(255,178,0,.08); }
+  .ring.them .ringShieldFore, .ring.them .ringShieldAft{ stroke:#5f8ba6; filter:none; }
+  .ring.them .ringShieldTrack{ stroke:rgba(150,215,255,.07); }
+  .ring.them .ringGunArc{ stroke:rgba(255,178,0,.3); stroke-width:4; filter:none; }
+  .ring.them .ringGunArc.reloading{ stroke:rgba(140,110,64,.28); stroke-width:3; }
+  .ring.them .ringGunTrack{ stroke:rgba(255,178,0,.07); }
+  .ring.them .ringTube{ fill:rgba(120,255,190,.3); stroke:#4f9c78; filter:none; }
+  .ring.them .ringTube.empty{ stroke:rgba(120,255,190,.12); }
+  .ring.them .ringBezel{ stroke:#3b3125; }
+  .ring.them .ringTicks, .ring.them .ringTickMajor{ stroke:rgba(255,178,0,.18); }
+  .ring.them .ringBowMark{ stroke:rgba(255,178,0,.45); filter:none; }
+
+  /* no shields fitted — band gone entirely, not drawn as two empty arcs */
+  .ring.noShield .ringShieldTrack,
+  .ring.noShield .ringShieldFore,
+  .ring.noShield .ringShieldAft{ display:none; }
+
   /* Shield arcs, hugging the top and bottom screen edges.
      Deliberately at the edges rather than in a readout cluster: the fore bank
      is what stands between you and everything ahead, so it belongs at the top
@@ -330,6 +487,50 @@
 <body>
   <div id="devbg"></div>
 
+  <!-- ============================ STATUS RINGS ============================
+       One ring per ship, laid on the ground plane beneath its hull. The host
+       projects each ship and sends the transform; this layer only draws.
+
+       Sits *below* #hud in z-order so the readout clusters and the title card
+       always win — the ring is world furniture, not chrome.
+       ===================================================================== -->
+  <div id="rings"></div>
+
+  <!-- The ring artwork, cloned once per ship. See RING CONTRACT in the header
+       comment before editing: the geometry here is load-bearing, the styling
+       is not. -->
+  <template id="ringTemplate">
+    <svg class="ringSvg" viewBox="0 0 200 200" width="200" height="200"
+         xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <!-- The whole ring is rotated to the bow by script, so everything inside
+           is authored bow-along-local-+x and needs no per-band rotation. -->
+      <g class="ring" transform="rotate(0 100 100)">
+        <!-- deck plate & bezel -->
+        <circle class="ringBezel" cx="100" cy="100" r="98.5"/>
+        <circle class="ringGunTrack port" cx="100" cy="100" r="94"/>
+        <circle class="ringGunTrack stbd" cx="100" cy="100" r="94"/>
+        <circle class="ringGunArc port" cx="100" cy="100" r="94"/>
+        <circle class="ringGunArc stbd" cx="100" cy="100" r="94"/>
+        <circle class="ringBezelIn" cx="100" cy="100" r="88"/>
+        <circle class="ringTicks" cx="100" cy="100" r="86"/>
+        <line class="ringTickMajor" x1="82" y1="100" x2="90" y2="100"/>
+        <line class="ringTickMajor" x1="110" y1="100" x2="118" y2="100"/>
+        <path class="ringBowMark" d="M84 100 L74 94 M84 100 L74 106" transform="translate(96,0)"/>
+        <path class="ringWear" d="M44 66 C60 52 84 46 106 48"/>
+        <path class="ringWear" d="M146 144 C136 156 120 162 106 163"/>
+        <!-- one pip per torpedo tube, generated by script -->
+        <g class="ringTubes"></g>
+        <circle class="ringShieldTrack fore" cx="100" cy="100" r="72"/>
+        <circle class="ringShieldTrack aft" cx="100" cy="100" r="72"/>
+        <circle class="ringShieldFore" cx="100" cy="100" r="52"/>
+        <circle class="ringShieldAft" cx="100" cy="100" r="52"/>
+        <circle class="ringTrack" cx="100" cy="100" r="42"/>
+        <circle class="ringHull" cx="100" cy="100" r="0"/>
+        <circle class="ringHullHalo" cx="100" cy="100" r="0"/>
+      </g>
+    </svg>
+  </template>
+
   <div id="hud">
     <!-- TOP-LEFT : encounter status -->
     <div class="panel" id="pStatus">
@@ -395,7 +596,7 @@
         <div style="display:flex; align-items:center; gap:14px;">
           <div style="flex:1;">
             <div class="barrow">
-              <span class="lbl" data-i18n="hud.thrust">THRUST</span>
+              <span class="lbl" data-i18n="hud.battery">BATTERY</span>
               <div class="bar" id="boostBar"><div class="fill"></div><div class="segs"></div></div>
               <span class="pct readout" id="boostPct">--%</span>
             </div>
@@ -404,9 +605,9 @@
               <div class="bar" id="aimBar"><div class="fill"></div><div class="segs"></div></div>
               <span class="pct readout" id="aimPct">--%</span>
             </div>
-            <!-- Sail setting. The bar is turn rate, not speed: the number the
-                 player needs while manoeuvring is how well the ship is
-                 answering the helm, and it falls as the sail notch rises. -->
+            <!-- Thrust setting. The bar is turn rate, not speed: the number
+                 the player needs while manoeuvring is how well the ship is
+                 answering the helm, and it falls as the thrust notch rises. -->
             <div class="barrow small">
               <span class="lbl" data-i18n="hud.helm">HELM</span>
               <div class="bar" id="sailBar"><div class="fill"></div><div class="segs"></div></div>
@@ -617,6 +818,7 @@
     el.hud=document.getElementById("hud"); el.start=document.getElementById("start");
     el.career=document.getElementById("career"); el.startPrompt=document.getElementById("startPrompt"); el.vignette=document.getElementById("vignette");
     el.shieldFore=document.getElementById("shieldFore"); el.shieldAft=document.getElementById("shieldAft");
+    el.rings=document.getElementById("rings");
   }
 
   // Last-known run stats, so the end-of-run card can report the run back even
@@ -649,6 +851,13 @@
       el.aimFill.style.transform="scaleX("+a+")"; el.aimPct.textContent=pct(a);
       el.aimBar.classList.toggle("warn", a<=0.2);
     }
+    if(typeof state.ringOpacity==="number"){
+      // The whole layer, not each band: the ring fades as one object so the
+      // weight the design set between hull, shields and guns holds at every
+      // setting.
+      var ro=clamp01(state.ringOpacity).toFixed(3);
+      if(el.rings.style.opacity!==ro) el.rings.style.opacity=ro;
+    }
     if(state.shield) setShields(state.shield);
     if(state.sail){
       // `helm` is a string-table id, not display text — the host sends the key
@@ -656,7 +865,7 @@
       // Authored English if the table has not arrived, matching what every
       // data-i18n element does: the worst case is untranslated, not a marker
       // where the sail setting should be.
-      if(typeof state.sail.helm==="string") el.sailName.textContent=tOr(state.sail.helm, SAIL_FALLBACK[state.sail.helm]);
+      if(typeof state.sail.helm==="string") el.sailName.textContent=tOr(state.sail.helm, HELM_FALLBACK[state.sail.helm]);
       if(typeof state.sail.agility==="number"){
         var ag=clamp01(state.sail.agility);
         el.sailFill.style.transform="scaleX("+ag+")";
@@ -700,6 +909,219 @@
     if(typeof state.screen==="string") showScreen(state.screen);
     if(typeof state.outcome==="string"){ run.outcome=state.outcome; showOutcome(run.outcome); }
   };
+
+  // ---------- status rings ----------
+  //
+  // The host sends one entry per visible ship. Everything here is written to
+  // survive being called every frame on a machine that repaints the whole page
+  // into a texture: nothing is allocated per frame, elements are pooled by ship
+  // id, and *every* write is guarded by a comparison. If a ship has not moved
+  // and its state has not changed, this touches no DOM at all, the page does
+  // not repaint, and the host skips the pixel copy.
+  //
+  // The bands are radial rather than concentric hairlines because the ring is
+  // seen heavily foreshortened: the hull swells outward from the centre as it
+  // is lost, shields thicken as they charge, and only the outermost rim is a
+  // true arc.
+  var ringPool = {};          // ship id -> pooled elements + last-written values
+  var ringSeen = {};          // ids present in the current payload
+
+  // Radii. These must match the r= attributes in #ringTemplate.
+  var R_HULL_MAX = 42,        // hull core at zero health
+      R_SH_MIN   = 42,        // shield band inner edge, pinned to the hull envelope
+      R_SH_MAX   = 72,        // shield band outer edge at full charge
+      R_GUN      = 94,        // broadside rim
+      R_TUBE     = 80;        // torpedo pip ring
+  var TAU = Math.PI * 2;
+  var DEG = 180 / Math.PI;
+
+  // Set an attribute only if it actually differs. This is the whole
+  // no-repaint-when-idle mechanism — reading back is far cheaper than the
+  // rasterise-and-upload that a needless write would trigger.
+  function attrIf(node, name, value){
+    var v = String(value);
+    if(node.getAttribute(name) !== v) node.setAttribute(name, v);
+  }
+  function classIf(node, name, on){
+    if(node.classList.contains(name) !== !!on) node.classList.toggle(name, !!on);
+  }
+
+  // An arc of `deg` degrees beginning at `startDeg`, drawn on a full circle with
+  // dashes. Angles are clockwise from east, matching SVG's own convention.
+  function setArc(node, r, startDeg, deg){
+    var c = TAU * r;
+    var len = Math.max(0, Math.min(360, deg)) / 360 * c;
+    attrIf(node, "r", r.toFixed(2));
+    attrIf(node, "stroke-dasharray", len.toFixed(2) + " " + (c - len + 1).toFixed(2));
+    attrIf(node, "stroke-dashoffset", (-(startDeg / 360) * c).toFixed(2));
+  }
+
+  function makeRing(id){
+    var frag = document.getElementById("ringTemplate").content.cloneNode(true);
+    var svg = frag.querySelector("svg.ringSvg");
+    var holder = document.createElement("div");
+    holder.className = "ringHolder";
+    holder.appendChild(svg);
+    document.getElementById("rings").appendChild(holder);
+    var g = svg.querySelector(".ring");
+    var entry = {
+      holder: holder, g: g, last: {}, tubeCount: -1,
+      parts: {
+        hull:   g.querySelector(".ringHull"),
+        halo:   g.querySelector(".ringHullHalo"),
+        foreTk: g.querySelector(".ringShieldTrack.fore"),
+        aftTk:  g.querySelector(".ringShieldTrack.aft"),
+        fore:   g.querySelector(".ringShieldFore"),
+        aft:    g.querySelector(".ringShieldAft"),
+        portTk: g.querySelector(".ringGunTrack.port"),
+        stbdTk: g.querySelector(".ringGunTrack.stbd"),
+        port:   g.querySelector(".ringGunArc.port"),
+        stbd:   g.querySelector(".ringGunArc.stbd"),
+        tubes:  g.querySelector(".ringTubes")
+      }
+    };
+    // The shield tracks are fixed fore/aft halves — set once, never again.
+    setArc(entry.parts.foreTk, R_SH_MAX, -90, 180);
+    setArc(entry.parts.aftTk,  R_SH_MAX,  90, 180);
+    ringPool[id] = entry;
+    return entry;
+  }
+
+  window.__applyRings = function(json){
+    var list;
+    try { list = JSON.parse(json); } catch(e){ return; }
+    if(!Array.isArray(list)) return;
+
+    for(var k in ringSeen) delete ringSeen[k];
+
+    for(var i = 0; i < list.length; i++){
+      var r = list[i];
+      var e = ringPool[r.id] || makeRing(r.id);
+      ringSeen[r.id] = true;
+      var last = e.last, p = e.parts;
+
+      // --- placement -------------------------------------------------------
+      // Normalised -> viewport pixels. The host cannot do this itself: the
+      // native transport is sized in physical pixels and the web overlay in CSS
+      // pixels, so only the page knows the right multiplier.
+      var W = window.innerWidth, H = window.innerHeight;
+      var ox = r.o[0] * W,  oy = r.o[1] * H;
+      var exx = r.x[0] * W, exy = r.x[1] * H;
+      var eyx = r.y[0] * W, eyy = r.y[1] * H;
+      // Map the authored box (200x200, centre 100,100, radius 100) so that
+      // local +100x follows world +X and local +100y follows world -Y.
+      var m = "matrix(" + (exx / 100).toFixed(4) + "," + (exy / 100).toFixed(4) + "," +
+                          (eyx / 100).toFixed(4) + "," + (eyy / 100).toFixed(4) + "," +
+                          (ox - exx - eyx).toFixed(2) + "," + (oy - exy - eyy).toFixed(2) + ")";
+      if(last.m !== m){ e.holder.style.transform = m; last.m = m; }
+
+      // The bow. Rotating the whole group is why nothing below has to know the
+      // heading: one attribute write turns every band at once, instead of
+      // recomputing seven arcs whenever the ship yaws.
+      if(last.h !== r.h){
+        attrIf(e.g, "transform", "rotate(" + r.h.toFixed(2) + " 100 100)");
+        last.h = r.h;
+      }
+      if(last.me !== r.me){ classIf(e.g, "them", !r.me); last.me = r.me; }
+
+      // --- hull: damage swells outward from the middle ----------------------
+      if(last.hull !== r.hull){
+        var rh = (1 - r.hull) * R_HULL_MAX;
+        classIf(p.hull, "warn", r.hull < 0.5 && r.hull >= 0.25);
+        classIf(p.hull, "crit", r.hull < 0.25);
+        attrIf(p.hull, "r", rh.toFixed(2));
+        // The halo sits just outside the swollen core and pulses via CSS while
+        // critical; parked at zero otherwise so it costs nothing.
+        attrIf(p.halo, "r", r.hull < 0.25 ? (rh + 6).toFixed(2) : "0");
+        last.hull = r.hull;
+      }
+
+      // --- shields: fixed halves that thicken with charge -------------------
+      var hasShield = !!r.shield;
+      if(last.hasShield !== hasShield){
+        classIf(e.g, "noShield", !hasShield);
+        last.hasShield = hasShield;
+      }
+      if(hasShield){
+        if(last.fore !== r.shield.fore){ setShieldBand(p.fore, r.shield.fore, -90); last.fore = r.shield.fore; }
+        if(last.aft  !== r.shield.aft ){ setShieldBand(p.aft,  r.shield.aft,   90); last.aft  = r.shield.aft;  }
+      }
+
+      // --- broadsides (player only) -----------------------------------------
+      // Starboard fills aft from its forward edge and port fills forward from
+      // its own, so the two sides mirror rather than both sweeping one way.
+      setGun(p.stbd, p.stbdTk, r.stbd, last, "stbd",  90, 1);
+      setGun(p.port, p.portTk, r.port, last, "port", 270, -1);
+
+      // --- torpedo tubes (player only) --------------------------------------
+      if(r.tubes){
+        if(e.tubeCount !== r.tubes.max){ buildTubePips(p.tubes, r.tubes.max); e.tubeCount = r.tubes.max; }
+        if(last.tubes !== r.tubes.ready){ paintTubePips(p.tubes, r.tubes.ready); last.tubes = r.tubes.ready; }
+      }
+    }
+
+    // Retire rings for ships that are gone. Removing the element rather than
+    // hiding it keeps the pool from growing across a long run of waves.
+    for(var id in ringPool){
+      if(!ringSeen[id]){ ringPool[id].holder.remove(); delete ringPool[id]; }
+    }
+  };
+
+  // A shield bank: always a half-circle, but its band grows outward from the
+  // hull envelope as it charges. Nothing is drawn at zero, so a flat bank reads
+  // as bare deck between the dashed track and the hull — which is the point.
+  function setShieldBand(node, frac, startDeg){
+    var w = (R_SH_MAX - R_SH_MIN) * Math.max(0, Math.min(1, frac));
+    if(w <= 0.01){ attrIf(node, "stroke-dasharray", "0 9999"); return; }
+    attrIf(node, "stroke-width", w.toFixed(2));
+    setArc(node, R_SH_MIN + w / 2, startDeg, 180);
+  }
+
+  // `dir` is +1 to fill aft from the forward edge, -1 to fill forward from it.
+  function setGun(node, track, gun, last, key, centreDeg, dir){
+    if(!gun){
+      if(last[key] !== "off"){
+        attrIf(node, "stroke-dasharray", "0 9999");
+        attrIf(track, "stroke-dasharray", "0 9999");
+        last[key] = "off";
+      }
+      return;
+    }
+    // The sim's own half-arc, so the rim shows exactly where a volley can go
+    // even if a hull is retuned to a wider or narrower bank.
+    var span = gun.arc * 2 * DEG;
+    var frac = gun.ready ? 1 : gun.loaded;
+    var v = span.toFixed(2) + ":" + frac.toFixed(3) + ":" + (gun.ready ? 1 : 0);
+    if(last[key] === v) return;
+    last[key] = v;
+    var hw = span / 2;
+    var len = span * frac;
+    var fwd = dir > 0 ? centreDeg - hw : centreDeg + hw;   // the forward edge
+    setArc(track, R_GUN, centreDeg - hw, span);
+    setArc(node,  R_GUN, dir > 0 ? fwd : fwd - len, len);
+    classIf(node, "reloading", !gun.ready);
+  }
+
+  // Pips in two clusters either side of the bow, alternating so a magazine of
+  // any size stays balanced.
+  function buildTubePips(group, count){
+    while(group.firstChild) group.removeChild(group.firstChild);
+    for(var i = 0; i < count; i++){
+      var side = (i % 2 === 0) ? 1 : -1;          // +1 starboard, -1 port
+      var a = side * (22 + Math.floor(i / 2) * 13) * Math.PI / 180;
+      var c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      c.setAttribute("class", "ringTube");
+      c.setAttribute("cx", (100 + R_TUBE * Math.cos(a)).toFixed(2));
+      c.setAttribute("cy", (100 + R_TUBE * Math.sin(a)).toFixed(2));
+      c.setAttribute("r", "4");
+      group.appendChild(c);
+    }
+  }
+
+  function paintTubePips(group, ready){
+    var kids = group.childNodes;
+    for(var i = 0; i < kids.length; i++) classIf(kids[i], "empty", i >= ready);
+  }
 
   // ---------- shield arcs ----------
   // `fitted` false means this hull carries no shields at all, which is not the
@@ -795,9 +1217,9 @@
   // For text chosen at runtime, which has no markup to hold an authored
   // fallback the way a data-i18n element does.
   function tOr(id, fallback){ return STRINGS[id] !== undefined ? STRINGS[id] : (fallback || "!!MISSING STRING!!"); }
-  var SAIL_FALLBACK = {
-    "hud.sail.backing":"BACKING", "hud.sail.all_stop":"ALL STOP",
-    "hud.sail.half":"HALF SAIL",  "hud.sail.full":"FULL SAIL"
+  var HELM_FALLBACK = {
+    "hud.helm.reverse":"REVERSE",   "hud.helm.none":"NO THRUST",
+    "hud.helm.half":"HALF THRUST",  "hud.helm.full":"FULL THRUST"
   };
   // The interpolating lookup. Named tf() to match the fleet's Rust trf! —
   // the audit reads these call shapes, so a row reached only with arguments
@@ -895,7 +1317,7 @@
     el.controlsRows.innerHTML=rows.map(function(r){
       return '<div class="row"><span class="key">'+r[0]+'</span><span class="desc">'+r[1]+'</span></div>';
     }).join("")
-      + '<div class="row"><span class="key"></span><span class="desc">'+t("controls.sail_tip")+'</span></div>';
+      + '<div class="row"><span class="key"></span><span class="desc">'+t("controls.thrust_tip")+'</span></div>';
   }
 
   // cd may be { remaining, duration } (seconds) or a bare 0..1 fraction (legacy).
@@ -940,8 +1362,8 @@
 
   function startDemo(){
     var s={ coords:{x:-1423,y:8821}, hull:0.86, boostBattery:0.62, aimBattery:1.0,
-      sail:{helm:"hud.sail.half", speed:0.5, agility:0.72},
-      shield:{fitted:true, fore:0.8, aft:0.35},
+      sail:{helm:"hud.helm.half", speed:0.5, agility:0.72},
+      shield:{fitted:true, fore:0.8, aft:0.35}, ringOpacity:0.5,
       portCd:{remaining:0,duration:1.5}, starboardCd:{remaining:0.9,duration:1.5}, microwarpCd:{remaining:0,duration:2.0},
       torpedoes:[{state:"ready"},{state:"ready"},{state:"loading",progress:0.4},{state:"empty"}], torpedoLocks:0,
       wave:2, enemiesRemaining:3, plunder:1, paused:false, aiPilot:false,
@@ -954,7 +1376,7 @@
       if(cd.remaining<=0){ if(Math.random()<refire) cd.remaining=cd.duration; }
       else cd.remaining=Math.max(0,cd.remaining-dt);
     }
-    var vx=3, vy=-2, boosting=false;
+    var vx=3, vy=-2, boosting=false, demoT=0;
     setInterval(function(){
       if(Math.random()<.05) vx=Math.random()*8-4;
       if(Math.random()<.05) vy=Math.random()*8-4;
@@ -974,6 +1396,26 @@
       });
       if(Math.random()<.01) s.enemiesRemaining=Math.max(0,s.enemiesRemaining-1);
       window.updateHud(s);
+      // Rings, so a standalone preview shows them without the game running.
+      // The fake camera is a 50-degree tilt: x stays horizontal, y squashes and
+      // drops, which is what the real projection does at the resting pitch.
+      demoT += 0.1;
+      var tilt = 0.62, spin = demoT*0.35;
+      function ring(id, me, cx, cy, rad, hull, fore, aft){
+        return { id:id, me:me,
+          o:[cx, cy],
+          x:[ rad*Math.cos(spin), rad*Math.sin(spin)*tilt*1.8 ],
+          y:[ -rad*Math.sin(spin), rad*Math.cos(spin)*tilt*1.8 ],
+          h:(-demoT*20)%360, hull:hull,
+          shield:{fore:fore, aft:aft},
+          port:{ready:true,  arc:1.178, loaded:1.0},
+          stbd:{ready:false, arc:1.178, loaded:(demoT*0.3)%1},
+          tubes:{max:6, ready:4, loading:(demoT*0.5)%1} };
+      }
+      var mine = ring(1, true, 0.5, 0.55, 0.055, s.hull, 0.85, 0.4);
+      var theirs = ring(2, false, 0.34, 0.42, 0.032, 0.45, 0.2, 0.9);
+      delete theirs.port; delete theirs.stbd; delete theirs.tubes;
+      window.__applyRings(JSON.stringify([mine, theirs]));
     },100);
   }
 
@@ -990,8 +1432,8 @@
     placeDeadPixels(document.querySelector("#pLeft .screen"),  [{x:.22,y:.8,c:"#000"},{x:.6,y:.85,c:"#000"}]);
     placeDeadPixels(document.querySelector("#pRight .screen"), [{x:.5,y:.7,c:"var(--amb)"}]);
     window.updateHud({ coords:{x:-1423,y:8821}, hull:0.72, boostBattery:0.45, aimBattery:1.0,
-      sail:{helm:"hud.sail.half", speed:0.5, agility:0.72},
-      shield:{fitted:true, fore:0.8, aft:0.35},
+      sail:{helm:"hud.helm.half", speed:0.5, agility:0.72},
+      shield:{fitted:true, fore:0.8, aft:0.35}, ringOpacity:0.5,
       portCd:{remaining:0,duration:1.5}, starboardCd:{remaining:0.9,duration:1.5}, microwarpCd:{remaining:1.2,duration:2.0},
       torpedoes:[{state:"ready"},{state:"loading",progress:0.4},{state:"ready"},{state:"empty"}], torpedoLocks:0,
       wave:1, enemiesRemaining:3, plunder:0, paused:false, aiPilot:false,

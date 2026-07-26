@@ -216,6 +216,30 @@ impl Default for CameraFeel {
     }
 }
 
+/// The status rings drawn on the plane beneath each ship.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
+#[serde(default)]
+pub struct RingFeel {
+    /// Opacity of the whole ring layer, `0..1`.
+    ///
+    /// Applied to the entire element rather than to each band, so the ring
+    /// fades as one object and the relative weight the designer set between
+    /// hull, shields and guns is preserved at every setting. Per-band alpha
+    /// would let the bands drift out of balance as it was turned down.
+    ///
+    /// It is a whole-layer knob because the ring sits *over the ship it
+    /// describes*: at full strength a charged shield band is a solid disc
+    /// across the hull, and how much of the ship you are willing to lose to
+    /// the readout is a taste call, not a constant.
+    pub opacity: f32,
+}
+
+impl Default for RingFeel {
+    fn default() -> Self {
+        Self { opacity: 0.5 }
+    }
+}
+
 /// How the controls read: pointer sensitivity and stick shaping.
 ///
 /// These were compiled in, which meant the two numbers a player is most likely
@@ -330,6 +354,7 @@ pub struct FeelTuning {
     pub impact: ImpactFeel,
     pub camera: CameraFeel,
     pub controls: ControlFeel,
+    pub rings: RingFeel,
     pub trails: TrailFeel,
 }
 

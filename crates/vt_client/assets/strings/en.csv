@@ -4,14 +4,14 @@ hud.stat.enemies,HUD stat label above the count of enemies still flying,ENEMIES
 hud.stat.plunder,HUD stat label above the count of hulks boarded,PLUNDER
 hud.hull,HUD label on the hull integrity bar,HULL
 hud.torpedo_tubes,HUD label on the torpedo tube row; lock pips follow it,TORPEDO TUBES
-hud.thrust,HUD label on the boost battery gauge,THRUST
+hud.battery,"HUD label on the boost battery gauge. Named for the battery rather than for boost because the same charge is expected to power more than one system later; also keeps ""thrust"" free for the helm ladder, which sits one line below it.",BATTERY
 hud.aim,HUD label on the aim/heading gauge,AIM
 hud.warp,HUD label on the microwarp readout,WARP
-hud.helm,HUD label on the sail-setting readout,HELM
-hud.sail.backing,"Sail notch: sails backed, driving the ship slowly astern. Very short — it sits in a small readout box.",BACKING
-hud.sail.all_stop,Sail notch: no way on. The handiest setting — this is where a ship pivots.,ALL STOP
-hud.sail.half,Sail notch: the default cruising setting. A good compromise of speed and turn rate.,HALF SAIL
-hud.sail.full,"Sail notch: maximum speed, and the worst turn rate of the four.",FULL SAIL
+hud.helm,HUD label on the thrust-setting readout,HELM
+hud.helm.reverse,"Thrust notch: driving astern, at a fraction of forward power. Very short — it sits in a small readout box.",REVERSE
+hud.helm.none,Thrust notch: drives stopped. The handiest setting — this is where a ship pivots.,NO THRUST
+hud.helm.half,Thrust notch: the default cruising setting. A good compromise of speed and turn rate.,HALF THRUST
+hud.helm.full,"Thrust notch: maximum speed, and the worst turn rate of the four.",FULL THRUST
 hud.ready,"Shown on a weapon or drive readout when it is off cooldown. Very short — it replaces a countdown in the same small box.",RDY
 hud.broadside.port,Label under the port broadside readout. The arrow points outboard.,◄ PORT
 hud.broadside.starboard,Label under the starboard broadside readout. The arrow points outboard.,STBD ►
@@ -28,9 +28,9 @@ outcome.cleared.sub,Follows the tally when the run was won,The lanes are yours.
 outcome.again.keyboard,Follows the tally; tells a keyboard player how to start another run,Press R to sail again.
 outcome.again.gamepad,"Follows the tally; names A, the same button that started the run, rather than a key the pad player is not holding.",Press A to sail again.
 controls.title,Heading of the controls panel toggled with Tab,Controls
-controls.kbm.throttle,"Keyboard control description for W and S. They step a four-notch sail ladder rather than holding a throttle open, so the wording has to say ""set"" and not ""hold"".","Make / take in sail — backing, all stop, half, full"
+controls.kbm.throttle,"Keyboard control description for W and S. They step a four-notch thrust ladder rather than holding a throttle open, so the wording has to say ""set"" and not ""hold"".","Set thrust — reverse, none, half, full"
 controls.kbm.steer,Keyboard control description for A and D,Turn to port / starboard
-controls.sail_tip,"A one-line hint under the controls list teaching the core manoeuvre: a ship answers the helm far better slowly than at full sail.",Take in sail to turn tighter — full sail is fastest and stiffest
+controls.thrust_tip,"A one-line hint under the controls list teaching the core manoeuvre: a ship answers the helm far better slowly than at full thrust.",Cut thrust to turn tighter — full thrust is fastest and stiffest
 controls.kbm.broadsides,Keyboard control description for the mouse buttons,Aim & fire port / starboard broadside
 controls.pad.throttle_steer,Pad control description for the left stick,Throttle / steer
 controls.pad.aim_camera,Pad control description for the right stick,Aim & camera

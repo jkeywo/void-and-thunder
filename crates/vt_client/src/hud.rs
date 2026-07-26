@@ -29,8 +29,12 @@ use vt_sim::prelude::{
 };
 
 use crate::bullet_time::AimBattery;
-use crate::input::{ControlsPanel, InputMethod, Paused, PlayerAi, SailState};
+use crate::camera::camera_orbit;
+use crate::data::FeelTuning;
+use crate::input::{ControlsPanel, InputMethod, Paused, PlayerAi, ThrustState};
+use crate::interpolate::SmoothingSet;
 use crate::session::GameState;
+use crate::status_ring::{gather_ring_state, RingSnapshot};
 use crate::Player;
 
 /// Mounts HUD state-gathering plus the transport systems for this target.
@@ -39,13 +43,26 @@ pub struct HudBridgePlugin;
 impl Plugin for HudBridgePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HudSnapshot>()
+            .init_resource::<RingSnapshot>()
             .add_message::<HudAction>()
-            .add_systems(Update, gather_hud_state);
+            // The rings are projected through the camera, so they have to be
+            // gathered after the camera has been placed for this frame *and*
+            // after the fixed-step poses have been interpolated — otherwise the
+            // ring lags its own ship by up to one sim step, which reads as the
+            // ring sliding around underneath it.
+            .add_systems(
+                Update,
+                (gather_hud_state, gather_ring_state)
+                    .after(SmoothingSet)
+                    .after(camera_orbit),
+            );
 
         // Web: mount the iframe overlay and push snapshots into it.
         #[cfg(target_arch = "wasm32")]
-        app.add_systems(Startup, web::init)
-            .add_systems(Update, web::push.after(gather_hud_state));
+        app.add_systems(Startup, web::init).add_systems(
+            Update,
+            web::push.after(gather_hud_state).after(gather_ring_state),
+        );
 
         // Native desktop: render the HTML HUD with Ultralight into a Bevy texture
         // (opt-in). `init` retries until the window exists, then builds once;
@@ -53,8 +70,12 @@ impl Plugin for HudBridgePlugin {
         #[cfg(all(not(target_arch = "wasm32"), feature = "native-html-hud"))]
         {
             info!("HUD: native Ultralight transport ENABLED (native-html-hud feature)");
-            app.add_systems(Update, native::init)
-                .add_systems(Update, native::render_hud.after(gather_hud_state));
+            app.add_systems(Update, native::init).add_systems(
+                Update,
+                native::render_hud
+                    .after(gather_hud_state)
+                    .after(gather_ring_state),
+            );
         }
     }
 }
@@ -94,7 +115,8 @@ pub enum HudAction {
 /// (`"kbm"`/`"gamepad"`), `outcome`
 /// (`"in_progress"`/`"cleared"`/`"destroyed"`), `screen`
 /// (`"start"`/`"playing"`/`"gameover"` — which full-screen card, if any, the HUD
-/// shows), and `controlsOpen` (bool). All weapon components are optional so a
+/// shows), `controlsOpen` (bool) and `ringOpacity` (0..1, applied to the whole
+/// status-ring layer). All weapon components are optional so a
 /// partial loadout still reports what it has (the HUD retains last-known values
 /// for the rest).
 #[allow(clippy::too_many_arguments)]
@@ -122,7 +144,8 @@ fn gather_hud_state(
     method: Res<InputMethod>,
     battery: Res<AimBattery>,
     controls_panel: Res<ControlsPanel>,
-    sail: Res<SailState>,
+    feel: Res<FeelTuning>,
+    thrust: Res<ThrustState>,
     tuning: Res<SimTuning>,
     state: Res<State<GameState>>,
     career: Res<crate::progress::Career>,
@@ -195,6 +218,12 @@ fn gather_hud_state(
 
     j.push_str(&format!(",\"controlsOpen\":{}", controls_panel.open));
 
+    // Ring opacity rides the snapshot rather than the per-frame ring payload:
+    // it is authored, so it changes when a designer drags it and never
+    // otherwise, and putting it in the hot channel would mean re-sending a
+    // constant sixty times a second.
+    j.push_str(&format!(",\"ringOpacity\":{:.3}", feel.rings.opacity));
+
     // ---- The player ship's own readouts ----
     //
     // Absent before the run starts and after it ends. The HUD retains the last
@@ -226,7 +255,7 @@ fn gather_hud_state(
             ",\"shield\":{{\"fitted\":{fitted},\"fore\":{fore:.4},\"aft\":{aft:.4}}}"
         ));
 
-        // Sail setting and what it is costing. `helm` is the notch the keyboard
+        // Thrust setting and what it is costing. `helm` is the notch the keyboard
         // ladder is on; `speed` and `agility` are what the ship is actually
         // doing, so a pad player (who never touches the ladder) still sees the
         // speed-for-turn-rate bargain they are making. `agility` is normalised
@@ -245,7 +274,7 @@ fn gather_hud_state(
         };
         j.push_str(&format!(
             ",\"sail\":{{\"helm\":\"{}\",\"speed\":{speed_frac:.4},\"agility\":{agility_frac:.4}}}",
-            sail.string_key()
+            thrust.string_key()
         ));
 
         if let Some(b) = boost {
@@ -340,6 +369,11 @@ mod web {
         /// still gets its text rather than falling back to authored English.
         #[wasm_bindgen(js_namespace = window, js_name = vtStrings)]
         fn vt_strings(json: &str);
+
+        /// Push the per-frame ring transforms. Separate from the snapshot
+        /// because it changes on almost every frame while the snapshot does not.
+        #[wasm_bindgen(js_namespace = window, js_name = vtHudRings)]
+        fn vt_hud_rings(json: &str);
     }
 
     /// Mount the overlay once, at startup, and hand it the strings.
@@ -348,11 +382,20 @@ mod web {
         vt_strings(crate::strings::TABLE_JSON);
     }
 
-    /// Push the latest snapshot when it changes.
-    pub fn push(snap: Res<HudSnapshot>, mut last: Local<u64>) {
+    /// Push the latest snapshot and ring transforms, each only when it changed.
+    pub fn push(
+        snap: Res<HudSnapshot>,
+        rings: Res<super::RingSnapshot>,
+        mut last: Local<u64>,
+        mut last_rings: Local<u64>,
+    ) {
         if snap.seq != *last {
             *last = snap.seq;
             vt_hud_apply(&snap.json);
+        }
+        if rings.seq != *last_rings {
+            *last_rings = rings.seq;
+            vt_hud_rings(&rings.json);
         }
     }
 }
@@ -391,6 +434,9 @@ mod native {
         width: usize,
         height: usize,
         last_seq: u64,
+        /// Sequence of the last ring payload evaluated, so an unmoving scene
+        /// skips the script entirely.
+        last_ring_seq: u64,
     }
 
     /// Set once init has hard-failed, so it stops retrying.
@@ -533,6 +579,7 @@ mod native {
             width: w,
             height: h,
             last_seq: 0,
+            last_ring_seq: 0,
         });
     }
 
@@ -541,6 +588,7 @@ mod native {
     pub fn render_hud(
         hud: Option<NonSendMut<HudUl>>,
         snap: Res<HudSnapshot>,
+        rings: Res<super::RingSnapshot>,
         mut images: ResMut<Assets<Image>>,
     ) {
         let Some(mut hud) = hud else {
@@ -555,6 +603,18 @@ mod native {
             let _ = hud
                 .view
                 .evaluate_script(&format!("window.__applyHud('{esc}')"));
+        }
+
+        // Skipped entirely on a frame where nothing moved. That matters more
+        // than it looks: the page only repaints when something writes to the
+        // DOM, and the pixel copy at the bottom of this function is gated on
+        // that repaint — so a still scene costs nothing all the way down.
+        if rings.seq != hud.last_ring_seq {
+            hud.last_ring_seq = rings.seq;
+            let esc = js_string_literal(&rings.json);
+            let _ = hud
+                .view
+                .evaluate_script(&format!("window.__applyRings('{esc}')"));
         }
 
         hud.renderer.render();
