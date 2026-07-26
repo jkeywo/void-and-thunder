@@ -295,9 +295,9 @@
     <div class="panel" id="pStatus">
       <canvas class="art"></canvas>
       <div class="screen"><div class="scanband"></div><div class="glow"><div class="ui" style="justify-content:center; gap:4px;">
-        <div class="statrow"><span class="lbl">WAVE</span><span class="readout" id="stWave">1</span></div>
-        <div class="statrow"><span class="lbl">ENEMIES</span><span class="readout" id="stEnemies">0</span></div>
-        <div class="statrow"><span class="lbl">PLUNDER</span><span class="readout" id="stPlunder">0</span></div>
+        <div class="statrow"><span class="lbl" data-i18n="hud.stat.wave">WAVE</span><span class="readout" id="stWave">1</span></div>
+        <div class="statrow"><span class="lbl" data-i18n="hud.stat.enemies">ENEMIES</span><span class="readout" id="stEnemies">0</span></div>
+        <div class="statrow"><span class="lbl" data-i18n="hud.stat.plunder">PLUNDER</span><span class="readout" id="stPlunder">0</span></div>
         <div class="badges">
           <span class="badge" id="bdgPaused">‖ PAUSED</span>
           <span class="badge" id="bdgAi">◆ AI PILOT</span>
@@ -311,7 +311,7 @@
       <canvas class="art"></canvas>
       <div class="screen"><div class="scanband"></div><div class="glow"><div class="ui" style="justify-content:center;">
         <div class="barrow">
-          <span class="lbl">HULL</span>
+          <span class="lbl" data-i18n="hud.hull">HULL</span>
           <div class="bar" id="hullBar"><div class="fill"></div><div class="segs"></div></div>
           <span class="pct readout" id="hullPct">--%</span>
         </div>
@@ -334,15 +334,15 @@
         <div class="gauges" style="height:78px; flex:0 0 auto;">
           <div class="gauge" id="port">
             <svg viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="18"></circle><circle class="arc" cx="24" cy="24" r="18"></circle></svg>
-            <div class="core readout">RDY</div><div class="gl">◄ PORT</div>
+            <div class="core readout" data-i18n="hud.ready">RDY</div><div class="gl" data-i18n="hud.broadside.port">◄ PORT</div>
           </div>
           <div class="gauge" id="stbd">
             <svg viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="18"></circle><circle class="arc" cx="24" cy="24" r="18"></circle></svg>
-            <div class="core readout">RDY</div><div class="gl">STBD ►</div>
+            <div class="core readout" data-i18n="hud.ready">RDY</div><div class="gl" data-i18n="hud.broadside.starboard">STBD ►</div>
           </div>
         </div>
         <div class="torps" style="margin-top:2px;">
-          <span class="lbl">TORPEDO TUBES <span id="tubeLocks"></span></span>
+          <span class="lbl"><span data-i18n="hud.torpedo_tubes">TORPEDO TUBES</span> <span id="tubeLocks"></span></span>
           <div class="tuberow" id="tubes"></div>
         </div>
       </div></div></div>
@@ -355,19 +355,19 @@
         <div style="display:flex; align-items:center; gap:14px;">
           <div style="flex:1;">
             <div class="barrow">
-              <span class="lbl">THRUST</span>
+              <span class="lbl" data-i18n="hud.thrust">THRUST</span>
               <div class="bar" id="boostBar"><div class="fill"></div><div class="segs"></div></div>
               <span class="pct readout" id="boostPct">--%</span>
             </div>
             <div class="barrow small">
-              <span class="lbl">AIM</span>
+              <span class="lbl" data-i18n="hud.aim">AIM</span>
               <div class="bar" id="aimBar"><div class="fill"></div><div class="segs"></div></div>
               <span class="pct readout" id="aimPct">--%</span>
             </div>
           </div>
           <div class="gauge warp" id="warp" style="flex:0 0 auto;">
             <svg viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="18"></circle><circle class="arc" cx="24" cy="24" r="18"></circle></svg>
-            <div class="core readout">RDY</div><div class="gl">WARP</div>
+            <div class="core readout" data-i18n="hud.ready">RDY</div><div class="gl" data-i18n="hud.warp">WARP</div>
           </div>
         </div>
       </div></div></div>
@@ -380,9 +380,9 @@
   <!-- Title card (center), up before the run starts -->
   <div id="start">
     <div>
-      <div class="title">Void &amp; Thunder</div>
+      <div class="title" data-i18n="title.name">Void &amp; Thunder</div>
       <div class="rule"></div>
-      <div class="tagline">Piracy in the Settled Dark</div>
+      <div class="tagline" data-i18n="title.tagline">Piracy in the Settled Dark</div>
       <div class="prompt" id="startPrompt">Press Space to cast off</div>
       <div class="hint">[T] test range &nbsp;·&nbsp; [Tab] controls</div>
     </div>
@@ -398,7 +398,7 @@
 
   <!-- Controls side panel (Tab to toggle) -->
   <div id="controls">
-    <h2>Controls</h2>
+    <h2 data-i18n="controls.title">Controls</h2>
     <div id="controlsRows"></div>
     <div class="hint">[Tab] close</div>
   </div>
@@ -653,15 +653,51 @@
 
   function setStartPrompt(method){
     el.startPrompt.textContent = method === "gamepad"
-      ? "Press A to cast off"
-      : "Press Space to cast off";
+      ? t("title.prompt.gamepad")
+      : t("title.prompt.keyboard");
   }
 
   // Which button the end-of-run card should name. A pad player is told to press
   // A — the same button that started the run — not a key they aren't holding.
   function sailAgain(method){
-    return method === "gamepad" ? "Press A to sail again." : "Press R to sail again.";
+    return method === "gamepad" ? t("outcome.again.gamepad") : t("outcome.again.keyboard");
   }
+
+  // ---------- strings ----------
+  // Authored text lives in assets/strings/en.csv; Rust parses it and writes
+  // the JSON fetched here, so this page can never disagree with Rust about a
+  // row. Until it arrives (or if it never does), every data-i18n element
+  // keeps its authored English, so the worst case is untranslated, not blank.
+  var STRINGS = {};
+  function t(id){ return STRINGS[id] !== undefined ? STRINGS[id] : "!!MISSING STRING!!"; }
+  // The interpolating lookup. Named tf() to match the fleet's Rust trf! —
+  // the audit reads these call shapes, so a row reached only with arguments
+  // is only visible to it under the agreed name.
+  function tf(id, args){
+    var s = t(id);
+    for (var k in args) s = s.split("{"+k+"}").join(args[k]);
+    return s;
+  }
+  function applyStrings(){
+    var nodes = document.querySelectorAll("[data-i18n]");
+    for (var i=0; i<nodes.length; i++){
+      var id = nodes[i].getAttribute("data-i18n");
+      if (STRINGS[id] !== undefined) nodes[i].textContent = STRINGS[id];
+    }
+    // A panel already drawn with the fallback must be drawn again.
+    controlsMethod = null;
+  }
+  // The bridge hands these over when the client has them; the fetch is the
+  // fallback for a page opened on its own.
+  window.__applyStrings = function(json){
+    try { STRINGS = JSON.parse(json); applyStrings(); } catch (e) {}
+  };
+  // The client may have handed the table over before this script existed.
+  if (typeof window.vtStringsDrain === "function") window.vtStringsDrain();
+  fetch("assets/strings/en.json")
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){ if (j && !Object.keys(STRINGS).length) { STRINGS = j; applyStrings(); } })
+    .catch(function(){});
 
   // ---------- encounter outcome banner ----------
   function showOutcome(outcome){
@@ -670,55 +706,59 @@
     el.outcome.classList.toggle("lost", outcome==="destroyed");
     // "Wave reached", not "waves cleared" — on a loss the last wave was still
     // standing when the ship went down.
-    var tally = "Wave " + run.wave + " · " + run.plunder + " plundered. ";
+    // Whole rows, joined by spaces — never a sentence assembled from
+    // fragments, so word order stays the translator's to choose.
+    var tally = tf("outcome.tally", { wave: run.wave, plunder: run.plunder });
     var again = sailAgain(run.method);
     if(outcome==="cleared"){
-      el.outcomeHeadline.textContent="All Waves Cleared";
-      el.outcomeSub.textContent=tally+"The lanes are yours. "+again;
+      el.outcomeHeadline.textContent=t("outcome.cleared.headline");
+      el.outcomeSub.textContent=[tally, t("outcome.cleared.sub"), again].join(" ");
     } else if(outcome==="destroyed"){
-      el.outcomeHeadline.textContent="Ship Lost To The Void";
-      el.outcomeSub.textContent=tally+again;
+      el.outcomeHeadline.textContent=t("outcome.destroyed.headline");
+      el.outcomeSub.textContent=[tally, again].join(" ");
     }
   }
 
   // ---------- controls side panel ----------
-  var CONTROLS={
-    kbm: [
-      ["W / S","Throttle forward / reverse"],
-      ["A / D","Turn to port / starboard"],
-      ["LMB / RMB","Aim & fire port / starboard broadside"],
-      ["Q","EMP — hold to track and drain a target"],
-      ["Ctrl","Torpedoes — hold to lock, release to volley"],
-      ["Shift","Microwarp — hold to place, release to warp"],
-      ["Space","Boost"],
-      ["C","Brace — cut incoming damage"],
-      ["B","Board — hold alongside a crippled hulk"],
-      ["T","Toggle AI pilot"],
-      ["P / Esc","Pause"],
-      ["R","Restart after a run ends"],
-      ["F11","Toggle fullscreen"],
-      ["Tab","Toggle this panel"],
-    ],
-    gamepad: [
-      ["Left Stick","Throttle / steer"],
-      ["Right Stick","Aim & camera"],
-      ["LT / RT","Aim & fire port / starboard broadside"],
-      ["X","EMP — hold to track and drain a target"],
-      ["LB","Torpedoes — hold to lock, release to volley"],
-      ["RB","Microwarp — hold to place, release to warp"],
-      ["A","Boost — also starts and restarts a run"],
-      ["Y","Brace — cut incoming damage"],
-      ["B","Board — hold alongside a crippled hulk"],
-      ["Start","Pause / restart after a run ends"],
-      ["F11","Toggle fullscreen"],
-      ["Tab","Toggle this panel"],
-    ],
-  };
+  // Built at render time, not at load: the strings arrive asynchronously, so
+  // a table evaluated when this script parses would bake in the fallback.
+  function controlsFor(method){
+    if(method==="gamepad") return [
+      ["Left Stick",t("controls.pad.throttle_steer")],
+      ["Right Stick",t("controls.pad.aim_camera")],
+      ["LT / RT",t("controls.pad.broadsides")],
+      ["X",t("controls.emp")],
+      ["LB",t("controls.torpedoes")],
+      ["RB",t("controls.microwarp")],
+      ["A",t("controls.boost.gamepad")],
+      ["Y",t("controls.brace")],
+      ["B",t("controls.board")],
+      ["Start",t("controls.pause_restart")],
+      ["F11",t("controls.fullscreen")],
+      ["Tab",t("controls.panel")],
+    ];
+    return [
+      ["W / S",t("controls.kbm.throttle")],
+      ["A / D",t("controls.kbm.steer")],
+      ["LMB / RMB",t("controls.kbm.broadsides")],
+      ["Q",t("controls.emp")],
+      ["Ctrl",t("controls.torpedoes")],
+      ["Shift",t("controls.microwarp")],
+      ["Space",t("controls.boost")],
+      ["C",t("controls.brace")],
+      ["B",t("controls.board")],
+      ["T",t("controls.ai_pilot")],
+      ["P / Esc",t("controls.pause")],
+      ["R",t("controls.restart")],
+      ["F11",t("controls.fullscreen")],
+      ["Tab",t("controls.panel")],
+    ];
+  }
   var controlsMethod=null;
   function renderControls(method){
     if(method===controlsMethod) return;
     controlsMethod=method;
-    var rows=CONTROLS[method]||CONTROLS.kbm;
+    var rows=controlsFor(method);
     el.controlsRows.innerHTML=rows.map(function(r){
       return '<div class="row"><span class="key">'+r[0]+'</span><span class="desc">'+r[1]+'</span></div>';
     }).join("");
@@ -736,7 +776,7 @@
     }
     arc.style.strokeDashoffset=(C*(1-frac)).toFixed(2);
     var ready=frac<=0.001; box.classList.toggle("ready",ready);
-    core.textContent = ready ? "RDY" : (secs!=null ? fmtSecs(secs) : Math.ceil(frac*9)+"");
+    core.textContent = ready ? t("hud.ready") : (secs!=null ? fmtSecs(secs) : Math.ceil(frac*9)+"");
   }
   // Compact seconds readout: one decimal under 10s ("1.4"), whole seconds above.
   function fmtSecs(s){ return s>=10 ? Math.ceil(s)+"" : s.toFixed(1); }
@@ -746,7 +786,7 @@
     for(var i=0;i<list.length;i++){
       var t=nodes[i], d=list[i]||{}, fill=t.querySelector(".tfill"), g=t.querySelector(".tg");
       t.classList.remove("ready","loading","empty");
-      if(d.state==="ready"){ t.classList.add("ready"); fill.style.transform="scaleY(1)"; g.textContent="RDY"; }
+      if(d.state==="ready"){ t.classList.add("ready"); fill.style.transform="scaleY(1)"; g.textContent=t("hud.ready"); }
       else if(d.state==="loading"){ t.classList.add("loading"); var p=clamp01(d.progress||0);
         fill.style.transform="scaleY("+p+")"; g.textContent=Math.round(p*100)+"%"; }
       else{ t.classList.add("empty"); fill.style.transform="scaleY(0)"; g.textContent="--"; }

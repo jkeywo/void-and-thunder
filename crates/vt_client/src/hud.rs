@@ -279,11 +279,18 @@ mod web {
         /// Hand a JSON snapshot to the iframe's `__applyHud` (no-op until it loads).
         #[wasm_bindgen(js_namespace = window, js_name = vtHudApply)]
         fn vt_hud_apply(json: &str);
+
+        /// Hand the string table to the overlay. The page also fetches it, so
+        /// this is the belt to that braces: a page served without its assets
+        /// still gets its text rather than falling back to authored English.
+        #[wasm_bindgen(js_namespace = window, js_name = vtStrings)]
+        fn vt_strings(json: &str);
     }
 
-    /// Mount the overlay once, at startup.
+    /// Mount the overlay once, at startup, and hand it the strings.
     pub fn init() {
         vt_hud_init();
+        vt_strings(crate::strings::TABLE_JSON);
     }
 
     /// Push the latest snapshot when it changes.

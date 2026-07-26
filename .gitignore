@@ -53,3 +53,7 @@ target-verify/
 
 # Live perf captures (perf-capture feature) — runtime debris, never committed
 perf-capture.json
+
+# Generated from assets/strings/en.csv by build.rs — the JSON the HUD page
+# fetches. Rust is the only thing that parses the CSV; this is its output.
+crates/vt_client/assets/strings/en.json

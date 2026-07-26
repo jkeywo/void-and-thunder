@@ -56,6 +56,9 @@ use dev::{game_has_input, game_has_pointer, DevPanelPlugin};
 mod audio;
 use audio::SfxPlugin;
 
+// Player-facing text: the authored table, and the tr!/trf! lookups.
+pub mod strings;
+
 // Live gameplay profiling — a presentation-side frame sampler writing a
 // vellum-perf capture on exit. The collector never touches the sim.
 #[cfg(feature = "perf-capture")]
@@ -212,6 +215,10 @@ fn main() {
     // (see src/audio.rs). Native keeps Bevy audio.
     #[cfg(target_arch = "wasm32")]
     let default_plugins = default_plugins.disable::<bevy::audio::AudioPlugin>();
+
+    // Before anything can look a string up, so a miss in startup is logged
+    // like any other.
+    strings::install_miss_reporting();
 
     App::new()
         .add_plugins(default_plugins)

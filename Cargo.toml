@@ -43,7 +43,10 @@ ron = "0.12"
 vellum-corpus = { git = "https://github.com/jkeywo/vellum", rev = "61cf506e096854a3e05e1a19369deb0901d298d5", features = ["json"] }
 vellum-perf = { git = "https://github.com/jkeywo/vellum", rev = "61cf506e096854a3e05e1a19369deb0901d298d5", features = ["json"] }
 vellum-editor = { git = "https://github.com/jkeywo/vellum", rev = "61cf506e096854a3e05e1a19369deb0901d298d5" }
-vellum-compose = { git = "https://github.com/jkeywo/vellum", rev = "61cf506e096854a3e05e1a19369deb0901d298d5" }
+vellum-compose = { git = "https://github.com/jkeywo/vellum", rev = "bd75275e8d3c9a0490a51492a385d56e55418211" }
+# The localisation pipeline: the table the HUD and the client read, and the
+# audit that keeps ids and rows in step across Rust, JS and HTML.
+vellum-strings = { git = "https://github.com/jkeywo/vellum", rev = "bd75275e8d3c9a0490a51492a385d56e55418211" }
 
 # Faster iterative builds: our code lightly optimised, dependencies fully optimised.
 [profile.dev]

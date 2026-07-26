@@ -18,11 +18,19 @@ vt_sim.workspace = true
 # Tuning/scenario data is RON (see assets/data/ and src/data/).
 ron.workspace = true
 serde.workspace = true
+# Player-facing text: the table is embedded here and served to the HUD page
+# as JSON by build.rs.
+vellum-strings.workspace = true
 # Live gameplay profiling (src/perf.rs), behind `perf-capture`.
 vellum-perf = { workspace = true, optional = true }
 # The design panel's mechanism: the reflection walker, the field-descriptor
 # type, and the sparse save path (which is vellum-compose underneath).
 vellum-editor = { workspace = true, optional = true }
+
+[build-dependencies]
+# build.rs parses en.csv with the same parser the client uses, and writes the
+# JSON the HUD page fetches.
+vellum-strings.workspace = true
 
 [dev-dependencies]
 # The scenario corpus (src/data/corpus.rs): every authored scenario driven

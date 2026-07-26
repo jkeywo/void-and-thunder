@@ -1,0 +1,42 @@
+id,context,text
+hud.stat.wave,HUD stat label above the current wave number,WAVE
+hud.stat.enemies,HUD stat label above the count of enemies still flying,ENEMIES
+hud.stat.plunder,HUD stat label above the count of hulks boarded,PLUNDER
+hud.hull,HUD label on the hull integrity bar,HULL
+hud.torpedo_tubes,HUD label on the torpedo tube row; lock pips follow it,TORPEDO TUBES
+hud.thrust,HUD label on the boost battery gauge,THRUST
+hud.aim,HUD label on the aim/heading gauge,AIM
+hud.warp,HUD label on the microwarp readout,WARP
+hud.ready,"Shown on a weapon or drive readout when it is off cooldown. Very short — it replaces a countdown in the same small box.",RDY
+hud.broadside.port,Label under the port broadside readout. The arrow points outboard.,◄ PORT
+hud.broadside.starboard,Label under the starboard broadside readout. The arrow points outboard.,STBD ►
+title.name,The game's name on the title card,Void & Thunder
+title.tagline,One line under the title naming the setting,Piracy in the Settled Dark
+title.prompt.keyboard,Title card prompt for a keyboard player,Press Space to cast off
+title.prompt.gamepad,Title card prompt for a pad player; A is also the boost button,Press A to cast off
+outcome.cleared.headline,End-of-run headline when every wave was cleared,All Waves Cleared
+outcome.destroyed.headline,End-of-run headline when the player's ship was destroyed,Ship Lost To The Void
+outcome.tally,"End-of-run tally. Wave *reached*, not cleared — on a loss the last wave was still standing when the ship went down.",Wave {wave} · {plunder} plundered.
+outcome.cleared.sub,Follows the tally when the run was won,The lanes are yours.
+outcome.again.keyboard,Follows the tally; tells a keyboard player how to start another run,Press R to sail again.
+outcome.again.gamepad,"Follows the tally; names A, the same button that started the run, rather than a key the pad player is not holding.",Press A to sail again.
+controls.title,Heading of the controls panel toggled with Tab,Controls
+controls.kbm.throttle,Keyboard control description for W and S,Throttle forward / reverse
+controls.kbm.steer,Keyboard control description for A and D,Turn to port / starboard
+controls.kbm.broadsides,Keyboard control description for the mouse buttons,Aim & fire port / starboard broadside
+controls.pad.throttle_steer,Pad control description for the left stick,Throttle / steer
+controls.pad.aim_camera,Pad control description for the right stick,Aim & camera
+controls.pad.broadsides,Pad control description for the triggers,Aim & fire port / starboard broadside
+controls.emp,Control description for the EMP weapon,EMP — hold to track and drain a target
+controls.torpedoes,Control description for the torpedo bay,"Torpedoes — hold to lock, release to volley"
+controls.microwarp,Control description for the microwarp drive,"Microwarp — hold to place, release to warp"
+controls.boost,Control description for the boost drive,Boost
+controls.boost.gamepad,"Control description for boost on a pad, where the same button also starts a run",Boost — also starts and restarts a run
+controls.brace,Control description for bracing,Brace — cut incoming damage
+controls.board,Control description for boarding a crippled ship,Board — hold alongside a crippled hulk
+controls.ai_pilot,Control description for handing the ship to the AI pilot,Toggle AI pilot
+controls.pause,Control description for pausing,Pause
+controls.restart,Control description for restarting after a run ends,Restart after a run ends
+controls.pause_restart,"Control description on a pad, where one button both pauses and restarts",Pause / restart after a run ends
+controls.fullscreen,Control description for fullscreen,Toggle fullscreen
+controls.panel,Control description for this very panel,Toggle this panel

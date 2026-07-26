@@ -188,6 +188,20 @@
         window.vtHudApply = function (json) {
           if (typeof window.__applyHud === 'function') window.__applyHud(json);
         };
+        // The string table, handed over by the client. The overlay's own
+        // script defines the real vtStrings when it loads; until then hold
+        // the table so nothing is lost to the race.
+        var pendingStrings = null;
+        window.vtStrings = function (json) {
+          if (typeof window.__applyStrings === 'function') window.__applyStrings(json);
+          else pendingStrings = json;
+        };
+        window.vtStringsDrain = function () {
+          if (pendingStrings !== null && typeof window.__applyStrings === 'function') {
+            window.__applyStrings(pendingStrings);
+            pendingStrings = null;
+          }
+        };
       })();
     </script>
   </head>
