@@ -116,6 +116,7 @@ fn gather_hud_state(
     controls_panel: Res<ControlsPanel>,
     tuning: Res<SimTuning>,
     state: Res<State<GameState>>,
+    career: Res<crate::progress::Career>,
     mut snap: ResMut<HudSnapshot>,
 ) {
     let screen = match state.get() {
@@ -146,6 +147,15 @@ fn gather_hud_state(
         encounter.enemies_remaining
     ));
     j.push_str(&format!(",\"plunder\":{}", plunder.ships_boarded));
+
+    // The career, for the title card. Emitted every frame like everything else
+    // here rather than pushed on change: the snapshot is already a whole-state
+    // message, and a second channel for four integers would be two things to
+    // keep in step.
+    j.push_str(&format!(
+        ",\"career\":{{\"runs\":{},\"victories\":{},\"deepestWave\":{},\"plunder\":{}}}",
+        career.runs, career.victories, career.deepest_wave, career.ships_boarded
+    ));
 
     j.push_str(&format!(",\"paused\":{}", paused.0));
     j.push_str(&format!(",\"aiPilot\":{}", player_ai.on));

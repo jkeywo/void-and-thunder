@@ -47,6 +47,9 @@ vellum-compose = { git = "https://github.com/jkeywo/vellum", rev = "9b9c4b0618fb
 # The localisation pipeline: the table the HUD and the client read, and the
 # audit that keeps ids and rows in step across Rust, JS and HTML.
 vellum-strings = { git = "https://github.com/jkeywo/vellum", rev = "9b9c4b0618fb8bc1afda214eac02e17e1e7ddffe" }
+# The Progress half only: v&t can never record a Run, so the `run` feature
+# (and vellum-replay behind it) is never compiled here.
+vellum-save = { git = "https://github.com/jkeywo/vellum", rev = "c064decdcfa07d5082105064c10a6a58a56b2857" }
 
 # Faster iterative builds: our code lightly optimised, dependencies fully optimised.
 [profile.dev]

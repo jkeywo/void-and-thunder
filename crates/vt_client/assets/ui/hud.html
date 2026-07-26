@@ -253,6 +253,12 @@
     text-shadow:0 0 8px var(--amb-glow); animation:promptBlink 1.6s ease-in-out infinite; }
   @keyframes promptBlink{ 0%,100%{ opacity:.35; } 50%{ opacity:1; } }
   #start .hint{ margin-top:10px; font-size:9px; letter-spacing:2px; color:rgba(255,178,0,.35); }
+  /* The career line. Empty until a run has been finished, and it collapses to
+     nothing rather than reserving a gap — a first-time player should see the
+     card they always saw. */
+  #start .career{ margin-top:22px; font-size:10px; letter-spacing:2px;
+    color:rgba(255,220,170,.45); min-height:0; }
+  #start .career:empty{ display:none; }
 
   /* the readout clusters step aside for the title card */
   #hud.hidden{ opacity:0; }
@@ -383,6 +389,7 @@
       <div class="title" data-i18n="title.name">Void &amp; Thunder</div>
       <div class="rule"></div>
       <div class="tagline" data-i18n="title.tagline">Piracy in the Settled Dark</div>
+      <div class="career" id="career"></div>
       <div class="prompt" id="startPrompt">Press Space to cast off</div>
       <div class="hint">[T] test range &nbsp;·&nbsp; [Tab] controls</div>
     </div>
@@ -561,7 +568,7 @@
     el.outcome=document.getElementById("outcome"); el.outcomeHeadline=document.getElementById("outcomeHeadline"); el.outcomeSub=document.getElementById("outcomeSub");
     el.controls=document.getElementById("controls"); el.controlsRows=document.getElementById("controlsRows");
     el.hud=document.getElementById("hud"); el.start=document.getElementById("start");
-    el.startPrompt=document.getElementById("startPrompt"); el.vignette=document.getElementById("vignette");
+    el.career=document.getElementById("career"); el.startPrompt=document.getElementById("startPrompt"); el.vignette=document.getElementById("vignette");
   }
 
   // Last-known run stats, so the end-of-run card can report the run back even
@@ -569,7 +576,7 @@
   // outcome and input method are kept here too so either can be re-rendered
   // when the *other* changes — pick up a pad on the game-over screen and the
   // card has to stop telling you to press R.
-  var run={wave:1, plunder:0, outcome:"in_progress", method:"kbm"};
+  var run={wave:1, plunder:0, outcome:"in_progress", method:"kbm", career:null};
 
   window.updateHud=function(state){
     if(!state) return;
@@ -624,6 +631,7 @@
       setStartPrompt(run.method);
       showOutcome(run.outcome);   // re-label the end-of-run card for the new device
     }
+    if(state.career){ run.career=state.career; setCareer(run.career); }
     if(typeof state.controlsOpen==="boolean") el.controls.classList.toggle("open", state.controlsOpen);
     if(typeof state.screen==="string") showScreen(state.screen);
     if(typeof state.outcome==="string"){ run.outcome=state.outcome; showOutcome(run.outcome); }
@@ -649,6 +657,19 @@
     // The host stops sending hull once the ship is gone, so clear it here or a
     // dying gasp would still be bleeding behind the end-of-run card.
     if(screen !== "playing"){ el.vignette.style.opacity = 0; el.vignette.classList.remove("crit"); }
+  }
+
+  // The career tally, from the save. Whole rows joined by a separator rather
+  // than a sentence built from pieces, same as the end-of-run banner.
+  function setCareer(career){
+    if(!career || !career.runs){ el.career.textContent=""; return; }
+    var parts=[tf("title.career", {
+      runs: career.runs, wave: career.deepestWave, plunder: career.plunder
+    })];
+    if(career.victories>0){
+      parts.push(tf("title.career.victories", { victories: career.victories }));
+    }
+    el.career.textContent=parts.join(" · ");
   }
 
   function setStartPrompt(method){
@@ -686,6 +707,7 @@
     }
     // A panel already drawn with the fallback must be drawn again.
     controlsMethod = null;
+    setCareer(run.career);
   }
   // The bridge hands these over when the client has them; the fetch is the
   // fallback for a page opened on its own.

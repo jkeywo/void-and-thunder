@@ -57,6 +57,7 @@ mod audio;
 use audio::SfxPlugin;
 
 // Player-facing text: the authored table, and the tr!/trf! lookups.
+pub mod progress;
 pub mod strings;
 
 // Live gameplay profiling — a presentation-side frame sampler writing a
@@ -243,6 +244,7 @@ fn main() {
         .add_plugins(SpaceSkyboxPlugin)
         .add_plugins(StarPlugin)
         .add_plugins(HudBridgePlugin)
+        .add_plugins(crate::progress::ProgressPlugin)
         .add_plugins(TrailPlugin)
         .init_state::<GameState>()
         .init_resource::<CameraRig>()

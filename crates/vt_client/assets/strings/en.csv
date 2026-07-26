@@ -12,6 +12,8 @@ hud.broadside.port,Label under the port broadside readout. The arrow points outb
 hud.broadside.starboard,Label under the starboard broadside readout. The arrow points outboard.,STBD ►
 title.name,The game's name on the title card,Void & Thunder
 title.tagline,One line under the title naming the setting,Piracy in the Settled Dark
+title.career,"Career line on the title card, shown only once a run has been finished. Wave *reached*, matching the end-of-run tally.",{runs} sailed · deepest wave {wave} · {plunder} plundered
+title.career.victories,"Follows the career line when at least one run has been won. Kept a separate row so a player with no wins is not shown a zero.",{victories} won
 title.prompt.keyboard,Title card prompt for a keyboard player,Press Space to cast off
 title.prompt.gamepad,Title card prompt for a pad player; A is also the boost button,Press A to cast off
 outcome.cleared.headline,End-of-run headline when every wave was cleared,All Waves Cleared
