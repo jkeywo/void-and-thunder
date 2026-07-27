@@ -19,6 +19,7 @@ use crate::components::{
 };
 use crate::drive::{BoostDrive, MicrowarpDrive};
 use crate::emp::EmpWeapon;
+use crate::pilot::PilotBrain;
 use crate::shield::Shield;
 use crate::torpedo::{TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
 use crate::world::SystemBounds;
@@ -103,7 +104,9 @@ impl ShipLoadout {
 }
 
 /// The one true ship constructor. Every ship is the same entity shape: base
-/// hull + the full [`ShipLoadout`] + a [`PilotIntent`] its controller writes.
+/// hull + the full [`ShipLoadout`] + a [`PilotIntent`] its controller writes
+/// (alongside the [`PilotBrain`] the utility AI thinks in, empty until an
+/// [`AiController`] with the kit enabled takes the ship over).
 /// The player adds [`Protagonist`]; an AI adds [`AiController`]. Which one drives
 /// the ship — the client or the sim's AI — is the *only* difference.
 ///
@@ -130,7 +133,7 @@ pub fn ship_bundle(
         ),
         Helm::default(),
         FireOrders::default(),
-        PilotIntent::default(),
+        (PilotIntent::default(), PilotBrain::default()),
         Brace::default(),
         Hull::new(hull_max),
         // `charged` is what turns the authored *fit* into live state: the file

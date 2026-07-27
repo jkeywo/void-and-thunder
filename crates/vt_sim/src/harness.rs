@@ -11,12 +11,13 @@ use bevy_ecs::prelude::*;
 use bevy_time::Time;
 use std::time::Duration;
 
-use crate::ai::{ai_abilities_system, ai_system};
+use crate::ai::ai_system;
 use crate::collide::{landmark_system, ram_system};
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
 use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
+use crate::pilot::pilot_system;
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plunder};
 use crate::shield::{shield_refit_system, shield_regen_system};
 use crate::ship::movement_system;
@@ -63,7 +64,7 @@ impl Harness {
             (
                 (drain_hits, drain_destroyed, drain_emp).chain(),
                 director_system,
-                (ai_system, ai_abilities_system).chain(),
+                (ai_system, pilot_system).chain(),
                 (
                     battery_system,
                     torpedo_reload_system,

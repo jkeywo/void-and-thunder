@@ -55,6 +55,8 @@ pub struct AiTuning {
     pub warp_prime: f32,
     /// Torpedo locks the AI builds before releasing a volley.
     pub torpedo_min_volley: u32,
+    /// What the utility pilot values.
+    pub pilot: PilotTuning,
 }
 
 impl Default for AiTuning {
@@ -67,6 +69,126 @@ impl Default for AiTuning {
             surround_count: SURROUND_COUNT as u32,
             warp_prime: WARP_PRIME,
             torpedo_min_volley: TORPEDO_MIN_VOLLEY,
+            pilot: PilotTuning::default(),
+        }
+    }
+}
+
+/// What the utility pilot ([`pilot`](crate::pilot)) values — the weights and
+/// shape numbers its cost functions are built from.
+///
+/// Unlike the rest of the tuning these have no constant of their own: they are
+/// not a rule of the world that some system also reads, they *are* the brain's
+/// judgement, and the only sensible way to arrive at them is to fly the ship and
+/// move them. The `w_*` weights are the headline dials — each scales one action's
+/// whole score, so raising `w_ram` makes a bolder pilot and nothing else. The
+/// rest shape a single curve and are documented where they bite.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
+#[serde(default)]
+pub struct PilotTuning {
+    /// Weight on working the beam — the yardstick the others are read against.
+    pub w_broadside: f32,
+    /// Weight on standing off with torpedoes.
+    pub w_torpedo: f32,
+    /// Weight on turning the bow to work the EMP. Deliberately well under
+    /// `w_broadside`: the emitter has twice the reach of the guns, so a pilot
+    /// that valued it evenly would fight every engagement bow-on and never fire
+    /// a broadside.
+    pub w_emp: f32,
+    /// Weight on ramming.
+    pub w_ram: f32,
+    /// Weight on breaking off to take a prize.
+    pub w_board: f32,
+    /// Weight on spending the microwarp.
+    pub w_microwarp: f32,
+    /// Weight on running. Above 1.0 so a decision to live can outbid a perfectly
+    /// good broadside.
+    pub w_disengage: f32,
+    /// Bonus the action already being flown adds to its own score, so a pilot
+    /// commits to a manoeuvre instead of twitching between two that happen to be
+    /// scoring within a whisker of each other.
+    pub commit_bonus: f32,
+    /// How interesting the beam still is with both banks reloading — above zero,
+    /// because a ship between volleys still wants to be presenting a side.
+    pub reloading_interest: f32,
+    /// Floor on the torpedo score as the magazine empties: at zero stores the
+    /// bay is worth this fraction of a full one, so the last torpedoes are held
+    /// for something worth spending them on.
+    pub scarcity_floor: f32,
+    /// How interesting the EMP is while the ship has guns or tubes ready. The
+    /// gap between this and 1.0 is the whole "weapon of opportunity" idea.
+    pub emp_busy_interest: f32,
+    /// Throttle held while jockeying to keep a target under the emitter.
+    pub emp_throttle: f32,
+    /// Hull fraction below which the pilot will not trade rams — the damage is
+    /// symmetric, so a wounded ship is losing that exchange.
+    pub ram_hull_floor: f32,
+    /// How much a prize is worth to a pilot in no particular need of one.
+    pub board_base: f32,
+    /// Extra pull toward a prize per point of missing hull (boarding repairs).
+    pub board_repair_pull: f32,
+    /// Extra pull toward a prize per point of missing stores (boarding resupplies).
+    pub board_resupply_pull: f32,
+    /// Threat level at which boarding is off the table. A boarding is seconds
+    /// sitting still, which is not something to do with company.
+    pub board_safe_threat: f32,
+    /// Threat level that reads as "surrounded" for the escape jump.
+    pub warp_escape_threat: f32,
+    /// How interesting it is to spend the drive merely crossing the field, as a
+    /// fraction of how interesting it is to escape with it.
+    pub warp_reposition_interest: f32,
+    /// Where the torpedo stance holds station, as a fraction of the bay's reach.
+    pub torpedo_standoff: f32,
+    /// How close a hostile must be, as a fraction of gun reach, before bracing
+    /// between volleys is worth it.
+    pub brace_range_frac: f32,
+    /// What a point of shield is worth against a point of hull when the pilot
+    /// asks how much punishment it has left. Under 1.0 because shields are
+    /// directional and regenerate: a full bank is real protection, but only on
+    /// the side it faces, so it should not read as flatly equivalent to plate.
+    pub shield_worth: f32,
+    /// How strongly the shields pull on the choice of facing. This is what turns
+    /// "my bow bank is flat and still being shot at" into "show them the stern";
+    /// at zero the pilot ignores its arcs entirely.
+    pub shield_bias: f32,
+    /// Floor under the facing multiplier, so presenting the worse side is a
+    /// penalty rather than a veto — sometimes ramming is still the answer.
+    pub presentation_floor: f32,
+    /// Seconds a thumb takes to cross from one face button to another, during
+    /// which neither is pressed. The pad has four of them and one thumb, so this
+    /// is the price of changing your mind about which — and the reason the pilot
+    /// cannot boost, brace and EMP in the same breath.
+    pub thumb_travel: f32,
+}
+
+impl Default for PilotTuning {
+    fn default() -> Self {
+        Self {
+            w_broadside: 1.0,
+            w_torpedo: 0.95,
+            w_emp: 0.7,
+            w_ram: 0.9,
+            w_board: 1.1,
+            w_microwarp: 1.4,
+            w_disengage: 1.8,
+            commit_bonus: 0.15,
+            reloading_interest: 0.55,
+            scarcity_floor: 0.35,
+            emp_busy_interest: 0.35,
+            emp_throttle: 0.35,
+            ram_hull_floor: 0.5,
+            board_base: 0.35,
+            board_repair_pull: 0.45,
+            board_resupply_pull: 0.4,
+            board_safe_threat: 1.0,
+            warp_escape_threat: 2.0,
+            warp_reposition_interest: 0.6,
+            torpedo_standoff: 0.8,
+            brace_range_frac: 0.6,
+            shield_worth: 0.7,
+            shield_bias: 0.35,
+            presentation_floor: 0.4,
+            thumb_travel: 0.2,
         }
     }
 }

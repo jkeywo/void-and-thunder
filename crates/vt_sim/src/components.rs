@@ -331,9 +331,6 @@ pub struct AiController {
     /// microwarp) via [`PilotIntent`], not just the broadside. Enemies leave it
     /// off; the player-piloting AI turns it on.
     pub use_abilities: bool,
-    /// Transient: how long the AI has been priming a microwarp (internal).
-    #[serde(skip)]
-    pub warp_prime: f32,
 }
 
 impl Default for AiController {
@@ -344,7 +341,6 @@ impl Default for AiController {
             flee_hull_frac: 0.25,
             aim_at_target: false,
             use_abilities: false,
-            warp_prime: 0.0,
         }
     }
 }

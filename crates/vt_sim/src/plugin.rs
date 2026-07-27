@@ -8,12 +8,13 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use crate::ai::{ai_abilities_system, ai_system};
+use crate::ai::ai_system;
 use crate::collide::{landmark_system, ram_system};
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
 use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
+use crate::pilot::pilot_system;
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plunder};
 use crate::shield::{shield_refit_system, shield_regen_system};
 use crate::ship::movement_system;
@@ -88,7 +89,7 @@ impl Plugin for SimPlugin {
             .add_systems(FixedUpdate, director_system.in_set(SimSet::Director))
             .add_systems(
                 FixedUpdate,
-                (ai_system, ai_abilities_system).chain().in_set(SimSet::Ai),
+                (ai_system, pilot_system).chain().in_set(SimSet::Ai),
             )
             .add_systems(
                 FixedUpdate,

@@ -125,7 +125,6 @@ static FIELDS: SpecTable = SpecTable::new(&[
         "flee_hull_frac",
         FieldSpec::config(0.0, 1.0),
     ),
-    ("AiController", "warp_prime", FieldSpec::live()),
     // SimTuning — whole-sim rules.
     (
         "SimTuning",
@@ -206,7 +205,6 @@ mod tests {
             ("Broadside", "starboard"),
             ("TorpedoBay", "loaded"),
             ("BoostDrive", "battery"),
-            ("AiController", "warp_prime"),
             ("EmpDefense", "damage"),
         ] {
             assert_eq!(

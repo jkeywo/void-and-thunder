@@ -25,6 +25,7 @@ pub mod drive;
 pub mod emp;
 pub mod events;
 pub mod harness;
+pub mod pilot;
 pub mod piracy;
 pub mod plugin;
 pub mod shield;
@@ -54,6 +55,7 @@ pub mod prelude {
     pub use crate::emp::{EmpBolt, EmpWeapon};
     pub use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
     pub use crate::harness::Harness;
+    pub use crate::pilot::{Action, Contact, Kit, PilotBrain, Plan, Situation};
     pub use crate::piracy::{
         BoardIntent, Boarding, Plunder, BOARD_DWELL, BOARD_RANGE, CRIPPLE_THRESHOLD,
     };
@@ -65,7 +67,7 @@ pub mod prelude {
         ShipLoadout, SpawnDirector,
     };
     pub use crate::torpedo::{Torpedo, TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
-    pub use crate::tuning::{AiTuning, SimTuning};
+    pub use crate::tuning::{AiTuning, PilotTuning, SimTuning};
     pub use crate::util::{lcg_next, wrap_angle};
     pub use crate::world::{bounds_return, SystemBounds};
 }

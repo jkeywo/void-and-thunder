@@ -139,7 +139,6 @@ impl Default for ShipTable {
                             aim_at_target: true,
                             flee_hull_frac: 0.0,
                             use_abilities: false,
-                            ..AiController::default()
                         },
                     },
                 },
