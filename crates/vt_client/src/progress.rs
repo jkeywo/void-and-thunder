@@ -5,10 +5,17 @@
 //! the design. But a player who has sailed forty runs has *done* something,
 //! and until now the game forgot all of it the moment the tab closed.
 //!
-//! So this is the whole of v&t's durable state: a career tally, on the title
-//! card, and nothing else. Deliberately not: unlocks, currency, or anything a
-//! run can spend — v&t has no meta-progression and this is not the beginning
-//! of one.
+//! So this is the whole of v&t's durable state: a career tally on the title
+//! card, and which loadout you last flew. Deliberately not: unlocks, currency,
+//! or anything a run can spend — v&t has no meta-progression and this is not
+//! the beginning of one. A remembered fit is a *preference*, not a reward:
+//! nothing earns it, every option is available from the first run, and all it
+//! saves you is re-picking the same three chips every time.
+//!
+//! Two slots rather than one field, because they are different kinds of thing
+//! and fail differently. A corrupt career should not cost you your loadout, and
+//! a catalogue edit that invalidates a saved index should not put the career
+//! tally through a migration.
 //!
 //! # Why this game and not a replay
 //!
@@ -25,9 +32,14 @@ use vellum_save::Progress;
 
 use vt_sim::prelude::{Encounter, Outcome, Plunder};
 
-/// The slot. One career, no save selection — there is nothing to choose
+use crate::data::{LoadoutCatalogue, SelectedLoadout};
+
+/// The career slot. One career, no save selection — there is nothing to choose
 /// between.
 const SLOT: &str = "career";
+
+/// The loadout slot: which chips were lit when you last cast off.
+const LOADOUT_SLOT: &str = "loadout";
 
 /// The `localStorage` key prefix. Namespaced because a GitHub Pages account
 /// serves every game in the fleet from one origin, and two games sharing a
@@ -54,6 +66,12 @@ impl Progress for Career {
     // No migrations: format 1 is the first. An added field needs none — serde's
     // default covers it — so this list stays empty until a field is
     // restructured or removed.
+}
+
+/// The remembered fit. Indices into the catalogue, which is why loading one
+/// clamps: a saved index outlives the list it pointed into.
+impl Progress for SelectedLoadout {
+    const FORMAT: u32 = 1;
 }
 
 /// The store, chosen at compile time because the two targets have nothing in
@@ -91,7 +109,10 @@ impl Plugin for ProgressPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Career>()
             .insert_resource(Saves(backend()))
-            .add_systems(Startup, load)
+            .add_systems(Startup, (load, load_loadout))
+            // Written on change rather than on cast-off, so the choice survives
+            // closing the game from the title card without ever starting a run.
+            .add_systems(Update, save_loadout)
             .add_systems(OnEnter(crate::GameState::GameOver), record);
     }
 }
@@ -109,6 +130,58 @@ fn load(mut career: ResMut<Career>, saves: Res<Saves>) {
         Ok(None) => {}
         Err(Ok(error)) => warn!("could not read the saved career: {error}"),
         Err(Err(error)) => warn!("could not reach saved-game storage: {error}"),
+    }
+}
+
+/// Read the remembered fit at startup, clamped to what the catalogue still
+/// offers.
+///
+/// The clamp is the whole reason this is not a one-liner: the save holds
+/// *indices*, and a catalogue that has since lost an option would otherwise
+/// leave a slot pointing at nothing — which reads on the card as a row with no
+/// chip lit, and spawns whatever the fallback happens to be.
+fn load_loadout(
+    mut fit: ResMut<SelectedLoadout>,
+    catalogue: Res<LoadoutCatalogue>,
+    saves: Res<Saves>,
+) {
+    // The catalogue asset has not landed yet at `Startup`, so this clamps
+    // against the compiled-in default. That is the same list the shipped file
+    // holds — a test asserts it — and a hand-shrunk file is caught downstream
+    // anyway: `LoadoutCatalogue::fit` falls back to the first option rather
+    // than flying a ship with an empty slot.
+    match vellum_save::load::<SelectedLoadout, _>(&saves.0, LOADOUT_SLOT) {
+        Ok(Some(loaded)) => *fit = clamp_to(loaded, &catalogue),
+        Ok(None) => {}
+        Err(Ok(error)) => warn!("could not read the saved loadout: {error}"),
+        Err(Err(error)) => warn!("could not reach saved-game storage: {error}"),
+    }
+}
+
+/// A selection with every slot inside the catalogue's bounds.
+fn clamp_to(fit: SelectedLoadout, catalogue: &LoadoutCatalogue) -> SelectedLoadout {
+    let [broadsides, batteries, specials] = catalogue.counts();
+    let within = |index: usize, count: usize| if index < count { index } else { 0 };
+    SelectedLoadout {
+        broadside: within(fit.broadside, broadsides),
+        battery: within(fit.battery, batteries),
+        special: within(fit.special, specials),
+    }
+}
+
+/// Write the fit out whenever it changes.
+///
+/// Change detection rather than a call at the point of selection: the chips are
+/// not the only thing that may ever write this, and a save that depends on
+/// remembering to call it is a save that eventually stops happening. Bevy fires
+/// `is_changed` once on insertion too, which harmlessly rewrites the default on
+/// the first frame of a fresh install.
+fn save_loadout(fit: Res<SelectedLoadout>, saves: Res<Saves>) {
+    if !fit.is_changed() {
+        return;
+    }
+    if let Err(error) = vellum_save::save(&saves.0, LOADOUT_SLOT, &*fit) {
+        warn!("could not save the loadout: {error}");
     }
 }
 
@@ -184,6 +257,48 @@ mod tests {
         let loaded = vellum_save::decode::<Career>(&stored).expect("decodes");
         assert_eq!(loaded.runs, 5);
         assert_eq!(loaded.ships_boarded, 0);
+    }
+
+    /// The remembered fit round-trips through the same path the game uses.
+    #[test]
+    fn a_loadout_round_trips() {
+        let fit = SelectedLoadout {
+            broadside: 1,
+            battery: 2,
+            special: 1,
+        };
+        let stored = vellum_save::encode::<SelectedLoadout, core::convert::Infallible>(&fit)
+            .expect("encodes");
+        assert_eq!(
+            vellum_save::decode::<SelectedLoadout>(&stored).expect("decodes"),
+            fit
+        );
+    }
+
+    /// The save holds *indices*, so it can outlive the list it points into. A
+    /// selection left over from a bigger catalogue must come back as something
+    /// fittable rather than as a slot pointing at nothing.
+    #[test]
+    fn a_selection_from_a_bigger_catalogue_is_clamped_on_load() {
+        let catalogue = LoadoutCatalogue::default();
+        let stale = SelectedLoadout {
+            broadside: 99,
+            battery: 99,
+            special: 99,
+        };
+        assert_eq!(clamp_to(stale, &catalogue), SelectedLoadout::default());
+    }
+
+    /// ...and a selection that is still in range is left exactly alone.
+    #[test]
+    fn a_selection_that_still_fits_survives_the_clamp() {
+        let catalogue = LoadoutCatalogue::default();
+        let fit = SelectedLoadout {
+            broadside: 1,
+            battery: 2,
+            special: 2,
+        };
+        assert_eq!(clamp_to(fit, &catalogue), fit);
     }
 
     /// A hand-edited save is refused rather than loaded, so a tampered career

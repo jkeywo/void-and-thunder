@@ -102,8 +102,8 @@ use input::{
 mod gizmos;
 use gizmos::{
     draw_aim_beams, draw_aim_lead, draw_boarding, draw_charge_telegraph, draw_grid,
-    draw_microwarp_range, draw_point_defense_radius, draw_reticle, draw_torpedo_locks,
-    draw_torpedo_range, microwarp_ghost, MicrowarpGhost,
+    draw_intercept_flashes, draw_microwarp_range, draw_point_defense_radius, draw_reticle,
+    draw_torpedo_locks, draw_torpedo_range, microwarp_ghost, MicrowarpGhost,
 };
 
 mod status_ring;
@@ -333,6 +333,7 @@ fn main() {
                 draw_boarding,
                 draw_microwarp_range,
                 draw_point_defense_radius,
+                draw_intercept_flashes,
                 update_offscreen_markers,
             )
                 .after(SmoothingSet),

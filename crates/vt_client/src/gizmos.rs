@@ -359,6 +359,62 @@ pub fn draw_point_defense_radius(
     );
 }
 
+/// One line from the emitter to something it just swatted, fading out.
+///
+/// How long a flash stays up. Short enough to read as a *snap* rather than a
+/// beam — the screen fires several times a second, and a long line would smear
+/// into a permanent cone.
+const INTERCEPT_FLASH_LIFE: f32 = 0.14;
+
+/// A kill the screen has made and not yet finished drawing.
+///
+/// Public only because it appears in the system's `Local` parameter, and Bevy
+/// requires every system parameter type to be at least as visible as the system.
+pub struct InterceptFlash {
+    from: Vec2,
+    /// Full 3D: a torpedo dies well off the plane, and a line drawn to its
+    /// flattened shadow would miss the thing the player watched vanish.
+    to: Vec3,
+    age: f32,
+}
+
+/// Flash a line from the point-defence emitter to each munition it takes.
+///
+/// Without this the screen is invisible — shots simply stop arriving, which
+/// reads as luck rather than as the device the player fitted doing its job.
+///
+/// The flashes are held in a `Local` rather than spawned as entities: they are
+/// two points and a clock, they never interact with anything, and the sim
+/// already told us where and when. Aged on virtual time, so they stretch under
+/// bullet-time along with everything else and stop dead on a pause.
+pub fn draw_intercept_flashes(
+    mut gizmos: Gizmos,
+    time: Res<Time>,
+    mut intercepts: MessageReader<MunitionIntercepted>,
+    mut flashes: Local<Vec<InterceptFlash>>,
+) {
+    for intercepted in intercepts.read() {
+        flashes.push(InterceptFlash {
+            from: intercepted.from,
+            to: intercepted.position,
+            age: 0.0,
+        });
+    }
+
+    let dt = time.delta_secs();
+    flashes.retain_mut(|flash| {
+        flash.age += dt;
+        let t = flash.age / INTERCEPT_FLASH_LIFE;
+        if t >= 1.0 {
+            return false;
+        }
+        // Bright and hot at the moment of the kill, gone almost at once.
+        let color = Color::srgba(0.8, 0.95, 1.0, 1.0 - t);
+        gizmos.line(flash.from.extend(1.0), flash.to, color);
+        true
+    });
+}
+
 /// Show the microwarp ghost at the clamped destination while the pilot aims a
 /// warp, matching the player's heading; hide it otherwise.
 pub fn microwarp_ghost(

@@ -276,13 +276,27 @@ entities:
         screen that stops only one of the three cannot be reasoned about
         mid-fight. Torpedoes fly off the plane, so the radius test uses the
         flattened XY position while the MunitionIntercepted message carries the
-        true 3D point for the client's tracer. Runs last in SimSet::Weapons, so
-        it only ever takes what is still in the air.
+        true 3D point for the client's tracer: draw_intercept_flashes snaps a
+        fading line from the emitter to each kill, without which the device is
+        invisible and shots merely stop arriving. Runs last in SimSet::Weapons,
+        so it only ever takes what is still in the air.
       references: [battery-power, ship-combat, torpedoes]
     implementation:
       status: declared
-      paths: [crates/vt_sim/src/point_defense.rs, crates/vt_sim/src/events.rs]
-      symbols: [PointDefense, point_defense_system, MunitionIntercepted]
+      paths:
+        [
+          crates/vt_sim/src/point_defense.rs,
+          crates/vt_sim/src/events.rs,
+          crates/vt_client/src/gizmos.rs,
+        ]
+      symbols:
+        [
+          PointDefense,
+          point_defense_system,
+          MunitionIntercepted,
+          draw_intercept_flashes,
+          draw_point_defense_radius,
+        ]
       tests: [crates/vt_sim/src/point_defense.rs]
 
   - component: fire-barrels
@@ -321,7 +335,10 @@ entities:
         defence) and special (torpedoes, microwarp or fire barrels), authored in
         loadouts.ron. SelectedLoadout holds the choice; LoadoutCatalogue::fit
         lays it over the class's own loadout at spawn. One key per slot, resolved
-        against what the ship carries rather than naming a device.
+        against what the ship carries rather than naming a device. The choice
+        persists through vellum_save in its own slot beside the career: a
+        preference, not a reward, and clamped on load because the save holds
+        indices that can outlive the list they point into.
       references:
         [spawn-director, battery-power, point-defense, fire-barrels, hud-bridge]
     implementation:
@@ -331,6 +348,7 @@ entities:
           crates/vt_sim/src/spawn.rs,
           crates/vt_client/src/data/loadouts.rs,
           crates/vt_client/src/input.rs,
+          crates/vt_client/src/progress.rs,
         ]
       symbols:
         [
