@@ -1,11 +1,16 @@
 //! Directional shields: a fore and an aft arc that soak damage before the hull.
 //!
-//! A shield is two independent banks, each covering 180° — everything forward of
-//! the beam, and everything abaft it. They are separate pools on purpose: a ship
-//! that has been running from a pursuer has a flat aft bank and a full fore one,
-//! so the answer is to *turn and present the good side*, which is the same
-//! decision the sail ladder and the broadside arcs already ask of the player.
-//! One pooled shield would make facing irrelevant.
+//! A shield is normally two independent banks, each covering 180° — everything
+//! forward of the beam, and everything abaft it. They are separate pools on
+//! purpose: a ship that has been running from a pursuer has a flat aft bank and
+//! a full fore one, so the answer is to *turn and present the good side*, which
+//! is the same decision the sail ladder and the broadside arcs already ask of
+//! the player.
+//!
+//! A fit may instead be [`pooled`](Shield::pooled), which is the deliberate
+//! opposite: one charge for the whole hull, so facing means nothing and the only
+//! question left is whether you are hit at all. That is a different fight rather
+//! than a softer one, and it is what the finale is built on.
 //!
 //! Damage goes through [`apply_hull_damage`](crate::combat::apply_hull_damage)
 //! like everything else, so shields, bracing and invulnerability compose in one
@@ -71,8 +76,23 @@ pub struct Shield {
     /// only — a siege platform with its whole generator pointed forward is a
     /// different problem to solve than an evenly-protected ship, and "get behind
     /// it" is a tactic worth being able to author. Both zero means no shields.
+    ///
+    /// On a `pooled` fit only `fore_max` is read: it is the whole pool.
     pub fore_max: f32,
     pub aft_max: f32,
+    /// One shield covering everything, instead of two halves.
+    ///
+    /// A directional fit always leaves *somewhere* to stand: flatten the bank
+    /// that faces you, swing round, and the other one is waiting at full charge
+    /// while the first quietly recovers behind you. Even fitting both arcs
+    /// equally does not remove that — it only hides it, since circling still
+    /// buys a fresh bank each time.
+    ///
+    /// A pooled shield has no other side. Every blow draws on one charge and
+    /// suppresses one timer, wherever it lands, so where you stand stops being a
+    /// question and whether you get hit is the only one left. `fore_max` is the
+    /// pool and `aft_max` is unused (see [`shield_refit_system`]).
+    pub pooled: bool,
     pub regen_per_sec: f32,
     pub regen_delay: f32,
 }
@@ -84,6 +104,7 @@ impl Default for Shield {
             aft: ShieldBank::default(),
             fore_max: SHIELD_MAX,
             aft_max: SHIELD_MAX,
+            pooled: false,
             regen_per_sec: SHIELD_REGEN_PER_SEC,
             regen_delay: SHIELD_REGEN_DELAY,
         }
@@ -106,7 +127,24 @@ impl Shield {
         }
     }
 
-    /// Capacity of one arc.
+    /// The bank that answers for a blow on `arc`.
+    ///
+    /// Normally the matching one; always the fore bank on a pooled fit, where
+    /// there is only one and it covers everything. Every *read* of the shield
+    /// goes through this, so a pooled hull reports the same charge whichever
+    /// side is asked about — which is exactly what a single generator means, and
+    /// keeps callers (the status ring, the pilot's choice of facing) from
+    /// inventing a weak side that is not there.
+    fn answering(&self, arc: ShieldArc) -> ShieldArc {
+        if self.pooled {
+            ShieldArc::Fore
+        } else {
+            arc
+        }
+    }
+
+    /// Capacity of one arc, as authored. Not routed through
+    /// [`Self::answering`] — this is the fit, not the protection.
     pub fn max_of(&self, arc: ShieldArc) -> f32 {
         match arc {
             ShieldArc::Fore => self.fore_max,
@@ -119,12 +157,18 @@ impl Shield {
         self.fore_max > 0.0 || self.aft_max > 0.0
     }
 
-    /// The named bank.
+    /// The bank protecting `arc` — the same one for both arcs when pooled.
     pub fn bank(&self, arc: ShieldArc) -> &ShieldBank {
-        match arc {
+        match self.answering(arc) {
             ShieldArc::Fore => &self.fore,
             ShieldArc::Aft => &self.aft,
         }
+    }
+
+    /// Whether the bank protecting `arc` is currently suppressed — it took a hit
+    /// inside the regen delay and will not recover while it keeps taking them.
+    pub fn suppressed(&self, arc: ShieldArc) -> bool {
+        self.bank(arc).cooldown > 0.0
     }
 
     fn bank_mut(&mut self, arc: ShieldArc) -> &mut ShieldBank {
@@ -137,7 +181,7 @@ impl Shield {
     /// This arc's charge as a fraction of *its own* capacity, for the HUD and
     /// the status ring. An unshielded arc reads zero rather than dividing by it.
     pub fn fraction(&self, arc: ShieldArc) -> f32 {
-        let max = self.max_of(arc);
+        let max = self.max_of(self.answering(arc));
         if max <= 0.0 {
             return 0.0;
         }
@@ -150,6 +194,9 @@ impl Shield {
     /// Any contact suppresses the arc's regeneration, including one that only
     /// grazes a bank already at zero: being shot at is what keeps a shield down.
     pub fn absorb(&mut self, arc: ShieldArc, damage: f32) -> f32 {
+        // Where the blow landed decides which bank answers — unless there is
+        // only one, in which case it answers for everything.
+        let arc = self.answering(arc);
         // A bare arc stops nothing and is not suppressed by being shot at —
         // there is no generator there to knock offline.
         if self.max_of(arc) <= 0.0 || damage <= 0.0 {
@@ -210,6 +257,13 @@ pub fn shield_regen_system(time: Res<Time>, mut ships: Query<&mut Shield, With<S
 /// leaves an over-full arc and raising it looks like nothing happened.
 pub fn shield_refit_system(mut ships: Query<&mut Shield, Changed<Shield>>) {
     for mut shield in &mut ships {
+        // A pooled fit has no stern bank to hold anything. Zeroing the capacity
+        // rather than trusting the author keeps `aft_max` from quietly becoming
+        // a second pool nothing can ever reach — and makes a fit toggled to
+        // pooled in the design panel behave the moment it is toggled.
+        if shield.pooled && shield.aft_max != 0.0 {
+            shield.aft_max = 0.0;
+        }
         let (fore, aft) = (shield.fore_max, shield.aft_max);
         if shield.fore.charge > fore || shield.aft.charge > aft {
             shield.fore.charge = shield.fore.charge.min(fore);
@@ -331,6 +385,78 @@ mod tests {
             shield_arc(PI, Vec2::ZERO, Vec2::new(10.0, 0.0)),
             ShieldArc::Aft
         );
+    }
+
+    /// A pooled fit is one shield, so where a blow lands changes nothing about
+    /// what stops it. This is the finale's whole defensive idea: no side of the
+    /// hull is worth manoeuvring for.
+    #[test]
+    fn a_pooled_shield_has_no_other_side() {
+        let mut s = Shield {
+            pooled: true,
+            fore_max: 100.0,
+            aft_max: 0.0,
+            regen_per_sec: 10.0,
+            regen_delay: 2.0,
+            ..Default::default()
+        }
+        .charged();
+
+        // A blow on the stern spends the same charge a blow on the bow would.
+        assert_eq!(s.absorb(ShieldArc::Aft, 40.0), 0.0);
+        assert_eq!(s.fore.charge, 60.0, "the one pool paid for it");
+        assert_eq!(
+            s.fraction(ShieldArc::Fore),
+            s.fraction(ShieldArc::Aft),
+            "and both arcs report the same shield, because there is only one"
+        );
+
+        // Turning about finds no fresh bank waiting: what is left is what is
+        // left, from any direction.
+        assert_eq!(
+            s.absorb(ShieldArc::Fore, 80.0),
+            20.0,
+            "60 stopped, 20 through"
+        );
+        assert_eq!(s.fraction(ShieldArc::Aft), 0.0);
+        assert!(
+            s.suppressed(ShieldArc::Aft),
+            "and one timer holds it down whichever side is asked about"
+        );
+    }
+
+    /// The two-bank fit keeps its old behaviour exactly — pooling is opt-in, and
+    /// the player's own hull still rewards presenting a side.
+    #[test]
+    fn pooling_is_opt_in() {
+        let mut s = fitted();
+        assert!(!s.pooled, "the default fit is two banks");
+        s.absorb(ShieldArc::Fore, 40.0);
+        assert_eq!(s.fore.charge, 0.0);
+        assert_eq!(s.aft.charge, 40.0, "the far side is untouched, as before");
+        assert!(!s.suppressed(ShieldArc::Aft));
+    }
+
+    /// A capacity left on the stern of a pooled fit would be a pool nothing can
+    /// reach — a design-panel toggle must not be able to create one.
+    #[test]
+    fn a_pooled_refit_clears_the_stern_capacity() {
+        let s = Shield {
+            pooled: true,
+            fore_max: 100.0,
+            aft_max: 60.0, // authored by mistake, or left over from a toggle
+            ..Default::default()
+        }
+        .charged();
+        let mut world = World::new();
+        let e = world.spawn(s).id();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(shield_refit_system);
+        schedule.run(&mut world);
+        let s = world.get::<Shield>(e).unwrap();
+        assert_eq!(s.aft_max, 0.0);
+        assert_eq!(s.aft.charge, 0.0);
+        assert_eq!(s.fore.charge, 100.0, "the pool itself is untouched");
     }
 
     #[test]

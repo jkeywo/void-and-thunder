@@ -434,13 +434,27 @@ fn ramp(x: f32, full: f32, zero: f32) -> f32 {
 /// its whole capacity instead of one bank's. That is already the right answer
 /// when both are healthy, which is most of the time.
 fn presentation(s: &Situation, showing_bow: bool, t: &PilotTuning) -> f32 {
-    let (mine, mine_hot, theirs) = if showing_bow {
-        (s.kit.fore_frac, s.kit.fore_suppressed, s.kit.aft_frac)
+    let (mine, mine_hot, theirs, theirs_hot) = if showing_bow {
+        (
+            s.kit.fore_frac,
+            s.kit.fore_suppressed,
+            s.kit.aft_frac,
+            s.kit.aft_suppressed,
+        )
     } else {
-        (s.kit.aft_frac, s.kit.aft_suppressed, s.kit.fore_frac)
+        (
+            s.kit.aft_frac,
+            s.kit.aft_suppressed,
+            s.kit.fore_frac,
+            s.kit.fore_suppressed,
+        )
     };
-    let pinned = if mine_hot && mine <= 0.0 { 0.5 } else { 0.0 };
-    let edge = (mine - theirs - pinned) * t.shield_bias;
+    // Being pinned only argues for anything as a *difference* between the two
+    // sides. Taken on both, it cancels — which is what a pooled shield wants,
+    // since there is no other side to turn to.
+    let pinned = |hot: bool, frac: f32| if hot && frac <= 0.0 { 0.5 } else { 0.0 };
+    let edge =
+        ((mine - theirs) - (pinned(mine_hot, mine) - pinned(theirs_hot, theirs))) * t.shield_bias;
     (1.0 + edge * s.danger.clamp(0.0, 1.0)).max(t.presentation_floor)
 }
 
@@ -1121,9 +1135,12 @@ pub fn pilot_system(
             fore_frac: shield.fraction(ShieldArc::Fore),
             aft_frac: shield.fraction(ShieldArc::Aft),
             // A cooling bank is one that was hit inside the regen delay — the
-            // sim's own record of which side is currently being shot at.
-            fore_suppressed: shield.fore.cooldown > 0.0,
-            aft_suppressed: shield.aft.cooldown > 0.0,
+            // sim's own record of which side is currently being shot at. Asked
+            // per arc rather than read off the banks, so a pooled fit answers
+            // the same for both and the pilot never goes looking for the good
+            // side of a shield that does not have one.
+            fore_suppressed: shield.suppressed(ShieldArc::Fore),
+            aft_suppressed: shield.suppressed(ShieldArc::Aft),
         };
 
         // Hull and shields are both pools of punishment, so they add — but a
@@ -1755,6 +1772,24 @@ mod tests {
             ..turned.kit
         };
         assert!(presentation(&turned, true, &t) > presentation(&turned, false, &t));
+    }
+
+    /// A pooled shield has no better side, so it must not bias the facing at
+    /// all — even flat and suppressed, where a directional fit would be
+    /// screaming to turn about.
+    #[test]
+    fn a_pooled_shield_never_argues_about_facing() {
+        // What `Shield::fraction` and `suppressed` report for a pooled fit:
+        // the same answer for both arcs.
+        let mut k = shielded();
+        k.fore_frac = 0.0;
+        k.aft_frac = 0.0;
+        k.fore_suppressed = true;
+        k.aft_suppressed = true;
+        let s = at(vec![contact(Vec2::new(200.0, 0.0))], vec![], k);
+        let t = PilotTuning::default();
+        assert_eq!(presentation(&s, true, &t), 1.0);
+        assert_eq!(presentation(&s, false, &t), 1.0);
     }
 
     /// Facing only matters while someone is shooting: with the field clear the

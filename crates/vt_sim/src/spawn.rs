@@ -66,7 +66,7 @@ impl ShipLoadout {
     }
 
     /// The bastion's loadout: guns that bear in every direction on a short
-    /// cooldown, behind a generator that covers every direction too.
+    /// cooldown, behind a single pooled shield that covers every direction too.
     pub fn bastion() -> Self {
         Self {
             broadside: Broadside {
@@ -80,11 +80,13 @@ impl ShipLoadout {
                 ..Broadside::default()
             },
             shield: Shield {
-                // Both arcs, equally. There is no bare side to work around, so
-                // the fight is about not being hit rather than about where you
-                // stand while being hit.
+                // One pool over the whole hull. Two equal banks would still have
+                // rewarded circling — flatten the side facing you, swing round,
+                // find the other one full — and the point is that there is no
+                // side of this thing worth manoeuvring for.
+                pooled: true,
                 fore_max: 120.0,
-                aft_max: 120.0,
+                aft_max: 0.0,
                 regen_per_sec: 9.0,
                 regen_delay: 3.0,
                 ..Shield::default()

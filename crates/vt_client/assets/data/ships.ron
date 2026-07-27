@@ -110,9 +110,10 @@
                 // The finale. A siege platform, not a duellist: it barely
                 // moves, and both its guns and its generator cover every
                 // direction. Everything the run has taught about presenting a
-                // side is wrong here, and so is looking for the bare quarter —
-                // there isn't one. The answer is not to be hit: its shots are
-                // slow enough to read and it is far too ponderous to follow you.
+                // side is wrong here, and so is looking for a side at all —
+                // its shield is one pool, not two halves. The answer is not to
+                // be hit: its shots are slow enough to read and it is far too
+                // ponderous to follow you.
                 stats: (
                     // Ponderous. It can just about hold station and come about,
                     // and that is all — you can always out-run it, which is what
@@ -147,11 +148,13 @@
                     torpedoes: (),
                     boost: (),
                     microwarp: (),
-                    // Both arcs, equally: there is no side of this thing that
-                    // is safe to sit on. The 3s suppression is what a dodging
-                    // fight is fought over — break contact and the bank you have
-                    // been working comes back.
-                    shield: (fore_max: 120.0, aft_max: 120.0, regen_per_sec: 9.0, regen_delay: 3.0),
+                    // Pooled: one charge over the whole hull, so there is no
+                    // side of this thing worth manoeuvring for. Two equal banks
+                    // would only have moved the trick — flatten the near side,
+                    // swing round, find the far one full. The 3s suppression is
+                    // what the fight is really fought over: break contact and it
+                    // starts coming back.
+                    shield: (pooled: true, fore_max: 120.0, aft_max: 0.0, regen_per_sec: 9.0, regen_delay: 3.0),
                 ),
                 ai: (
                     // It never needs to present a beam, so it simply closes and
