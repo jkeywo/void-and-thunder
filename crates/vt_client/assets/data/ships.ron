@@ -107,11 +107,12 @@
         (
             name: "house_bastion",
             class: (
-                // The finale. A siege platform, not a duellist: it barely moves,
-                // its generator is pointed forward, and its guns bear in every
+                // The finale. A siege platform, not a duellist: it barely
+                // moves, and both its guns and its generator cover every
                 // direction. Everything the run has taught about presenting a
-                // side is wrong here — the answer is to get behind it and stay
-                // there, where the shield is not.
+                // side is wrong here, and so is looking for the bare quarter —
+                // there isn't one. The answer is not to be hit: its shots are
+                // slow enough to read and it is far too ponderous to follow you.
                 stats: (
                     // Ponderous. It can just about hold station and come about,
                     // and that is all — you can always out-run it, which is what
@@ -146,9 +147,11 @@
                     torpedoes: (),
                     boost: (),
                     microwarp: (),
-                    // Forward only. The stern is bare, and that is the whole
-                    // fight.
-                    shield: (fore_max: 120.0, aft_max: 0.0, regen_per_sec: 9.0, regen_delay: 3.0),
+                    // Both arcs, equally: there is no side of this thing that
+                    // is safe to sit on. The 3s suppression is what a dodging
+                    // fight is fought over — break contact and the bank you have
+                    // been working comes back.
+                    shield: (fore_max: 120.0, aft_max: 120.0, regen_per_sec: 9.0, regen_delay: 3.0),
                 ),
                 ai: (
                     // It never needs to present a beam, so it simply closes and

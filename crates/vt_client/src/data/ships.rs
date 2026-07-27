@@ -114,7 +114,7 @@ impl Default for ShipTable {
                     name: "house_bastion".into(),
                     class: ShipClass {
                         // A siege platform: barely mobile, three times a
-                        // patrol's hull, shielded only forward, guns all round.
+                        // patrol's hull, shielded all round, guns all round.
                         stats: ShipStats {
                             thrust: 30.0,
                             turn_rate: 0.16,

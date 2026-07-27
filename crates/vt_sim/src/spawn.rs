@@ -66,7 +66,7 @@ impl ShipLoadout {
     }
 
     /// The bastion's loadout: guns that bear in every direction on a short
-    /// cooldown, and a generator pointed entirely forward.
+    /// cooldown, behind a generator that covers every direction too.
     pub fn bastion() -> Self {
         Self {
             broadside: Broadside {
@@ -80,8 +80,11 @@ impl ShipLoadout {
                 ..Broadside::default()
             },
             shield: Shield {
+                // Both arcs, equally. There is no bare side to work around, so
+                // the fight is about not being hit rather than about where you
+                // stand while being hit.
                 fore_max: 120.0,
-                aft_max: 0.0,
+                aft_max: 120.0,
                 regen_per_sec: 9.0,
                 regen_delay: 3.0,
                 ..Shield::default()
