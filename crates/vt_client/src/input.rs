@@ -105,6 +105,24 @@ impl ThrustState {
         }
     }
 
+    /// The notch closest to a raw throttle value.
+    ///
+    /// Used to keep the ladder in step with an analog stick, so the HELM readout
+    /// still describes what the ship is doing when a pad is flying it and the
+    /// keyboard inherits a sensible notch if the player puts the pad down.
+    pub fn nearest(throttle: f32) -> Self {
+        let mut best = Self::LADDER[0];
+        let mut best_gap = f32::INFINITY;
+        for notch in Self::LADDER {
+            let gap = (notch.throttle() - throttle).abs();
+            if gap < best_gap {
+                best_gap = gap;
+                best = notch;
+            }
+        }
+        best
+    }
+
     /// Step one notch up (`+1`) or down (`-1`) the ladder, saturating at the ends
     /// so holding a key never wraps from full thrust round to reverse.
     pub fn stepped(self, delta: i32) -> Self {
@@ -311,6 +329,7 @@ pub fn player_input(
     };
 
     let controls = feel.controls;
+    let use_pad = *method == InputMethod::Gamepad;
 
     // --- Keyboard ---
     // W/S step the thrust ladder on the key *edge*; the notch then holds until
@@ -322,7 +341,12 @@ pub fn player_input(
     if keys.just_pressed(KeyCode::KeyS) {
         *thrust = thrust.stepped(-1);
     }
-    let mut throttle = thrust.throttle();
+    // Whichever device the player last used owns the throttle, and on a pad that
+    // means a centred stick reads as *stop*. Starting from the ladder here was a
+    // real bug: a pad player never touches W/S, so the notch sat at its default
+    // half thrust forever and letting go of the stick left the ship cruising
+    // instead of holding station.
+    let mut throttle = if use_pad { 0.0 } else { thrust.throttle() };
 
     let mut turn = 0.0;
     if keys.pressed(KeyCode::KeyA) {
@@ -347,14 +371,23 @@ pub fn player_input(
     // --- Gamepad (first connected pad): the final scheme ---
     let pad = gamepads.iter().next();
     if let Some(pad) = pad {
-        // The stick is analog and *overrides* the thrust notch rather than
-        // adding to it: summing them would let a half-thrust keyboard notch plus
-        // a shoved stick ask for 1.5 and clamp, so the last third of the stick
-        // would do nothing. Off-centre means the pad is flying; centred hands
-        // the ship back to whatever notch the ladder is on.
+        // The stick is analog and *replaces* the notch rather than adding to it:
+        // summing them would let a half-thrust notch plus a shoved stick ask for
+        // 1.5 and clamp, so the last third of the stick would do nothing.
+        //
+        // A live stick takes the throttle even before `track_input_method` has
+        // flipped, so picking the pad up mid-flight answers the first push
+        // rather than the one after it.
         let stick = deadzone(pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0), &controls);
-        if stick != 0.0 {
+        if use_pad || stick != 0.0 {
             throttle = stick;
+            // Keep the ladder under the stick, so the HELM readout still
+            // describes the ship and the keyboard inherits a sane notch if the
+            // pad is put down.
+            let notch = ThrustState::nearest(stick);
+            if *thrust != notch {
+                *thrust = notch;
+            }
         }
         // Stick right (+X) steers starboard (negative turn).
         turn -= deadzone(pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0), &controls);
@@ -384,7 +417,6 @@ pub fn player_input(
     // --- Aim: gather raw device state, then hand off to the pure decision ---
     let ship = transform.translation.truncate();
     let dt = real.delta_secs();
-    let use_pad = *method == InputMethod::Gamepad;
     let aiming_broadside = aim_port || aim_starboard;
     let kit_active = emp_fire || torpedo_hold || microwarp_hold;
     let rest_point = ship + heading.forward() * 320.0;
@@ -649,6 +681,65 @@ mod tests {
             );
         }
         assert_eq!(ThrustState::Stop.throttle(), 0.0, "no thrust means stopped");
+    }
+
+    /// A centred stick must mean *stop*.
+    ///
+    /// The regression this pins: the throttle used to start from the keyboard's
+    /// notch and only be replaced by a *non-zero* stick. A pad player never
+    /// touches W/S, so the notch sat at its default half thrust and releasing the
+    /// stick left the ship cruising — the ship could not be brought to rest at
+    /// all with a controller.
+    #[test]
+    fn a_centred_stick_means_stop_not_the_keyboard_notch() {
+        // The rule the input path encodes: on a pad the stick is the whole
+        // answer, including when it reads zero.
+        for notch in [
+            ThrustState::Reverse,
+            ThrustState::Stop,
+            ThrustState::Half,
+            ThrustState::Full,
+        ] {
+            let pad_throttle = pad_authority(notch, 0.0, true);
+            assert_eq!(
+                pad_throttle, 0.0,
+                "a centred stick must stop the ship even with the ladder at {notch:?}"
+            );
+        }
+        // Off the centre, the stick is followed exactly rather than added to.
+        assert_eq!(pad_authority(ThrustState::Full, -0.4, true), -0.4);
+        // On the keyboard the ladder still rules, and a centred stick leaves it.
+        assert_eq!(
+            pad_authority(ThrustState::Half, 0.0, false),
+            ThrustState::Half.throttle()
+        );
+        // Even before the input method has flipped, a live stick wins — so
+        // picking a pad up answers the first push, not the one after it.
+        assert_eq!(pad_authority(ThrustState::Half, 0.8, false), 0.8);
+    }
+
+    /// Mirrors the throttle decision in `player_input`. Kept beside the test
+    /// rather than extracted, because the real one also writes the ladder and
+    /// the helm; this is the arithmetic those writes are built on.
+    fn pad_authority(notch: ThrustState, stick: f32, use_pad: bool) -> f32 {
+        let mut throttle = if use_pad { 0.0 } else { notch.throttle() };
+        if use_pad || stick != 0.0 {
+            throttle = stick;
+        }
+        throttle
+    }
+
+    #[test]
+    fn the_ladder_follows_the_stick_to_the_nearest_notch() {
+        assert_eq!(ThrustState::nearest(0.0), ThrustState::Stop);
+        assert_eq!(ThrustState::nearest(0.95), ThrustState::Full);
+        assert_eq!(ThrustState::nearest(0.45), ThrustState::Half);
+        assert_eq!(ThrustState::nearest(-0.9), ThrustState::Reverse);
+        // Exactly between two notches resolves to one of them, not a panic.
+        assert!(matches!(
+            ThrustState::nearest(0.25),
+            ThrustState::Stop | ThrustState::Half
+        ));
     }
 
     /// Every notch must resolve to a real line in the string table, or the HUD

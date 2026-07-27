@@ -134,6 +134,9 @@
         // to, and the ship has to stay the thing you are looking at. Applied to
         // the element as a whole so the bands keep their relative weight.
         opacity: 0.5,
+        // World units below the ship's plane. Clear of the hull, still above
+        // the reference grid at z -9 so grid lines never cross the ring.
+        drop: 8.0,
     ),
 
     // ---- Controls: pointer sensitivity and stick shaping ----

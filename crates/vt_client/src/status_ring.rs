@@ -61,6 +61,7 @@ use std::fmt::Write as _;
 use vt_sim::prelude::*;
 
 use crate::camera::MainCamera;
+use crate::data::FeelTuning;
 use crate::Player;
 
 /// World radius the authored ring's outer edge maps to, for the player.
@@ -72,10 +73,6 @@ const PLAYER_RING_RADIUS: f32 = 62.0;
 /// The same for other ships. Smaller so the player's own ring is never confused
 /// with a target's at a glance.
 const ENEMY_RING_RADIUS: f32 = 46.0;
-
-/// Height the ring is projected at — just under the hull, well above the grid
-/// at -9, so it reads as painted on the deck beneath the ship.
-const RING_PLANE_Z: f32 = -2.0;
 
 /// The per-frame ring payload, ready to hand to the page.
 ///
@@ -119,9 +116,11 @@ pub fn gather_ring_state(
             Option<&Broadside>,
             Option<&TorpedoBay>,
             Has<Player>,
+            Has<Disabled>,
         ),
         With<Ship>,
     >,
+    feel: Res<FeelTuning>,
     mut snap: ResMut<RingSnapshot>,
 ) {
     let Ok((camera, camera_tf)) = camera.single() else {
@@ -132,13 +131,14 @@ pub fn gather_ring_state(
     j.push('[');
     let mut first = true;
 
-    for (entity, transform, heading, hull, shield, bank, tubes, is_player) in &ships {
+    let plane_z = -feel.rings.drop;
+    for (entity, transform, heading, hull, shield, bank, tubes, is_player, crippled) in &ships {
         let radius = if is_player {
             PLAYER_RING_RADIUS
         } else {
             ENEMY_RING_RADIUS
         };
-        let centre = transform.translation.truncate().extend(RING_PLANE_Z);
+        let centre = transform.translation.truncate().extend(plane_z);
 
         // The ring's own axes, as the camera sees them. Projecting the offsets
         // rather than deriving them from the camera's pitch is what keeps the
@@ -164,9 +164,12 @@ pub fn gather_ring_state(
         // can keep one element per ship instead of rebuilding the set each frame.
         let _ = write!(
             j,
-            "{{\"id\":{},\"me\":{},\"o\":[{:.5},{:.5}],\"x\":[{:.5},{:.5}],\"y\":[{:.5},{:.5}],\"h\":{:.2},\"hull\":{:.4}",
+            "{{\"id\":{},\"me\":{},\"prize\":{},\"o\":[{:.5},{:.5}],\"x\":[{:.5},{:.5}],\"y\":[{:.5},{:.5}],\"h\":{:.2},\"hull\":{:.4}",
             entity.index(),
             is_player,
+            // Crippled: a prize to be boarded, not a threat. The ring must stop
+            // shouting red at something you are meant to sail up to and take.
+            crippled,
             o.x,
             o.y,
             ex.x,

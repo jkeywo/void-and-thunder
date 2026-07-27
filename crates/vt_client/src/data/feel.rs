@@ -232,11 +232,21 @@ pub struct RingFeel {
     /// across the hull, and how much of the ship you are willing to lose to
     /// the readout is a taste call, not a constant.
     pub opacity: f32,
+    /// How far below the ship's own plane the ring is drawn, in world units.
+    ///
+    /// The ring is a mark on the deck, so it has to sit clear *under* the hull
+    /// rather than cutting through it. Bounded at both ends: too little and the
+    /// model intersects the bands, too much and it sinks past the reference grid
+    /// at z -9 and gets crossed by grid lines.
+    pub drop: f32,
 }
 
 impl Default for RingFeel {
     fn default() -> Self {
-        Self { opacity: 0.5 }
+        Self {
+            opacity: 0.5,
+            drop: 8.0,
+        }
     }
 }
 
