@@ -110,6 +110,39 @@ impl Default for ShipTable {
                         ..ShipClass::default()
                     },
                 },
+                NamedClass {
+                    name: "house_bastion".into(),
+                    class: ShipClass {
+                        // A siege platform: barely mobile, three times a
+                        // patrol's hull, shielded only forward, guns all round.
+                        stats: ShipStats {
+                            thrust: 30.0,
+                            turn_rate: 0.16,
+                            max_speed: 34.0,
+                            forward_drag: 0.9,
+                            lateral_drag: 6.0,
+                            turn_rate_slow: 1.2,
+                            turn_rate_fast: 0.7,
+                            turn_accel: 1.4,
+                        },
+                        hull: 300.0,
+                        collider: Collider { radius: 42.0 },
+                        emp_defense: EmpDefense {
+                            resist: 220.0,
+                            recovery_per_sec: 20.0,
+                            ..EmpDefense::default()
+                        },
+                        loadout: ShipLoadout::bastion(),
+                        ai: AiController {
+                            engage_range: 520.0,
+                            fire_arc: std::f32::consts::PI,
+                            aim_at_target: true,
+                            flee_hull_frac: 0.0,
+                            use_abilities: false,
+                            ..AiController::default()
+                        },
+                    },
+                },
             ],
         }
     }
@@ -165,6 +198,11 @@ pub struct DirectorSpec {
     pub hull_per_wave: f32,
     /// Name of the class the waves are made of.
     pub enemy_class: String,
+    /// Name of the class that *replaces* the last wave, if any. An unknown or
+    /// empty name simply means the run ends on one more ordinary wave.
+    pub finale_class: String,
+    /// How many of it to send.
+    pub finale_count: u32,
 }
 
 impl Default for DirectorSpec {
@@ -176,6 +214,8 @@ impl Default for DirectorSpec {
             base_hull: 100.0,
             hull_per_wave: 25.0,
             enemy_class: "house_patrol".into(),
+            finale_class: "house_bastion".into(),
+            finale_count: 1,
         }
     }
 }
@@ -184,6 +224,19 @@ impl DirectorSpec {
     /// Resolve into the sim's settings, or `None` if the named class is missing.
     pub fn resolve(&self, table: &ShipTable) -> Option<vt_sim::prelude::DirectorSettings> {
         let (class_id, class) = table.find(&self.enemy_class)?;
+        // A finale is optional and *silently* optional: an empty name is the
+        // normal case, and a name that resolves to nothing leaves the run
+        // ending on an ordinary wave rather than failing to start.
+        let finale = table
+            .find(&self.finale_class)
+            .map(|(id, boss)| vt_sim::prelude::FinaleWave {
+                count: self.finale_count.max(1),
+                hull: boss.hull,
+                stats: boss.stats,
+                loadout: boss.loadout,
+                class: id,
+                ai: boss.ai,
+            });
         Some(vt_sim::prelude::DirectorSettings {
             max_waves: self.max_waves,
             base_count: self.base_count,
@@ -193,6 +246,7 @@ impl DirectorSpec {
             stats: class.stats,
             loadout: class.loadout,
             class: class_id,
+            finale,
         })
     }
 }

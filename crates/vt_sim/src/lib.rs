@@ -61,8 +61,8 @@ pub mod prelude {
     pub use crate::shield::{shield_arc, DamageReport, Shield, ShieldArc, ShieldBank};
     pub use crate::ship::{agility_at, helm_step};
     pub use crate::spawn::{
-        reset_encounter, ship_bundle, DirectorSettings, Encounter, Outcome, ShipLoadout,
-        SpawnDirector,
+        reset_encounter, ship_bundle, DirectorSettings, Encounter, FinaleWave, Outcome,
+        ShipLoadout, SpawnDirector,
     };
     pub use crate::torpedo::{Torpedo, TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
     pub use crate::tuning::{AiTuning, SimTuning};

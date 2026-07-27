@@ -55,6 +55,7 @@
         { state: "empty" }
       ],
       torpedoLocks: 0,       // u32, shown next to the tube row when > 0
+      torpedoMagazine: { count: 14, max: 20 },  // shared stores behind the tubes
       aimBattery:   1.0,     // 0..1, bullet-time charge -> "BULLET TIME"
       shield: {              // fore/aft shield arcs -> the screen-edge bands
         fitted: true,        // false = no shields on this hull; bands stay hidden
@@ -320,6 +321,10 @@
 
   /* torpedo lock count, appended beside the tube-row label */
   #tubeLocks{ color:var(--crit); text-shadow:0 0 6px rgba(255,47,20,.6); font-weight:bold; }
+  /* magazine count beside the tube-row label */
+  #tubeMag{ color:var(--amb-dim); font-variant-numeric:tabular-nums; }
+  #tubeMag.low{ color:var(--warn); text-shadow:0 0 6px rgba(255,122,24,.5); }
+  #tubeMag:empty{ display:none; }
   #tubeLocks:empty{ display:none; }
 
   /* bullet-time (aim battery) row in the bottom-right cluster */
@@ -611,7 +616,7 @@
           </div>
         </div>
         <div class="torps" style="margin-top:2px;">
-          <span class="lbl"><span data-i18n="hud.torpedo_tubes">TORPEDO TUBES</span> <span id="tubeLocks"></span></span>
+          <span class="lbl"><span data-i18n="hud.torpedo_tubes">TORPEDO TUBES</span> <span id="tubeMag"></span> <span id="tubeLocks"></span></span>
           <div class="tuberow" id="tubes"></div>
         </div>
       </div></div></div>
@@ -839,6 +844,7 @@
     el.stbd=document.getElementById("stbd"); el.stbdArc=el.stbd.querySelector(".arc"); el.stbdCore=el.stbd.querySelector(".core");
     el.warp=document.getElementById("warp"); el.warpArc=el.warp.querySelector(".arc"); el.warpCore=el.warp.querySelector(".core");
     el.tubes=document.getElementById("tubes"); el.tubeLocks=document.getElementById("tubeLocks");
+    el.tubeMag=document.getElementById("tubeMag");
     el.stWave=document.getElementById("stWave"); el.stEnemies=document.getElementById("stEnemies"); el.stPlunder=document.getElementById("stPlunder");
     el.bdgPaused=document.getElementById("bdgPaused"); el.bdgAi=document.getElementById("bdgAi"); el.bdgBoard=document.getElementById("bdgBoard");
     el.outcome=document.getElementById("outcome"); el.outcomeHeadline=document.getElementById("outcomeHeadline"); el.outcomeSub=document.getElementById("outcomeSub");
@@ -908,6 +914,13 @@
     if(Array.isArray(state.torpedoes)) setTubes(state.torpedoes);
     if(typeof state.torpedoLocks==="number")
       el.tubeLocks.textContent = state.torpedoLocks>0 ? ("· LOCKED x"+state.torpedoLocks) : "";
+    if(state.torpedoMagazine && typeof state.torpedoMagazine.count==="number"){
+      // Stores behind the tubes. Goes critical near empty, because running dry
+      // mid-fight is the thing worth seeing coming.
+      var mag=state.torpedoMagazine;
+      el.tubeMag.textContent = mag.count + "/" + mag.max;
+      el.tubeMag.classList.toggle("low", mag.count <= Math.max(1, Math.round(mag.max*0.15)));
+    }
 
     if(typeof state.wave==="number"){ el.stWave.textContent=state.wave; run.wave=state.wave; }
     if(typeof state.enemiesRemaining==="number") el.stEnemies.textContent=state.enemiesRemaining;
@@ -1402,6 +1415,7 @@
       shield:{fitted:true, fore:0.8, aft:0.35}, ringOpacity:0.5,
       portCd:{remaining:0,duration:1.5}, starboardCd:{remaining:0.9,duration:1.5}, microwarpCd:{remaining:0,duration:2.0},
       torpedoes:[{state:"ready"},{state:"ready"},{state:"loading",progress:0.4},{state:"empty"}], torpedoLocks:0,
+      torpedoMagazine:{count:14,max:20},
       wave:2, enemiesRemaining:3, plunder:1, paused:false, aiPilot:false,
       boarding:{active:false,progress:0}, inputMethod:"kbm", outcome:"in_progress",
       screen:"start", controlsOpen:false };

@@ -14,6 +14,7 @@ use bevy::{
     render::render_resource::{AsBindGroup, PrimitiveTopology},
     shader::ShaderRef,
 };
+use vt_sim::prelude::Landmark;
 
 const STAR_SURFACE_SHADER: &str = "shaders/star_surface.wgsl";
 const STAR_HALO_SHADER: &str = "shaders/star_halo.wgsl";
@@ -153,6 +154,12 @@ pub fn spawn_star(
         Mesh3d(surface_mesh),
         MeshMaterial3d(surface_materials.add(surface_material())),
         Transform::from_translation(pos.extend(0.0)),
+        // The star is a body like any other. Without this it carried no
+        // Landmark at all, so it had no collision presence whatsoever and ships
+        // and shot flew straight through the middle of it. The radius is the
+        // *surface* radius, not the corona's — the halo is light, and light is
+        // not something you bump into.
+        Landmark { radius },
     ));
 
     let halo_radius = radius * HALO_SCALE;

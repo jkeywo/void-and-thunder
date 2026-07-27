@@ -102,6 +102,12 @@ pub fn desired_helm(
     if in_range && !fleeing {
         orders.port = wrap(rel - FRAC_PI_2).abs() <= ai.fire_arc;
         orders.starboard = wrap(rel + FRAC_PI_2).abs() <= ai.fire_arc;
+        // A turreted hull lays its guns on the target. `broadside_direction`
+        // still clamps this to the bank's own arc, so a narrow bank behaves
+        // exactly as before and only a wide one can actually follow.
+        if ai.aim_at_target {
+            orders.aim = Some(to_target / dist);
+        }
     }
 
     (Helm { throttle, turn }, orders)

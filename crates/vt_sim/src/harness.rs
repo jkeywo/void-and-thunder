@@ -12,7 +12,7 @@ use bevy_time::Time;
 use std::time::Duration;
 
 use crate::ai::{ai_abilities_system, ai_system};
-use crate::collide::ram_system;
+use crate::collide::{landmark_system, ram_system};
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
@@ -74,7 +74,7 @@ impl Harness {
                 )
                     .chain(),
                 movement_system,
-                ram_system,
+                (ram_system, landmark_system).chain(),
                 bounds_system,
                 (
                     weapons_system,
@@ -358,7 +358,9 @@ mod tests {
         let mut h = Harness::new();
         let shielded = ShipLoadout {
             shield: Shield {
-                max: 500.0, // far more than the ram can spend, so nothing leaks
+                // Far more than the ram can spend, so nothing leaks through.
+                fore_max: 500.0,
+                aft_max: 500.0,
                 ..Default::default()
             },
             ..ShipLoadout::default()
@@ -397,13 +399,13 @@ mod tests {
         );
         let shield = h.world.get::<Shield>(rammer).expect("still fitted");
         assert!(
-            shield.fore.charge < shield.max,
+            shield.fore.charge < shield.fore_max,
             "and paid for it: fore was {} of {}",
             shield.fore.charge,
-            shield.max
+            shield.fore_max
         );
         assert_eq!(
-            shield.aft.charge, shield.max,
+            shield.aft.charge, shield.aft_max,
             "while the stern bank is untouched"
         );
     }

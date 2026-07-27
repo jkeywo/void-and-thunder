@@ -56,7 +56,33 @@ impl ShipLoadout {
             // but every exchange matters more than it did. Enemies fit none
             // (see `enemy`), which is a per-class decision rather than a rule.
             shield: Shield {
-                max: 22.5,
+                fore_max: 22.5,
+                aft_max: 22.5,
+                ..Shield::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// The bastion's loadout: guns that bear in every direction on a short
+    /// cooldown, and a generator pointed entirely forward.
+    pub fn bastion() -> Self {
+        Self {
+            broadside: Broadside {
+                cooldown: 1.0,
+                damage: 5.0,
+                muzzle_speed: 300.0,
+                guns: 2,
+                // A *half*-width, so pi is the whole circle.
+                arc: std::f32::consts::PI,
+                charge_time: 0.0,
+                ..Broadside::default()
+            },
+            shield: Shield {
+                fore_max: 120.0,
+                aft_max: 0.0,
+                regen_per_sec: 9.0,
+                regen_delay: 3.0,
                 ..Shield::default()
             },
             ..Self::default()
@@ -121,7 +147,7 @@ pub fn ship_bundle(
         (
             loadout.broadside,
             loadout.emp,
-            loadout.torpedoes,
+            loadout.torpedoes.stocked(),
             TorpedoLock::default(),
             TorpedoLaunchQueue::default(),
             loadout.boost,
@@ -150,6 +176,35 @@ pub struct Encounter {
     pub outcome: Outcome,
 }
 
+/// A different ship for the last wave — the thing the run has been building
+/// toward. Optional, because a scenario is perfectly entitled to end on one more
+/// wave of the same.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FinaleWave {
+    /// How many of it. Usually one: the point is a single hard problem, not a
+    /// bigger crowd.
+    pub count: u32,
+    pub hull: f32,
+    pub stats: ShipStats,
+    pub loadout: ShipLoadout,
+    pub class: ClassId,
+    pub ai: AiController,
+}
+
+impl Default for FinaleWave {
+    fn default() -> Self {
+        Self {
+            count: 1,
+            hull: 300.0,
+            stats: ShipStats::default(),
+            loadout: ShipLoadout::default(),
+            class: ClassId(0),
+            ai: AiController::default(),
+        }
+    }
+}
+
 /// How an encounter's waves are shaped. This is the *authored* half of the
 /// director — everything a scenario file gets to say about the waves. The live
 /// half (which wave we're on, the RNG state) lives on [`SpawnDirector`], so this
@@ -175,6 +230,8 @@ pub struct DirectorSettings {
     /// Which class the above came from, stamped onto each spawned ship so a
     /// class edited in the design panel reaches wave ships too.
     pub class: ClassId,
+    /// Replaces the *last* wave, when a scenario names one.
+    pub finale: Option<FinaleWave>,
 }
 
 impl Default for DirectorSettings {
@@ -198,6 +255,7 @@ impl Default for DirectorSettings {
             },
             loadout: ShipLoadout::enemy(),
             class: ClassId(0),
+            finale: None,
         }
     }
 }
@@ -313,27 +371,39 @@ pub fn director_system(
     director.wave += 1;
     encounter.wave = director.wave;
 
-    let count = wave_size(director.wave, settings.base_count);
-    let hull = settings.base_hull + (director.wave - 1) as f32 * settings.hull_per_wave;
+    // The last wave may be something else entirely.
+    let finale = settings
+        .finale
+        .filter(|_| director.wave == settings.max_waves);
+    let (count, hull, stats, loadout, class, ai) = match finale {
+        Some(f) => (f.count, f.hull, f.stats, f.loadout, f.class, f.ai),
+        None => (
+            wave_size(director.wave, settings.base_count),
+            settings.base_hull + (director.wave - 1) as f32 * settings.hull_per_wave,
+            settings.stats,
+            settings.loadout,
+            settings.class,
+            AiController::default(),
+        ),
+    };
     let jitter = director.next_seed();
     for pos in wave_spawn_points(count, bounds.radius * 0.85, jitter) {
         // Face the origin — waves ring the system edge, so this points each
         // arrival inward, at the action.
         let heading = (-pos).to_angle();
         commands.spawn((
-            ship_bundle(
-                settings.faction,
-                settings.stats,
-                hull,
-                pos,
-                heading,
-                settings.loadout,
-            ),
-            settings.class,
-            AiController::default(),
+            ship_bundle(faction_of(&settings), stats, hull, pos, heading, loadout),
+            class,
+            ai,
         ));
     }
     encounter.enemies_remaining = count;
+}
+
+/// The faction the director's ships fly under. Split out so the finale reads
+/// the same as any other wave — a boss is still a House ship.
+fn faction_of(settings: &DirectorSettings) -> Faction {
+    settings.faction
 }
 
 /// Reset the encounter to its opening state. The client calls this on restart
@@ -353,6 +423,67 @@ pub fn reset_encounter(director: &mut SpawnDirector, encounter: &mut Encounter) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The last wave is the thing the run has been building toward, and it is a
+    /// *different* ship — not more of the same, and not scaled by the ordinary
+    /// hull-per-wave ramp.
+    #[test]
+    fn the_finale_replaces_the_last_wave() {
+        let mut world = World::new();
+        world.init_resource::<Encounter>();
+        world.insert_resource(SystemBounds::default());
+        let boss = ClassId(7);
+        world.insert_resource(SpawnDirector {
+            settings: Some(DirectorSettings {
+                max_waves: 2,
+                base_count: 2,
+                finale: Some(FinaleWave {
+                    count: 1,
+                    hull: 300.0,
+                    class: boss,
+                    ..FinaleWave::default()
+                }),
+                ..DirectorSettings::default()
+            }),
+            ..SpawnDirector::default()
+        });
+        world.spawn((Protagonist, Transform::default()));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(director_system);
+
+        // Wave 1: ordinary patrols.
+        schedule.run(&mut world);
+        let wave1: Vec<ClassId> = world
+            .query_filtered::<&ClassId, With<AiController>>()
+            .iter(&world)
+            .copied()
+            .collect();
+        assert_eq!(wave1.len(), 2, "wave one is the authored base count");
+        assert!(wave1.iter().all(|c| *c != boss), "and not the finale");
+
+        // Clear it; the last wave should be the boss, alone.
+        let ids: Vec<Entity> = world
+            .query_filtered::<Entity, With<AiController>>()
+            .iter(&world)
+            .collect();
+        for e in ids {
+            world.despawn(e);
+        }
+        schedule.run(&mut world);
+        let wave2: Vec<(ClassId, f32)> = world
+            .query_filtered::<(&ClassId, &Hull), With<AiController>>()
+            .iter(&world)
+            .map(|(c, h)| (*c, h.max))
+            .collect();
+        assert_eq!(
+            wave2.len(),
+            1,
+            "the finale sends one hard problem, not a crowd"
+        );
+        assert_eq!(wave2[0].0, boss, "and it is the finale's class");
+        assert_eq!(wave2[0].1, 300.0, "with its own hull, not the wave ramp's");
+    }
 
     #[test]
     fn waves_escalate_in_size() {

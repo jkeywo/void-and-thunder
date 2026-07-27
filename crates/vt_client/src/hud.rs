@@ -297,6 +297,12 @@ fn gather_hud_state(
         }
 
         if let Some(t) = torps {
+            // Stores, separate from the tubes: the tube row says what can fire
+            // now, this says how much fighting is left in the ship.
+            j.push_str(&format!(
+                ",\"torpedoMagazine\":{{\"count\":{},\"max\":{}}}",
+                t.magazine, t.magazine_max
+            ));
             // `loaded` is fractional: whole part = tubes ready, the fraction is
             // the one tube currently reloading, the rest are empty.
             let ready = t.loaded.floor().max(0.0) as u32;

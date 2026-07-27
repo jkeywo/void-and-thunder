@@ -320,6 +320,13 @@ pub struct AiController {
     pub fire_arc: f32,
     /// Below this fraction of max hull the ship breaks off and runs.
     pub flee_hull_frac: f32,
+    /// Fire *at* the target rather than straight out the beam.
+    ///
+    /// Off for a broadside ship, whose whole identity is that it must present a
+    /// side. On for a turreted hull, where the guns bear wherever they like
+    /// within their arc — the aim is still clamped to that arc, so this changes
+    /// nothing for a narrow bank and everything for a 360-degree one.
+    pub aim_at_target: bool,
     /// When true, this AI also drives the special kit (EMP / torpedoes /
     /// microwarp) via [`PilotIntent`], not just the broadside. Enemies leave it
     /// off; the player-piloting AI turns it on.
@@ -335,6 +342,7 @@ impl Default for AiController {
             engage_range: 300.0,
             fire_arc: 0.35, // ~20°
             flee_hull_frac: 0.25,
+            aim_at_target: false,
             use_abilities: false,
             warp_prime: 0.0,
         }

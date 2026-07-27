@@ -49,12 +49,29 @@ pub const TORPEDO_TUBES: usize = 6;
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct TorpedoBay {
-    /// Tubes available (magazine size).
+    /// Tubes available — how many can be held ready at once.
     pub tubes_max: u32,
     /// Tubes currently loaded (fractional while a tube reloads). Live state —
-    /// authoring it would refill the magazine on every hot reload.
+    /// authoring it would refill the tubes on every hot reload.
     #[serde(skip)]
     pub loaded: f32,
+    /// Torpedoes left in the shared magazine, not counting the ones already in
+    /// tubes. Live state, so it is never authored.
+    ///
+    /// This is what makes torpedoes a *resource*. Tubes used to reload from
+    /// nothing, so the bay was an infinite magazine on a timer and the only
+    /// question was patience. Now a volley spends stores you have to go and
+    /// replace, which is the same loop the hull repair already runs on: the way
+    /// to keep fighting is to take ships.
+    #[serde(skip)]
+    pub magazine: u32,
+    /// How many torpedoes the magazine holds when full.
+    pub magazine_max: u32,
+    /// Torpedoes recovered from a boarded prize, drawn uniformly from this
+    /// range. Per class, so a dedicated torpedo boat can be authored to live off
+    /// its plunder while another barely resupplies at all.
+    pub resupply_min: u32,
+    pub resupply_max: u32,
     /// Seconds to reload one tube.
     pub reload_per_tube: f32,
     /// Seconds between additional locks while holding aim.
@@ -79,6 +96,10 @@ impl Default for TorpedoBay {
         Self {
             tubes_max: 6,
             loaded: 6.0,
+            magazine: 20,
+            magazine_max: 20,
+            resupply_min: 0,
+            resupply_max: 2,
             reload_per_tube: 1.5,
             lock_interval: 0.5,
             lock_radius: 112.5, // 75% of the original 150
@@ -87,6 +108,29 @@ impl Default for TorpedoBay {
             speed: 260.0,
             damage: 22.0,
         }
+    }
+}
+
+impl TorpedoBay {
+    /// This bay with its magazine full and its tubes loaded — how a ship enters
+    /// the field. The authored file describes the *fit*; the live counts are
+    /// derived from it, never written down.
+    pub fn stocked(self) -> Self {
+        Self {
+            magazine: self.magazine_max,
+            loaded: self.tubes_max as f32,
+            ..self
+        }
+    }
+
+    /// Take `n` torpedoes into the magazine, up to its capacity. Returns how
+    /// many actually fitted, so a caller can report a resupply honestly rather
+    /// than announcing two and delivering none.
+    pub fn restock(&mut self, n: u32) -> u32 {
+        let room = self.magazine_max.saturating_sub(self.magazine);
+        let taken = n.min(room);
+        self.magazine += taken;
+        taken
     }
 }
 
@@ -216,10 +260,21 @@ pub fn home_velocity(vel: Vec3, desired_dir: Vec3, speed: f32, turn_rate: f32, d
 pub fn torpedo_reload_system(time: Res<Time>, mut bays: Query<&mut TorpedoBay>) {
     let dt = time.delta_secs();
     for mut bay in &mut bays {
-        let max = bay.tubes_max as f32;
-        if bay.loaded < max {
-            bay.loaded = (bay.loaded + dt / bay.reload_per_tube).min(max);
+        // A tube can only be filled from stores. The ceiling is therefore not
+        // just the tube count but the tube count the magazine can actually
+        // supply, so an empty magazine leaves the loaded tubes exactly as they
+        // are rather than topping them back up out of nowhere.
+        let whole = bay.loaded.floor();
+        let ceiling = (whole + bay.magazine as f32).min(bay.tubes_max as f32);
+        if bay.loaded >= ceiling {
+            continue;
         }
+        let before = bay.loaded.floor();
+        bay.loaded = (bay.loaded + dt / bay.reload_per_tube).min(ceiling);
+        // Stores are spent the moment a tube finishes filling, not when it
+        // starts: a reload interrupted half way has cost nothing.
+        let finished = (bay.loaded.floor() - before).max(0.0) as u32;
+        bay.magazine = bay.magazine.saturating_sub(finished);
     }
 }
 
@@ -675,6 +730,61 @@ mod tests {
                 "every ship swept should still be locked: {locked:?}"
             );
         }
+    }
+
+    /// The magazine is what makes a volley cost something. Tubes refill from
+    /// stores, and when the stores are gone the tubes stay empty however long
+    /// you wait — the old bay reloaded from nothing, so torpedoes were free and
+    /// the only question was patience.
+    #[test]
+    fn tubes_reload_from_the_magazine_and_stop_when_it_is_empty() {
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        let bay = world
+            .spawn(TorpedoBay {
+                tubes_max: 4,
+                magazine_max: 2,
+                reload_per_tube: 1.0,
+                ..Default::default()
+            })
+            .id();
+        // Fire everything: no tubes loaded, two torpedoes in stores.
+        {
+            let mut b = world.get_mut::<TorpedoBay>(bay).unwrap();
+            *b = b.stocked();
+            b.loaded = 0.0;
+        }
+        assert_eq!(world.get::<TorpedoBay>(bay).unwrap().magazine, 2);
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(torpedo_reload_system);
+        for _ in 0..40 {
+            world
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(0.25));
+            schedule.run(&mut world);
+        }
+
+        let b = world.get::<TorpedoBay>(bay).unwrap();
+        assert_eq!(
+            b.loaded, 2.0,
+            "only as many tubes as the magazine could supply"
+        );
+        assert_eq!(b.magazine, 0, "and the stores are spent");
+    }
+
+    #[test]
+    fn a_restock_never_overfills_the_magazine() {
+        let mut bay = TorpedoBay {
+            magazine_max: 20,
+            ..Default::default()
+        }
+        .stocked();
+        assert_eq!(bay.magazine, 20, "a ship enters the field with full stores");
+        assert_eq!(bay.restock(2), 0, "no room, so nothing is taken aboard");
+        bay.magazine = 19;
+        assert_eq!(bay.restock(2), 1, "only what fits");
+        assert_eq!(bay.magazine, 20);
     }
 
     /// Locks survive the cursor wandering off onto empty space.

@@ -46,7 +46,8 @@ static FIELDS: SpecTable = SpecTable::new(&[
     ("ShipStats", "turn_accel", FieldSpec::config(0.5, 16.0)),
     // Shields. `max` starts at the bottom of its range because zero is a
     // meaningful setting — it is how a class says "no shields fitted".
-    ("Shield", "max", FieldSpec::config(0.0, 200.0)),
+    ("Shield", "fore_max", FieldSpec::config(0.0, 200.0)),
+    ("Shield", "aft_max", FieldSpec::config(0.0, 200.0)),
     ("Shield", "regen_per_sec", FieldSpec::config(0.0, 40.0)),
     ("Shield", "regen_delay", FieldSpec::config(0.0, 10.0)),
     // Broadside.

@@ -9,7 +9,7 @@ use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
 use crate::ai::{ai_abilities_system, ai_system};
-use crate::collide::ram_system;
+use crate::collide::{landmark_system, ram_system};
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
 use crate::drive::{battery_system, microwarp_system, speed_scale_system};
 use crate::emp::{emp_bolt_system, emp_system};
@@ -104,7 +104,12 @@ impl Plugin for SimPlugin {
                     .in_set(SimSet::Systems),
             )
             .add_systems(FixedUpdate, movement_system.in_set(SimSet::Movement))
-            .add_systems(FixedUpdate, ram_system.in_set(SimSet::Contact))
+            .add_systems(
+                FixedUpdate,
+                (ram_system, landmark_system)
+                    .chain()
+                    .in_set(SimSet::Contact),
+            )
             .add_systems(FixedUpdate, bounds_system.in_set(SimSet::Bounds))
             .add_systems(
                 FixedUpdate,

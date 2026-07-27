@@ -31,11 +31,13 @@ use bevy_transform::components::Transform;
 
 use crate::combat::apply_hull_damage;
 use crate::components::{
-    Anchored, Brace, Collider, Faction, Heading, Hull, Invulnerable, Ship, Velocity,
+    Anchored, Brace, Collider, Faction, Heading, Hull, Invulnerable, Landmark, Projectile, Ship,
+    Velocity,
 };
 use crate::drive::BoostDrive;
 use crate::events::ShipHit;
 use crate::shield::{shield_arc, Shield};
+use crate::torpedo::Torpedo;
 use crate::tuning::SimTuning;
 
 /// How much of the closing speed is given back as bounce. Well under 1: hulls
@@ -251,6 +253,64 @@ pub fn ram_system(
                 direction: normal,
                 report: b_report,
             });
+        }
+    }
+}
+
+/// Bevy system: make stars, planets and stations solid.
+///
+/// Landmarks were pure scenery — ships and shot flew straight through a star.
+/// They are now obstacles at exactly the radius they are drawn at, which is the
+/// whole point: a body you can see has to be a body you can hit, or the world
+/// stops being trustworthy.
+///
+/// A hull is pushed out and has its inward motion killed, but takes no damage.
+/// Grazing a planet is a piloting mistake, not a death sentence, and the shove
+/// already costs the speed that mattered. Shot is simply spent: it stops on the
+/// surface rather than passing through, and deals nothing — a cannonball is not
+/// going to trouble a star.
+pub fn landmark_system(
+    mut commands: Commands,
+    landmarks: Query<(&Transform, &Landmark)>,
+    mut ships: Query<(&mut Transform, &mut Velocity, &Collider), (With<Ship>, Without<Landmark>)>,
+    // `Without<Ship>` is what makes these provably disjoint from the mutable
+    // ship query above; nothing is both, but Bevy has to be told so.
+    shot: Query<(Entity, &Transform), (With<Projectile>, Without<Landmark>, Without<Ship>)>,
+    torpedoes: Query<(Entity, &Transform), (With<Torpedo>, Without<Landmark>, Without<Ship>)>,
+) {
+    for (body_tf, body) in &landmarks {
+        let centre = body_tf.translation.truncate();
+
+        for (mut tf, mut vel, collider) in &mut ships {
+            let pos = tf.translation.truncate();
+            let reach = body.radius + collider.radius;
+            let delta = pos - centre;
+            let dist = delta.length();
+            if dist >= reach {
+                continue;
+            }
+            // Dead centre would divide by zero; shove along +X instead.
+            let out = if dist > 1e-6 { delta / dist } else { Vec2::X };
+            tf.translation = (centre + out * reach).extend(tf.translation.z);
+            // Kill only the inward component, so a ship skims along a planet's
+            // surface rather than sticking to it.
+            let inward = vel.0.dot(-out);
+            if inward > 0.0 {
+                vel.0 += out * inward;
+            }
+        }
+
+        // Shot stops at the surface. Torpedoes are tested in 3D because they
+        // arc off the plane, and a landmark is a sphere.
+        for (entity, tf) in &shot {
+            if tf.translation.truncate().distance(centre) <= body.radius {
+                commands.entity(entity).despawn();
+            }
+        }
+        for (entity, tf) in &torpedoes {
+            if tf.translation.distance(centre.extend(0.0)) <= body.radius {
+                commands.entity(entity).despawn();
+            }
         }
     }
 }

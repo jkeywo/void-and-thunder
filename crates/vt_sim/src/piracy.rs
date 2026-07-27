@@ -13,7 +13,9 @@ use bevy_transform::components::Transform;
 use crate::components::{
     AiController, Disabled, FireOrders, Helm, Hull, Invulnerable, Protagonist, Ship,
 };
+use crate::torpedo::TorpedoBay;
 use crate::tuning::SimTuning;
+use crate::util::lcg_next;
 
 // Defaults for the piracy thresholds; the live values are the matching
 // [`SimTuning`] fields, which is what the systems read.
@@ -96,10 +98,11 @@ pub fn boarding_system(
     mut commands: Commands,
     mut plunder: ResMut<Plunder>,
     mut boarding: ResMut<Boarding>,
-    mut protagonist: Query<(&Transform, &mut Hull), With<Protagonist>>,
+    mut protagonist: Query<(&Transform, &mut Hull, Option<&mut TorpedoBay>), With<Protagonist>>,
+    mut seed: Local<u32>,
     disabled: Query<(Entity, &Transform), (With<Ship>, With<Disabled>, Without<Invulnerable>)>,
 ) {
-    let Ok((protagonist, mut own_hull)) = protagonist.single_mut() else {
+    let Ok((protagonist, mut own_hull, mut own_torpedoes)) = protagonist.single_mut() else {
         *boarding = Boarding::default();
         return;
     };
@@ -134,6 +137,15 @@ pub fn boarding_system(
                 // over-repair, and a full hull simply wastes the salvage.
                 let repair = own_hull.max * tuning.board_repair_frac;
                 own_hull.current = (own_hull.current + repair).min(own_hull.max);
+                // And whatever torpedoes were in her racks. The range is
+                // authored per class and may be zero at both ends, so a hull
+                // that is not meant to live off plunder simply gains nothing.
+                if let Some(bay) = own_torpedoes.as_deref_mut() {
+                    let (lo, hi) = (bay.resupply_min, bay.resupply_max.max(bay.resupply_min));
+                    let span = hi - lo + 1;
+                    let roll = lo + (lcg_next(&mut seed) * span as f32) as u32 % span;
+                    bay.restock(roll);
+                }
                 boarding.target = None;
                 boarding.progress = 0.0;
             }

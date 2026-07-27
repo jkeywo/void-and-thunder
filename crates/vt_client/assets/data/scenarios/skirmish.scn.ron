@@ -23,5 +23,8 @@
         base_hull: 100.0,
         hull_per_wave: 25.0,
         enemy_class: "house_patrol",
+        // The last wave is the bastion instead of more patrols.
+        finale_class: "house_bastion",
+        finale_count: 1,
     )),
 )

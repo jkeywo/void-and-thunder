@@ -65,8 +65,14 @@ pub struct Shield {
     pub fore: ShieldBank,
     #[serde(skip)]
     pub aft: ShieldBank,
-    /// Capacity of *each* arc. Zero means this hull has no shields fitted.
-    pub max: f32,
+    /// Capacity of each arc, authored separately.
+    ///
+    /// Two numbers rather than one because a hull may be shielded on one side
+    /// only — a siege platform with its whole generator pointed forward is a
+    /// different problem to solve than an evenly-protected ship, and "get behind
+    /// it" is a tactic worth being able to author. Both zero means no shields.
+    pub fore_max: f32,
+    pub aft_max: f32,
     pub regen_per_sec: f32,
     pub regen_delay: f32,
 }
@@ -76,7 +82,8 @@ impl Default for Shield {
         Self {
             fore: ShieldBank::default(),
             aft: ShieldBank::default(),
-            max: SHIELD_MAX,
+            fore_max: SHIELD_MAX,
+            aft_max: SHIELD_MAX,
             regen_per_sec: SHIELD_REGEN_PER_SEC,
             regen_delay: SHIELD_REGEN_DELAY,
         }
@@ -86,20 +93,30 @@ impl Default for Shield {
 impl Shield {
     /// This fit with both banks full — how a ship enters the field.
     pub fn charged(self) -> Self {
-        let full = ShieldBank {
-            charge: self.max,
-            cooldown: 0.0,
-        };
         Self {
-            fore: full,
-            aft: full,
+            fore: ShieldBank {
+                charge: self.fore_max,
+                cooldown: 0.0,
+            },
+            aft: ShieldBank {
+                charge: self.aft_max,
+                cooldown: 0.0,
+            },
             ..self
         }
     }
 
-    /// Whether this hull has shields at all.
+    /// Capacity of one arc.
+    pub fn max_of(&self, arc: ShieldArc) -> f32 {
+        match arc {
+            ShieldArc::Fore => self.fore_max,
+            ShieldArc::Aft => self.aft_max,
+        }
+    }
+
+    /// Whether this hull has shields at all — on either side.
     pub fn fitted(&self) -> bool {
-        self.max > 0.0
+        self.fore_max > 0.0 || self.aft_max > 0.0
     }
 
     /// The named bank.
@@ -117,12 +134,14 @@ impl Shield {
         }
     }
 
-    /// This arc's charge as a fraction of capacity, for the HUD and gizmos.
+    /// This arc's charge as a fraction of *its own* capacity, for the HUD and
+    /// the status ring. An unshielded arc reads zero rather than dividing by it.
     pub fn fraction(&self, arc: ShieldArc) -> f32 {
-        if self.max <= 0.0 {
+        let max = self.max_of(arc);
+        if max <= 0.0 {
             return 0.0;
         }
-        (self.bank(arc).charge / self.max).clamp(0.0, 1.0)
+        (self.bank(arc).charge / max).clamp(0.0, 1.0)
     }
 
     /// Spend this arc against `damage`, returning what the shield could not stop
@@ -131,7 +150,9 @@ impl Shield {
     /// Any contact suppresses the arc's regeneration, including one that only
     /// grazes a bank already at zero: being shot at is what keeps a shield down.
     pub fn absorb(&mut self, arc: ShieldArc, damage: f32) -> f32 {
-        if !self.fitted() || damage <= 0.0 {
+        // A bare arc stops nothing and is not suppressed by being shot at —
+        // there is no generator there to knock offline.
+        if self.max_of(arc) <= 0.0 || damage <= 0.0 {
             return damage.max(0.0);
         }
         let delay = self.regen_delay;
@@ -169,8 +190,9 @@ pub fn shield_regen_system(time: Res<Time>, mut ships: Query<&mut Shield, With<S
         if !shield.fitted() {
             continue;
         }
-        let (max, rate) = (shield.max, shield.regen_per_sec);
+        let rate = shield.regen_per_sec;
         for arc in [ShieldArc::Fore, ShieldArc::Aft] {
+            let max = shield.max_of(arc);
             let bank = shield.bank_mut(arc);
             if bank.cooldown > 0.0 {
                 bank.cooldown = (bank.cooldown - dt).max(0.0);
@@ -188,10 +210,10 @@ pub fn shield_regen_system(time: Res<Time>, mut ships: Query<&mut Shield, With<S
 /// leaves an over-full arc and raising it looks like nothing happened.
 pub fn shield_refit_system(mut ships: Query<&mut Shield, Changed<Shield>>) {
     for mut shield in &mut ships {
-        let max = shield.max;
-        if shield.fore.charge > max || shield.aft.charge > max {
-            shield.fore.charge = shield.fore.charge.min(max);
-            shield.aft.charge = shield.aft.charge.min(max);
+        let (fore, aft) = (shield.fore_max, shield.aft_max);
+        if shield.fore.charge > fore || shield.aft.charge > aft {
+            shield.fore.charge = shield.fore.charge.min(fore);
+            shield.aft.charge = shield.aft.charge.min(aft);
         }
     }
 }
@@ -220,7 +242,8 @@ mod tests {
 
     fn fitted() -> Shield {
         Shield {
-            max: 40.0,
+            fore_max: 40.0,
+            aft_max: 40.0,
             regen_per_sec: 10.0,
             regen_delay: 2.0,
             ..Default::default()
@@ -313,7 +336,8 @@ mod tests {
     #[test]
     fn a_refit_never_leaves_an_over_full_bank() {
         let mut s = fitted();
-        s.max = 10.0; // the designer dragged capacity down mid-fight
+        s.fore_max = 10.0; // the designer dragged capacity down mid-fight
+        s.aft_max = 10.0;
         let mut world = World::new();
         let e = world.spawn(s).id();
         let mut schedule = Schedule::default();

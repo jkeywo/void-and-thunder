@@ -56,7 +56,7 @@
                     // suppression is what stops it being a flat damage
                     // reduction: under sustained fire the struck bank stays at
                     // zero, so the answer is always to turn.
-                    shield: (max: 22.5, regen_per_sec: 7.0, regen_delay: 2.5),
+                    shield: (fore_max: 22.5, aft_max: 22.5, regen_per_sec: 7.0, regen_delay: 2.5),
                 ),
                 ai: (),
             ),
@@ -100,6 +100,64 @@
                     fire_arc: 0.35,
                     flee_hull_frac: 0.25,
                     // Enemies fly the broadside only; the kit is the player's.
+                    use_abilities: false,
+                ),
+            ),
+        ),
+        (
+            name: "house_bastion",
+            class: (
+                // The finale. A siege platform, not a duellist: it barely moves,
+                // its generator is pointed forward, and its guns bear in every
+                // direction. Everything the run has taught about presenting a
+                // side is wrong here — the answer is to get behind it and stay
+                // there, where the shield is not.
+                stats: (
+                    // Ponderous. It can just about hold station and come about,
+                    // and that is all — you can always out-run it, which is what
+                    // makes staying on its stern a skill rather than a stalemate.
+                    thrust: 30.0,
+                    turn_rate: 0.16,
+                    max_speed: 34.0,
+                    forward_drag: 0.9,
+                    lateral_drag: 6.0,
+                    turn_rate_slow: 1.2,
+                    turn_rate_fast: 0.7,
+                    turn_accel: 1.4,
+                ),
+                // Three times a patrol's hull.
+                hull: 300.0,
+                collider: (radius: 42.0),
+                emp_defense: (resist: 220.0, recovery_per_sec: 20.0),
+                loadout: (
+                    // 360 degrees: arc is a *half*-width, so pi is every
+                    // direction. A one-second cooldown makes it a constant
+                    // pressure rather than a telegraphed punch, and the damage
+                    // is well down per shot to pay for that.
+                    broadside: (
+                        cooldown: 1.0,
+                        damage: 5.0,
+                        muzzle_speed: 300.0,
+                        guns: 2,
+                        arc: 3.14159265,
+                        charge_time: 0.0,
+                    ),
+                    emp: (),
+                    torpedoes: (),
+                    boost: (),
+                    microwarp: (),
+                    // Forward only. The stern is bare, and that is the whole
+                    // fight.
+                    shield: (fore_max: 120.0, aft_max: 0.0, regen_per_sec: 9.0, regen_delay: 3.0),
+                ),
+                ai: (
+                    // It never needs to present a beam, so it simply closes and
+                    // keeps firing. A wide fire_arc means "shoot whenever in
+                    // range"; aim_at_target lays the guns on you.
+                    engage_range: 520.0,
+                    fire_arc: 3.14159265,
+                    aim_at_target: true,
+                    flee_hull_frac: 0.0,
                     use_abilities: false,
                 ),
             ),
