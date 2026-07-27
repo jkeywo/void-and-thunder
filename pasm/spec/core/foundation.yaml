@@ -287,6 +287,7 @@ entities:
         [
           crates/vt_sim/src/point_defense.rs,
           crates/vt_sim/src/events.rs,
+          crates/vt_sim/src/pilot.rs,
           crates/vt_client/src/gizmos.rs,
         ]
       symbols:
@@ -296,6 +297,7 @@ entities:
           MunitionIntercepted,
           draw_intercept_flashes,
           draw_point_defense_radius,
+          score_screen,
         ]
       tests: [crates/vt_sim/src/point_defense.rs]
 
@@ -316,9 +318,20 @@ entities:
       references: [ship-combat, piracy-finisher, loadout-selection]
     implementation:
       status: declared
-      paths: [crates/vt_sim/src/barrels.rs, crates/vt_sim/src/piracy.rs]
+      paths:
+        [
+          crates/vt_sim/src/barrels.rs,
+          crates/vt_sim/src/piracy.rs,
+          crates/vt_sim/src/pilot.rs,
+        ]
       symbols:
-        [FireBarrelRack, FireBarrel, barrel_drop_system, barrel_burn_system]
+        [
+          FireBarrelRack,
+          FireBarrel,
+          barrel_drop_system,
+          barrel_burn_system,
+          score_barrel,
+        ]
       tests: [crates/vt_sim/src/barrels.rs]
 
   - component: loadout-selection
@@ -335,7 +348,10 @@ entities:
         defence) and special (torpedoes, microwarp or fire barrels), authored in
         loadouts.ron. SelectedLoadout holds the choice; LoadoutCatalogue::fit
         lays it over the class's own loadout at spawn. One key per slot, resolved
-        against what the ship carries rather than naming a device. The choice
+        against what the ship carries rather than naming a device. The utility
+        AI scores what is aboard and nothing else: score_screen and score_barrel
+        return zero for an unfitted device, so a hull that carries no screen
+        never asks for one. The choice
         persists through vellum_save in its own slot beside the career: a
         preference, not a reward, and clamped on load because the save holds
         indices that can outlive the list they point into.

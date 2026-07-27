@@ -264,10 +264,19 @@ entities:
           helm. Making them optional came first, as its own change with no
           behaviour attached.
         - >-
-          The AI does not score the two new devices yet. It plans not to use
-          them, but still carries them in its Plan so applying it clears what the
-          client last wrote — otherwise taking the helm with a barrel key held
-          would leave the rack dropping forever.
+          The brain scores the two new devices, but they are not stances.
+          Neither wants the helm anywhere — the screen is omnidirectional, and a
+          barrel asks when rather than where — so score_screen and score_barrel
+          run in the opportunistic pass instead of joining Action. An action that
+          steers nowhere has no business owning the steering. The screen still
+          contends for the thumb, because one thumb really must choose between
+          raising it and bracing; the rack contends for nothing, because a barrel
+          takes no aim and a hull carrying a rack carries neither tubes nor a
+          drive to want the same finger.
+        - >-
+          Both score zero for a device that is not fitted, which is how "run the
+          utility functions on the available modules" is enforced rather than
+          merely intended: a hull with no screen cannot ask for one.
       references:
         [
           loadout-selection,

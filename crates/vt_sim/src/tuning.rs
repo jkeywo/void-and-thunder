@@ -142,6 +142,25 @@ pub struct PilotTuning {
     /// How close a hostile must be, as a fraction of gun reach, before bracing
     /// between volleys is worth it.
     pub brace_range_frac: f32,
+    /// The `danger` reading the point-defence screen treats as fully under
+    /// fire. Below it the screen is only partly worth its charge; at or above
+    /// it, the ship is being shot at as hard as it cares to measure.
+    pub screen_danger: f32,
+    /// What the screen is worth to a ship at full integrity — the floor the
+    /// score climbs from as the hull comes off. Below 1.0 because a fresh ship
+    /// can afford to take a hit, and the charge may be worth more later.
+    pub screen_base: f32,
+    /// Score at or above which the screen is actually raised. A threshold and
+    /// not a comparison, because the screen contends with nothing: a ship that
+    /// fits one carries no other battery device.
+    pub screen_raise: f32,
+    /// How far behind the ship a pursuer must be for a barrel to be worth
+    /// dropping, as a multiple of the fire's own radius. Over 1.0 because a
+    /// barrel is dropped where the chaser is *going*, not where it is.
+    pub barrel_lead: f32,
+    /// Fraction of the rack held back for a real emergency, so a pilot does not
+    /// pave the whole engagement with the first ship that gets behind it.
+    pub barrel_reserve: f32,
     /// What a point of shield is worth against a point of hull when the pilot
     /// asks how much punishment it has left. Under 1.0 because shields are
     /// directional and regenerate: a full bank is real protection, but only on
@@ -185,6 +204,15 @@ impl Default for PilotTuning {
             warp_reposition_interest: 0.6,
             torpedo_standoff: 0.8,
             brace_range_frac: 0.6,
+            // One hostile at point-blank inside gun reach reads as ~1.0, so
+            // this puts the screen fully up for a single committed attacker and
+            // partly up for one still closing.
+            screen_danger: 1.0,
+            screen_base: 0.55,
+            screen_raise: 0.35,
+            // A chaser three fire-widths back is about to be in it.
+            barrel_lead: 3.0,
+            barrel_reserve: 0.25,
             shield_worth: 0.7,
             shield_bias: 0.35,
             presentation_floor: 0.4,

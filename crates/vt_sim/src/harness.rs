@@ -246,6 +246,95 @@ mod tests {
         assert!(emped, "the AI pilot should EMP a targetable ship");
     }
 
+    /// The pilot flies the modules it is actually carrying. A ship fitted with
+    /// the point-defence screen must raise it when shot at — the whole promise
+    /// of the loadout slots is that the brain scores what is aboard, and a
+    /// device the AI never reaches for is one the player cannot hand to it.
+    #[test]
+    fn the_ai_pilot_raises_a_fitted_screen() {
+        use crate::point_defense::PointDefense;
+
+        let mut h = Harness::new();
+        let me = spawn_ship_in(
+            &mut h.world,
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            // A real battery fit carries exactly one device. Leaving the
+            // disruptor on would be an invalid loadout, and it outranks the
+            // screen on the thumb — the ordering the ladder documents.
+            ShipLoadout {
+                emp: None,
+                point_defense: Some(PointDefense::default()),
+                ..ShipLoadout::player()
+            },
+        )
+        .insert((Protagonist, AiController::piloting()))
+        .id();
+        // Close enough to be shooting at us.
+        h.world.spawn((
+            ship_bundle(
+                Faction::Houses,
+                ShipStats::default(),
+                100.0,
+                Vec2::new(150.0, 0.0),
+                0.0,
+                ShipLoadout::enemy(),
+            ),
+            AiController::default(),
+        ));
+
+        h.run(64, 1.0 / 64.0); // a second
+
+        assert!(
+            h.world
+                .get::<crate::components::PilotIntent>(me)
+                .expect("the pilot writes its own intent")
+                .point_defense_fire,
+            "a screen aboard a ship under fire should be up"
+        );
+    }
+
+    /// ...and a ship carrying no screen never asks for one, however hard it is
+    /// being shot at. An unfitted device is absent, not idle.
+    #[test]
+    fn the_ai_pilot_never_asks_for_a_module_it_does_not_carry() {
+        let mut h = Harness::new();
+        let me = spawn_ship_in(
+            &mut h.world,
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            ShipLoadout::player(), // disruptor + tubes, no screen and no rack
+        )
+        .insert((Protagonist, AiController::piloting()))
+        .id();
+        h.world.spawn((
+            ship_bundle(
+                Faction::Houses,
+                ShipStats::default(),
+                100.0,
+                Vec2::new(150.0, 0.0),
+                0.0,
+                ShipLoadout::enemy(),
+            ),
+            AiController::default(),
+        ));
+
+        h.run(64, 1.0 / 64.0);
+
+        let intent = h
+            .world
+            .get::<crate::components::PilotIntent>(me)
+            .expect("intent");
+        assert!(!intent.point_defense_fire, "no screen aboard");
+        assert!(!intent.barrel_drop, "no rack aboard");
+    }
+
     /// Hulls are solid. Two ships driven into the same spot must end up apart,
     /// not overlapping — the "ships pass through each other" era is over.
     #[test]

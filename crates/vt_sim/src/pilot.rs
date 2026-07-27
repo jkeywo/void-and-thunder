@@ -43,6 +43,7 @@ use bevy_transform::components::Transform;
 use std::f32::consts::FRAC_PI_2;
 
 use crate::ai::desired_helm;
+use crate::barrels::FireBarrelRack;
 use crate::combat::{intercept_lead, Broadside};
 use crate::components::{
     AiController, Brace, Disabled, EmpDefense, Faction, FireOrders, Heading, Helm, Hull,
@@ -51,6 +52,7 @@ use crate::components::{
 use crate::drive::{Battery, BoostDrive, MicrowarpDrive};
 use crate::emp::EmpWeapon;
 use crate::piracy::BoardIntent;
+use crate::point_defense::PointDefense;
 use crate::shield::{Shield, ShieldArc};
 use crate::torpedo::{TorpedoBay, TorpedoLock};
 use crate::tuning::{AiTuning, PilotTuning, SimTuning};
@@ -134,8 +136,13 @@ pub enum Thumb {
     Emp,
     /// Y — brace.
     Brace,
-    /// A — boost.
+    /// A — boost, or whatever else the battery slot holds. The screen is a
+    /// separate variant not because it is a separate button — it is the same
+    /// one — but because the pilot presses it for entirely different reasons,
+    /// and a plan that could not tell them apart could not be read.
     Boost,
+    /// A — the point-defence screen.
+    Screen,
     /// B — board.
     Board,
 }
@@ -203,6 +210,18 @@ pub struct Kit {
     pub board_range: f32,
     /// Charge left in the battery slot's pool, as a fraction.
     pub battery_frac: f32,
+    /// How far the point-defence screen reaches. Zero when none is fitted,
+    /// which is what every score below reads as "this ship has no screen".
+    pub screen_radius: f32,
+    /// How wide a dropped barrel burns. Zero with no rack aboard.
+    pub barrel_radius: f32,
+    /// Barrels left in the rack.
+    pub barrels: u32,
+    /// The rack as a fraction of full, mirroring `stock_frac` for the tubes —
+    /// finite ordnance is scored on how much is left, not on the raw count.
+    pub barrel_stock_frac: f32,
+    /// Whether the rack has finished paying out its last drop.
+    pub barrel_ready: bool,
     /// Charge in the bow arc as a fraction of its own capacity. Zero on a hull
     /// with no shields fitted, which is what makes every shield term below
     /// vanish for such a ship rather than needing a special case.
@@ -820,6 +839,59 @@ fn warp_destination(s: &Situation) -> Vec2 {
     }
 }
 
+/// How badly the ship wants its point-defence screen up this step.
+///
+/// Not a stance, so it is scored rather than chosen: the screen is
+/// omnidirectional and wants no particular pose, and an action that steers
+/// nowhere has no business owning the helm. What it wants is a *reason*, since
+/// unlike bracing it is paid for out of the battery.
+///
+/// The reason is `danger` — how much shooting is actually pointed at the ship,
+/// measured over gun reach. Deliberately not a count of munitions in the air:
+/// the pilot models a player reading a fight, and a player raises the screen
+/// because someone is shooting at them, not because they have tracked an
+/// individual shell. A hurt ship wants it more than a fresh one, because a fresh
+/// one can afford the hit and may want the charge later.
+pub fn score_screen(s: &Situation, t: &PilotTuning) -> f32 {
+    if s.kit.screen_radius <= 0.0 {
+        return 0.0; // no screen fitted — there is nothing to raise
+    }
+    let under_fire = (s.danger / t.screen_danger.max(0.01)).clamp(0.0, 1.0);
+    let hurt = 1.0 - s.integrity;
+    (under_fire * (t.screen_base + (1.0 - t.screen_base) * hurt)).clamp(0.0, 1.0)
+}
+
+/// How badly the ship wants a barrel over the stern this step.
+///
+/// The one weapon in the kit that is not aimed: it asks *when*, not where. So
+/// the whole question is whether anything is close enough behind to run into
+/// the fire — abaft the beam, and inside a few widths of the burn. A ship with
+/// a clear stern gains nothing by paving the void behind it.
+///
+/// Holds a reserve back, for the same reason the torpedo score has a scarcity
+/// floor: the last barrels are worth more than the first, and a pilot that
+/// spent the rack on the first frigate to get behind it has nothing left for
+/// the one that matters.
+pub fn score_barrel(s: &Situation, t: &PilotTuning) -> f32 {
+    if s.kit.barrels == 0 || !s.kit.barrel_ready || s.kit.barrel_radius <= 0.0 {
+        return 0.0;
+    }
+    let reach = s.kit.barrel_radius * t.barrel_lead.max(1.0);
+    let astern = s.hostiles.iter().any(|h| {
+        // Abaft the beam: more than a quarter turn off the bow either way.
+        h.dist <= reach && wrap((h.pos - s.pos).to_angle() - s.heading).abs() > FRAC_PI_2
+    });
+    if !astern {
+        return 0.0;
+    }
+    // Spend freely while the rack is deep, grudgingly once into the reserve.
+    if s.kit.barrel_stock_frac <= t.barrel_reserve {
+        // Still worth it if the ship is genuinely in trouble.
+        return 1.0 - s.integrity;
+    }
+    1.0
+}
+
 /// The second pass: every action that did *not* win the helm gets to fire if the
 /// pose the governor chose already suits it. Nothing here may steer.
 fn opportunities(s: &Situation, t: &AiTuning, plan: &mut Plan) {
@@ -849,6 +921,18 @@ fn opportunities(s: &Situation, t: &AiTuning, plan: &mut Plan) {
         });
         plan.torpedo_hold = under_cursor && s.kit.locks < volley_size(s, t);
     }
+
+    // --- The point-defence screen. Wants no pose, so it is decided here rather
+    // than fought over in the governor: score it and raise it. It still has to
+    // get past the thumb below — one thumb, and bracing wants the same one.
+    plan.point_defense_fire = score_screen(s, &t.pilot) >= t.pilot.screen_raise;
+
+    // --- Fire barrels. The one thing in the kit that takes no aim, so unlike
+    // the tubes and the jump it never contends for the hands: a barrel is a tap
+    // with the special-slot finger while the eyes are somewhere else entirely.
+    // A ship carrying a rack carries neither tubes nor a drive, so nothing else
+    // wants that finger either.
+    plan.barrel_drop = score_barrel(s, &t.pilot) > 0.0;
 
     // --- Boarding. The dwell is positional by definition: if the ship is
     // already alongside a hulk, it is boarding it whether that was the plan or
@@ -984,12 +1068,20 @@ pub fn apply_hands(s: &Situation, t: &PilotTuning, plan: &mut Plan, brain: &Pilo
     //
     // Boost first: it is only ever asked for by a stance that is committing the
     // ship somewhere (a ram, a run), and those fail outright without it. Then the
-    // EMP, which is the whole point of the opportunistic pass. Brace and the
-    // boarding press are what a spare thumb does.
+    // EMP, which is the whole point of the opportunistic pass. Then the screen,
+    // ahead of bracing because it stops a shot outright where bracing only
+    // softens one. Brace and the boarding press are what a spare thumb does.
+    //
+    // The first three are the same physical button — the battery slot — and a
+    // ship fits exactly one of them, so at most one of those arms can ever be
+    // live. They are ordered anyway: the data model permits a hull carrying two,
+    // and an order written down beats one that falls out of the archetype.
     let wanted = if plan.boost {
         Some(Thumb::Boost)
     } else if plan.emp_fire {
         Some(Thumb::Emp)
+    } else if plan.point_defense_fire {
+        Some(Thumb::Screen)
     } else if plan.brace {
         Some(Thumb::Brace)
     } else if plan.board {
@@ -1007,6 +1099,7 @@ pub fn apply_hands(s: &Situation, t: &PilotTuning, plan: &mut Plan, brain: &Pilo
 
     plan.boost = pressed == Some(Thumb::Boost);
     plan.emp_fire = pressed == Some(Thumb::Emp);
+    plan.point_defense_fire = pressed == Some(Thumb::Screen);
     plan.brace = pressed == Some(Thumb::Brace);
     plan.board = pressed == Some(Thumb::Board);
     plan.thumb = wanted;
@@ -1049,6 +1142,8 @@ pub fn pilot_system(
                 Option<&TorpedoBay>,
                 Option<&TorpedoLock>,
                 Option<&MicrowarpDrive>,
+                Option<&PointDefense>,
+                Option<&FireBarrelRack>,
                 &Shield,
             ),
             (
@@ -1099,7 +1194,7 @@ pub fn pilot_system(
         faction,
         ai,
         mut brain,
-        (bank, emp, bay, lock, warp, shield),
+        (bank, emp, bay, lock, warp, screen, rack, shield),
         (battery, mut boost, mut brace, mut intent, mut helm, mut orders),
     ) in &mut ships
     {
@@ -1153,6 +1248,13 @@ pub fn pilot_system(
             warp_ready: warp.is_some_and(|w| w.timer <= 0.0),
             board_range: tuning.board_range,
             battery_frac: battery.map_or(0.0, Battery::fraction),
+            screen_radius: screen.map_or(0.0, |p| p.radius),
+            barrel_radius: rack.map_or(0.0, |r| r.radius),
+            barrels: rack.map_or(0, |r| r.magazine),
+            barrel_stock_frac: rack.map_or(0.0, |r| {
+                (r.magazine as f32 / (r.magazine_max.max(1)) as f32).clamp(0.0, 1.0)
+            }),
+            barrel_ready: rack.is_some_and(|r| r.timer <= 0.0),
             fore_frac: shield.fraction(ShieldArc::Fore),
             aft_frac: shield.fraction(ShieldArc::Aft),
             // A cooling bank is one that was hit inside the regen delay — the
@@ -1233,6 +1335,11 @@ mod tests {
             warp_ready: true,
             board_range: 95.0,
             battery_frac: 1.0,
+            screen_radius: 190.0,
+            barrel_radius: 52.0,
+            barrels: 8,
+            barrel_stock_frac: 1.0,
+            barrel_ready: true,
             fore_frac: 0.0,
             aft_frac: 0.0,
             fore_suppressed: false,
@@ -1735,6 +1842,158 @@ mod tests {
             aft_frac: 1.0,
             ..kit()
         }
+    }
+
+    // ---- The two modules the loadout may bolt on -------------------------
+
+    /// The screen is paid for out of the battery, so unlike bracing it wants a
+    /// reason. An empty sky is not one.
+    #[test]
+    fn the_screen_stays_down_with_nobody_shooting() {
+        let t = PilotTuning::default();
+        let quiet = at(vec![], vec![], kit());
+        assert_eq!(score_screen(&quiet, &t), 0.0);
+        // A hostile out past gun reach cannot hurt the ship, so it is not danger.
+        let distant = at(vec![contact(Vec2::new(2000.0, 0.0))], vec![], kit());
+        assert!(score_screen(&distant, &t) < t.screen_raise);
+    }
+
+    /// ...and goes up when something is close enough to be hitting.
+    #[test]
+    fn the_screen_goes_up_under_fire() {
+        let t = PilotTuning::default();
+        let s = at(vec![contact(Vec2::new(150.0, 0.0))], vec![], kit());
+        assert!(score_screen(&s, &t) >= t.screen_raise);
+    }
+
+    /// A ship with no screen fitted must never ask for one — the whole point of
+    /// the slots is that an unfitted device is not merely idle, it is absent.
+    #[test]
+    fn a_ship_with_no_screen_never_asks_for_one() {
+        let t = PilotTuning::default();
+        let s = at(
+            vec![contact(Vec2::new(120.0, 0.0))],
+            vec![],
+            Kit {
+                screen_radius: 0.0,
+                ..kit()
+            },
+        );
+        assert_eq!(score_screen(&s, &t), 0.0);
+    }
+
+    /// The same fire is worth more to a hurt ship than to a fresh one: a fresh
+    /// hull can afford the hit, and the charge may be worth more later.
+    #[test]
+    fn a_hurt_ship_wants_the_screen_more() {
+        let t = PilotTuning::default();
+        let fresh = at(vec![contact(Vec2::new(150.0, 0.0))], vec![], kit());
+        let mut hurt = at(vec![contact(Vec2::new(150.0, 0.0))], vec![], kit());
+        hurt.integrity = 0.2;
+        assert!(score_screen(&hurt, &t) > score_screen(&fresh, &t));
+    }
+
+    /// A barrel is for something on your tail. Facing +X, a hostile dead ahead
+    /// is not that, however close it gets.
+    #[test]
+    fn a_barrel_is_only_worth_dropping_on_a_pursuer() {
+        let t = PilotTuning::default();
+        let ahead = at(vec![contact(Vec2::new(60.0, 0.0))], vec![], kit());
+        assert_eq!(score_barrel(&ahead, &t), 0.0, "nothing behind us");
+
+        let behind = at(vec![contact(Vec2::new(-60.0, 0.0))], vec![], kit());
+        assert!(score_barrel(&behind, &t) > 0.0, "something on the tail");
+    }
+
+    /// And only for one close enough to run into the fire.
+    #[test]
+    fn a_distant_chaser_is_not_worth_a_barrel() {
+        let t = PilotTuning::default();
+        let far = at(vec![contact(Vec2::new(-900.0, 0.0))], vec![], kit());
+        assert_eq!(score_barrel(&far, &t), 0.0);
+    }
+
+    /// An empty rack, and a rack still paying out its last drop, both offer
+    /// nothing — the cadence belongs to the rack, not to the brain.
+    #[test]
+    fn an_empty_or_busy_rack_offers_nothing() {
+        let t = PilotTuning::default();
+        let chaser = || vec![contact(Vec2::new(-60.0, 0.0))];
+
+        let empty = at(
+            chaser(),
+            vec![],
+            Kit {
+                barrels: 0,
+                barrel_stock_frac: 0.0,
+                ..kit()
+            },
+        );
+        assert_eq!(score_barrel(&empty, &t), 0.0);
+
+        let busy = at(
+            chaser(),
+            vec![],
+            Kit {
+                barrel_ready: false,
+                ..kit()
+            },
+        );
+        assert_eq!(score_barrel(&busy, &t), 0.0);
+
+        let unfitted = at(
+            chaser(),
+            vec![],
+            Kit {
+                barrel_radius: 0.0,
+                ..kit()
+            },
+        );
+        assert_eq!(score_barrel(&unfitted, &t), 0.0);
+    }
+
+    /// The last barrels are worth more than the first. Down in the reserve a
+    /// healthy ship holds on to them; a ship in real trouble still spends.
+    #[test]
+    fn the_last_barrels_are_held_back_unless_things_are_dire() {
+        let t = PilotTuning::default();
+        let low = || Kit {
+            barrels: 1,
+            barrel_stock_frac: 0.1,
+            ..kit()
+        };
+        let comfortable = at(vec![contact(Vec2::new(-60.0, 0.0))], vec![], low());
+        let full = at(vec![contact(Vec2::new(-60.0, 0.0))], vec![], kit());
+        assert!(
+            score_barrel(&comfortable, &t) < score_barrel(&full, &t),
+            "a nearly-empty rack is spent more grudgingly"
+        );
+
+        let mut desperate = at(vec![contact(Vec2::new(-60.0, 0.0))], vec![], low());
+        desperate.integrity = 0.1;
+        assert!(
+            score_barrel(&desperate, &t) > score_barrel(&comfortable, &t),
+            "but a ship about to die spends what it has"
+        );
+    }
+
+    /// One thumb. The screen and the brace want the same one, and the screen
+    /// wins because it stops a shot outright where bracing only softens it.
+    #[test]
+    fn the_thumb_cannot_raise_the_screen_and_brace_at_once() {
+        let t = PilotTuning::default();
+        let s = at(vec![contact(Vec2::new(150.0, 0.0))], vec![], kit());
+        let mut plan = Plan::new(Action::Broadside, Vec2::ZERO);
+        plan.point_defense_fire = true;
+        plan.brace = true;
+        // A thumb already resting on the screen, so no travel is owed.
+        let brain = PilotBrain {
+            thumb: Some(Thumb::Screen),
+            ..PilotBrain::default()
+        };
+        apply_hands(&s, &t, &mut plan, &brain, 1.0 / 64.0);
+        assert!(plan.point_defense_fire);
+        assert!(!plan.brace, "the thumb is on the screen, not the brace");
     }
 
     /// Five percent hull is an emergency on a bare hull and merely bad news
