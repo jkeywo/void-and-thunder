@@ -50,6 +50,11 @@ static FIELDS: SpecTable = SpecTable::new(&[
     ("Shield", "aft_max", FieldSpec::config(0.0, 200.0)),
     ("Shield", "regen_per_sec", FieldSpec::config(0.0, 40.0)),
     ("Shield", "regen_delay", FieldSpec::config(0.0, 10.0)),
+    // The banks themselves are what a fight has done to the fit — charge left
+    // and the suppression timer running on it. Marked live as whole subtrees,
+    // so raising a capacity mid-fight does not also hand the charge back.
+    ("Shield", "fore", FieldSpec::live()),
+    ("Shield", "aft", FieldSpec::live()),
     // Broadside.
     ("Broadside", "cooldown", FieldSpec::config(0.0, 20.0)),
     ("Broadside", "damage", FieldSpec::config(0.0, 100.0)),
@@ -112,6 +117,42 @@ static FIELDS: SpecTable = SpecTable::new(&[
     ("MicrowarpDrive", "timer", FieldSpec::live()),
     ("MicrowarpDrive", "cooldown", FieldSpec::config(0.0, 60.0)),
     ("MicrowarpDrive", "range", FieldSpec::config(0.0, 2000.0)),
+    // PointDefense. `rate` tops out well above the shipped 4/s: the interval
+    // between interceptions, not the radius, is what decides whether the screen
+    // answers a whole volley, so it is the number worth pushing hard.
+    ("PointDefense", "radius", FieldSpec::config(0.0, 400.0)),
+    ("PointDefense", "drain_per_sec", FieldSpec::config(0.0, 5.0)),
+    ("PointDefense", "rate", FieldSpec::config(0.0, 10.0)),
+    ("PointDefense", "timer", FieldSpec::live()),
+    ("PointDefense", "powered", FieldSpec::live()),
+    // FireBarrelRack. `magazine` is what is aboard right now — authoring it
+    // would restock the rack on every keystroke, which is the same cheat the
+    // torpedo bay's `loaded` guards against.
+    ("FireBarrelRack", "magazine", FieldSpec::live()),
+    ("FireBarrelRack", "timer", FieldSpec::live()),
+    (
+        "FireBarrelRack",
+        "magazine_max",
+        FieldSpec::config(1.0, 20.0),
+    ),
+    (
+        "FireBarrelRack",
+        "resupply_min",
+        FieldSpec::config(0.0, 10.0),
+    ),
+    (
+        "FireBarrelRack",
+        "resupply_max",
+        FieldSpec::config(0.0, 10.0),
+    ),
+    ("FireBarrelRack", "cooldown", FieldSpec::config(0.0, 5.0)),
+    ("FireBarrelRack", "ttl", FieldSpec::config(0.0, 30.0)),
+    ("FireBarrelRack", "radius", FieldSpec::config(0.0, 200.0)),
+    (
+        "FireBarrelRack",
+        "damage_per_sec",
+        FieldSpec::config(0.0, 60.0),
+    ),
     // AiController.
     (
         "AiController",
@@ -211,6 +252,12 @@ mod tests {
             ("BoostDrive", "engaged"),
             ("EmpWeapon", "powered"),
             ("EmpDefense", "damage"),
+            // The three the class merge would visibly cheat with: a retune that
+            // recharged a flattened shield, restocked the rack, or re-armed the
+            // screen mid-fight reads as the game helping itself.
+            ("Shield", "fore"),
+            ("FireBarrelRack", "magazine"),
+            ("PointDefense", "powered"),
         ] {
             assert_eq!(
                 spec_for(owner, field, 0.0).kind,

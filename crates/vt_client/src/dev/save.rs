@@ -137,7 +137,12 @@ mod tests {
     /// every default alongside it.
     #[test]
     fn a_saved_class_says_only_how_it_differs() {
-        let mut table = ShipTable::default();
+        // One class, so the assertion below is about *this* class. The shipped
+        // table has hulls that legitimately override a collider, and testing
+        // against the whole file made "nothing was entombed" unprovable.
+        let mut table = ShipTable {
+            classes: vec![ShipTable::default().classes.remove(0)],
+        };
         table.classes[0].class.hull = 250.0;
 
         let text = sparse_ships_ron(&table).expect("sparse save renders");

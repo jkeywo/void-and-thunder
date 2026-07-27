@@ -14,7 +14,8 @@ use bevy::prelude::*;
 use bevy::time::Virtual;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use vt_sim::prelude::{
-    Broadside, ClassId, EmpWeapon, Hull, MicrowarpDrive, ShipStats, SimTuning, TorpedoBay,
+    Battery, BoostDrive, Broadside, ClassId, EmpWeapon, FireBarrelRack, Hull, MicrowarpDrive,
+    PointDefense, Shield, ShipLoadout, ShipStats, SimTuning, TorpedoBay,
 };
 
 use crate::data::{paths, ActiveScenario, DataHandles, FeelTuning, SelectedScenario, ShipTable};
@@ -25,6 +26,43 @@ use crate::Player;
 use super::fields::specs;
 use super::save::{save_feel, save_ships, save_sim_tuning};
 use super::DevPanelFocus;
+
+/// Everything the "This ship" tab can edit on the player's hull.
+///
+/// Named because it is written twice — once as the system parameter, once as
+/// the tab's argument — and it is long enough that the two drifting apart is a
+/// question of when.
+///
+/// Every device is optional. The player's own fit carries no microwarp drive,
+/// so a query demanding one matched no entity at all and the tab reported "no
+/// player ship in the world" for a ship that was plainly right there.
+type PlayerFit<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Option<&'static ClassId>,
+        // The hull every ship has...
+        (
+            &'static mut ShipStats,
+            &'static mut Hull,
+            &'static mut Broadside,
+            &'static mut Shield,
+        ),
+        // ...and the fitted half.
+        (
+            Option<&'static mut Battery>,
+            Option<&'static mut BoostDrive>,
+            Option<&'static mut EmpWeapon>,
+            Option<&'static mut PointDefense>,
+        ),
+        (
+            Option<&'static mut TorpedoBay>,
+            Option<&'static mut MicrowarpDrive>,
+            Option<&'static mut FireBarrelRack>,
+        ),
+    ),
+    With<Player>,
+>;
 
 /// Which target the panel is editing.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -162,18 +200,7 @@ pub fn draw_panel(
     active: Res<ActiveScenario>,
     mut selected: ResMut<SelectedScenario>,
     mut next_state: ResMut<NextState<GameState>>,
-    mut player: Query<
-        (
-            Option<&ClassId>,
-            &mut ShipStats,
-            &mut Hull,
-            &mut Broadside,
-            &mut EmpWeapon,
-            &mut TorpedoBay,
-            &mut MicrowarpDrive,
-        ),
-        With<Player>,
-    >,
+    mut player: PlayerFit,
 ) {
     if !panel.open {
         return;
@@ -303,7 +330,7 @@ fn class_tab(
         changed |= vellum_editor::edit_value(ui, specs(), "collider", &mut class.collider, true);
         changed |=
             vellum_editor::edit_value(ui, specs(), "emp_defense", &mut class.emp_defense, true);
-        changed |= vellum_editor::edit_value(ui, specs(), "loadout", &mut class.loadout, true);
+        changed |= loadout_editor(ui, &mut class.loadout);
         changed |= vellum_editor::edit_value(ui, specs(), "ai", &mut class.ai, true);
     }
     if changed {
@@ -312,24 +339,60 @@ fn class_tab(
     }
 }
 
+/// Edit a class's fit, slot by slot.
+///
+/// The reflection walker renders structs and numbers; a loadout slot is an
+/// `Option`, which is neither, so handing it the whole loadout would draw every
+/// device as inert `(not editable)` text. Unwrapping the slots here keeps the
+/// walker doing the one thing it is good at, and costs one line per slot.
+///
+/// An empty slot is shown, not hidden. "This class carries no point defence" is
+/// a fact worth reading off the panel, and a blank where a device used to be
+/// looks exactly like a bug. Fitting one is deliberately not offered: what a
+/// hull carries comes from the loadout catalogue, and a class edit reaches ships
+/// already flying — bolting an emitter onto one mid-fight is not a tuning.
+fn loadout_editor(ui: &mut egui::Ui, loadout: &mut ShipLoadout) -> bool {
+    let mut changed = false;
+    egui::CollapsingHeader::new("loadout")
+        .default_open(true)
+        .show(ui, |ui| {
+            // The two every hull has.
+            changed |=
+                vellum_editor::edit_value(ui, specs(), "broadside", &mut loadout.broadside, true);
+            changed |= vellum_editor::edit_value(ui, specs(), "shield", &mut loadout.shield, true);
+            changed |= slot(ui, "battery", loadout.battery.as_mut());
+            changed |= slot(ui, "boost", loadout.boost.as_mut());
+            changed |= slot(ui, "emp", loadout.emp.as_mut());
+            changed |= slot(ui, "point_defense", loadout.point_defense.as_mut());
+            changed |= slot(ui, "torpedoes", loadout.torpedoes.as_mut());
+            changed |= slot(ui, "microwarp", loadout.microwarp.as_mut());
+            changed |= slot(ui, "barrels", loadout.barrels.as_mut());
+        });
+    changed
+}
+
+/// One optional device: its fields if fitted, a note if not.
+fn slot<T: Reflect>(ui: &mut egui::Ui, name: &str, value: Option<&mut T>) -> bool {
+    match value {
+        Some(value) => vellum_editor::edit_value(ui, specs(), name, value, true),
+        None => {
+            ui.horizontal(|ui| {
+                ui.label(name);
+                ui.weak("(not fitted)");
+            });
+            false
+        }
+    }
+}
+
 /// Edit the player's own components directly — a live override on one ship.
-fn entity_tab(
-    ui: &mut egui::Ui,
-    player: &mut Query<
-        (
-            Option<&ClassId>,
-            &mut ShipStats,
-            &mut Hull,
-            &mut Broadside,
-            &mut EmpWeapon,
-            &mut TorpedoBay,
-            &mut MicrowarpDrive,
-        ),
-        With<Player>,
-    >,
-) {
-    let Ok((class, mut stats, mut hull, mut bank, mut emp, mut bay, mut warp)) =
-        player.single_mut()
+fn entity_tab(ui: &mut egui::Ui, player: &mut PlayerFit) {
+    let Ok((
+        class,
+        (mut stats, mut hull, mut bank, mut shield),
+        (battery, boost, emp, point_defense),
+        (bay, warp, barrels),
+    )) = player.single_mut()
     else {
         ui.label("No player ship in the world.");
         return;
@@ -351,9 +414,16 @@ fn entity_tab(
     vellum_editor::edit_value(ui, specs(), "stats", stats.as_mut(), true);
     vellum_editor::edit_value(ui, specs(), "hull", hull.as_mut(), true);
     vellum_editor::edit_value(ui, specs(), "broadside", bank.as_mut(), true);
-    vellum_editor::edit_value(ui, specs(), "emp", emp.as_mut(), true);
-    vellum_editor::edit_value(ui, specs(), "torpedoes", bay.as_mut(), true);
-    vellum_editor::edit_value(ui, specs(), "microwarp", warp.as_mut(), true);
+    vellum_editor::edit_value(ui, specs(), "shield", shield.as_mut(), true);
+    // `Mut` derefs to the component, so the same slot renderer the class tab
+    // uses works here on what the ship is actually carrying.
+    slot(ui, "battery", battery.map(Mut::into_inner));
+    slot(ui, "boost", boost.map(Mut::into_inner));
+    slot(ui, "emp", emp.map(Mut::into_inner));
+    slot(ui, "point_defense", point_defense.map(Mut::into_inner));
+    slot(ui, "torpedoes", bay.map(Mut::into_inner));
+    slot(ui, "microwarp", warp.map(Mut::into_inner));
+    slot(ui, "barrels", barrels.map(Mut::into_inner));
 }
 
 /// Edit the whole-sim rules.

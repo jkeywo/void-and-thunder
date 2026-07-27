@@ -15,8 +15,8 @@
 use bevy::prelude::*;
 use bevy::reflect::{PartialReflect, ReflectMut, ReflectRef};
 use vt_sim::prelude::{
-    AiController, Broadside, ClassId, Collider, EmpDefense, EmpWeapon, Hull, MicrowarpDrive,
-    ShipStats, TorpedoBay,
+    AiController, Battery, BoostDrive, Broadside, ClassId, Collider, EmpDefense, EmpWeapon,
+    FireBarrelRack, Hull, MicrowarpDrive, PointDefense, Shield, ShipStats, TorpedoBay,
 };
 
 use crate::data::ShipTable;
@@ -33,7 +33,13 @@ pub fn merge_config(into: &mut dyn PartialReflect, from: &dyn PartialReflect) {
         (into.reflect_mut(), from.reflect_ref())
     else {
         // A leaf: no live/config distinction to make, so take the new value.
-        into.apply(from);
+        //
+        // `try_apply` rather than `apply`, which unwraps: a kind mismatch here
+        // means a caller paired two different types, and the schema moving
+        // under the panel should cost one merge rather than the whole session.
+        if let Err(e) = into.try_apply(from) {
+            warn!("design panel: could not merge {owner}: {e:?}");
+        }
         return;
     };
 
@@ -51,6 +57,22 @@ pub fn merge_config(into: &mut dyn PartialReflect, from: &dyn PartialReflect) {
     }
 }
 
+/// Merge an authored loadout slot onto the component fitted for it.
+///
+/// A slot the class leaves `None` and a component the ship does not carry say
+/// the same thing — there is nothing to merge — and neither is an error. What a
+/// hull *carries* is decided once, at spawn, by its fit; a slider may retune a
+/// device but must never bolt one on or tear one off mid-flight.
+///
+/// This pairing is also what keeps an `Option` away from [`merge_config`]: an
+/// `Option` reflects as an enum, and handing one to a walker expecting a struct
+/// is what used to take the game down on the first edit.
+fn merge_slot<T: Component + PartialReflect>(live: Option<Mut<T>>, authored: &Option<T>) {
+    if let (Some(mut live), Some(authored)) = (live, authored.as_ref()) {
+        merge_config(live.as_mut(), authored);
+    }
+}
+
 /// Push class edits onto every live ship of that class.
 ///
 /// Runs only when the table actually changed, so the ordinary frame cost is one
@@ -60,26 +82,43 @@ pub fn apply_class_edits(
     table: Res<ShipTable>,
     mut ships: Query<(
         &ClassId,
-        &mut ShipStats,
-        &mut Hull,
-        &mut Collider,
-        &mut EmpDefense,
-        &mut Broadside,
-        // Every device but the guns is a fit the loadout may leave off; a
-        // non-optional query here silently dropped the whole ship out of the
-        // panel's reach the moment one was missing.
-        Option<&mut EmpWeapon>,
-        Option<&mut TorpedoBay>,
-        Option<&mut MicrowarpDrive>,
-        Option<&mut AiController>,
+        // The hull every ship has, nested to stay inside Bevy's tuple limit now
+        // that the whole fit is queried alongside it.
+        (
+            &mut ShipStats,
+            &mut Hull,
+            &mut Collider,
+            &mut EmpDefense,
+            &mut Broadside,
+            &mut Shield,
+        ),
+        // Every device is a fit the loadout may leave off; a non-optional query
+        // here silently dropped the whole ship out of the panel's reach the
+        // moment one was missing.
+        (
+            Option<&mut Battery>,
+            Option<&mut BoostDrive>,
+            Option<&mut EmpWeapon>,
+            Option<&mut PointDefense>,
+        ),
+        (
+            Option<&mut TorpedoBay>,
+            Option<&mut MicrowarpDrive>,
+            Option<&mut FireBarrelRack>,
+            Option<&mut AiController>,
+        ),
     )>,
 ) {
     if !table.is_changed() {
         return;
     }
 
-    for (class_id, mut stats, mut hull, mut collider, mut emp_def, mut bank, emp, bay, warp, ai) in
-        &mut ships
+    for (
+        class_id,
+        (mut stats, mut hull, mut collider, mut emp_def, mut bank, mut shield),
+        (battery, boost, emp, point_defense),
+        (bay, warp, barrels, ai),
+    ) in &mut ships
     {
         let Some(class) = table.get(*class_id) else {
             // The class was removed by a reload. Leaving the ship exactly as it
@@ -90,16 +129,17 @@ pub fn apply_class_edits(
         *stats = class.stats;
         *collider = class.collider;
         merge_config(emp_def.as_mut(), &class.emp_defense);
+        // The two every hull carries.
         merge_config(bank.as_mut(), &class.loadout.broadside);
-        if let Some(mut emp) = emp {
-            merge_config(emp.as_mut(), &class.loadout.emp);
-        }
-        if let Some(mut bay) = bay {
-            merge_config(bay.as_mut(), &class.loadout.torpedoes);
-        }
-        if let Some(mut warp) = warp {
-            merge_config(warp.as_mut(), &class.loadout.microwarp);
-        }
+        merge_config(shield.as_mut(), &class.loadout.shield);
+        // The fitted half.
+        merge_slot(battery, &class.loadout.battery);
+        merge_slot(boost, &class.loadout.boost);
+        merge_slot(emp, &class.loadout.emp);
+        merge_slot(point_defense, &class.loadout.point_defense);
+        merge_slot(bay, &class.loadout.torpedoes);
+        merge_slot(warp, &class.loadout.microwarp);
+        merge_slot(barrels, &class.loadout.barrels);
         if let Some(mut ai) = ai {
             merge_config(ai.as_mut(), &class.ai);
         }
@@ -115,7 +155,8 @@ pub fn apply_class_edits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vt_sim::prelude::BankState;
+    use crate::data::ships::ShipClass;
+    use vt_sim::prelude::{BankState, ShipLoadout};
 
     /// The property the whole merge exists for: an edit to a class's damage must
     /// not disturb the reload timer of a bank that is mid-cycle.
@@ -185,9 +226,8 @@ mod tests {
     /// to its hull, stats and guns stopped landing.
     #[test]
     fn a_ship_without_the_full_kit_still_tracks_its_class() {
-        use crate::data::ships::{NamedClass, ShipClass, ShipTable};
-        use bevy::prelude::*;
-        use vt_sim::prelude::{spawn_ship_in, Faction, ShipStats};
+        use crate::data::ships::{NamedClass, ShipTable};
+        use vt_sim::prelude::{spawn_ship_in, Faction};
 
         let mut app = App::new();
         app.insert_resource(ShipTable {
@@ -222,5 +262,105 @@ mod tests {
             250.0,
             "the class edit must reach a ship that is missing devices"
         );
+    }
+
+    /// A fitted ship, which is the case the all-`None` test above cannot reach.
+    ///
+    /// The loadout's slots are `Option`s, and an `Option` reflects as an *enum*.
+    /// Handing one straight to the struct walker took the game down on the first
+    /// slider drag — `MismatchedKinds { from_kind: Enum, to_kind: Struct }` —
+    /// for every ship that actually carried a device, which is to say the
+    /// player's, immediately.
+    #[test]
+    fn a_fully_fitted_ship_survives_a_class_edit() {
+        let (mut app, ship) = fitted_app(ShipClass {
+            hull: 250.0,
+            loadout: ShipLoadout::player(),
+            ..ShipClass::default()
+        });
+
+        app.update(); // must not panic
+
+        assert_eq!(
+            app.world().get::<Hull>(ship).unwrap().max,
+            250.0,
+            "the edit must land on a ship carrying its whole kit"
+        );
+    }
+
+    /// A device the class no longer describes is left alone rather than reset.
+    ///
+    /// What a hull carries is settled at spawn by its fit; the panel edits a
+    /// class, and a class saying `None` is not an instruction to strip a flying
+    /// ship of its emitter.
+    #[test]
+    fn a_slot_the_class_leaves_empty_does_not_disturb_a_fitted_device() {
+        // A class with no disruptor authored, on a ship that carries one.
+        let (mut app, ship) = fitted_app(ShipClass::default());
+        app.world_mut().get_mut::<EmpWeapon>(ship).unwrap().range = 1234.0;
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<EmpWeapon>(ship).unwrap().range,
+            1234.0,
+            "an unauthored slot must leave the fitted device untouched"
+        );
+    }
+
+    /// Shields are merged now, so they need the same live/config care as guns:
+    /// raising a bank's capacity must not hand back the charge a fight took off
+    /// it.
+    #[test]
+    fn merging_a_shield_does_not_recharge_a_flattened_bank() {
+        let (mut app, ship) = fitted_app(ShipClass {
+            loadout: ShipLoadout {
+                shield: Shield {
+                    fore_max: 90.0,
+                    ..ShipLoadout::player().shield
+                },
+                ..ShipLoadout::player()
+            },
+            ..ShipClass::default()
+        });
+        app.world_mut().get_mut::<Shield>(ship).unwrap().fore.charge = 0.0;
+
+        app.update();
+
+        let shield = app.world().get::<Shield>(ship).unwrap();
+        assert_eq!(shield.fore_max, 90.0, "the authored change must land");
+        assert_eq!(
+            shield.fore.charge, 0.0,
+            "a bank beaten flat must stay flat through a retune"
+        );
+    }
+
+    /// A world holding one fully-fitted ship of class 0, and that class.
+    fn fitted_app(class: ShipClass) -> (App, Entity) {
+        use crate::data::ships::{NamedClass, ShipTable};
+        use vt_sim::prelude::{spawn_ship_in, Faction};
+
+        let mut app = App::new();
+        app.insert_resource(ShipTable {
+            classes: vec![NamedClass {
+                name: "fitted".into(),
+                class,
+            }],
+        })
+        .add_systems(Update, apply_class_edits);
+
+        let ship = spawn_ship_in(
+            app.world_mut(),
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            ShipLoadout::player(),
+        )
+        .insert(ClassId(0))
+        .id();
+
+        (app, ship)
     }
 }
