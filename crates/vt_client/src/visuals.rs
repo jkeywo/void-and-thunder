@@ -118,6 +118,27 @@ pub fn attach_projectile_visuals(
     }
 }
 
+/// Give every burning barrel a sphere the size of the fire it actually is.
+///
+/// Scaled from the sim's own `radius`, so what the player steers around is the
+/// hitbox rather than an artist's guess at it. Deliberately left out of the
+/// interpolation filter — a barrel never moves, so smoothing it would be work
+/// with nothing to smooth.
+pub fn attach_barrel_visuals(
+    mut commands: Commands,
+    meshes: Res<GameMeshes>,
+    mats: Res<GameMaterials>,
+    mut barrels: Query<(Entity, &FireBarrel, &mut Transform), Without<Mesh3d>>,
+) {
+    for (entity, barrel, mut transform) in &mut barrels {
+        transform.scale = Vec3::splat(barrel.radius);
+        commands.entity(entity).insert((
+            Mesh3d(meshes.sphere.clone()),
+            MeshMaterial3d(mats.barrel.clone()),
+        ));
+    }
+}
+
 /// Give every EMP bolt a small blue sphere.
 pub fn attach_empbolt_visuals(
     mut commands: Commands,

@@ -258,6 +258,14 @@
         window.vtHudApply = function (json) {
           if (typeof window.__applyHud === 'function') window.__applyHud(json);
         };
+        // HUD -> host. The overlay is real DOM in this window, so its controls
+        // receive clicks natively and bridge.js queues them; the client drains
+        // that queue once a frame, exactly as the native transport does. Returns
+        // an empty string until bridge.js has loaded.
+        window.vtHudDrainActions = function () {
+          if (typeof window.__drainActions === 'function') return window.__drainActions();
+          return '';
+        };
         // The string table, handed over by the client. The overlay's own
         // script defines the real vtStrings when it loads; until then hold
         // the table so nothing is lost to the race.

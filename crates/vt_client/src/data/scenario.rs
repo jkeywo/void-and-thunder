@@ -11,7 +11,7 @@
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use vt_sim::prelude::{ship_bundle, Anchored, Faction, Invulnerable, Protagonist};
+use vt_sim::prelude::{spawn_ship, Anchored, Faction, Invulnerable, Protagonist, ShipLoadout};
 
 use crate::data::ships::{DirectorSpec, ShipTable};
 use crate::Player;
@@ -97,6 +97,10 @@ impl Default for Scenario {
 /// Spawn one placed ship. `protagonist` marks it as the ship the encounter
 /// revolves around and routes the client's input into it.
 ///
+/// `fit` is the loadout the player chose on the title card. It applies to the
+/// protagonist *only*: the slots are the player's ship, and laying a chosen fit
+/// over a house patrol would arm the enemy with the kit the run is about.
+///
 /// Returns `false` when the class name is unknown, so the caller can say which
 /// scenario is wrong rather than quietly flying the wrong ship.
 pub fn spawn_placed(
@@ -104,19 +108,26 @@ pub fn spawn_placed(
     table: &ShipTable,
     placed: &PlacedShip,
     protagonist: bool,
+    fit: Option<ShipLoadout>,
 ) -> bool {
     let Some((class_id, class)) = table.find(&placed.class) else {
         return false;
     };
 
-    let mut entity = commands.spawn(ship_bundle(
+    let loadout = match (protagonist, fit) {
+        (true, Some(fit)) => fit,
+        _ => class.loadout,
+    };
+
+    let mut entity = spawn_ship(
+        commands,
         placed.faction,
         class.stats,
         placed.hull.unwrap_or(class.hull),
         placed.pos,
         placed.heading,
-        class.loadout,
-    ));
+        loadout,
+    );
 
     // Inserted *after* the bundle, not alongside it: `ship_bundle` already
     // carries a default `Collider` and `EmpDefense`, and Bevy panics on a bundle
@@ -146,15 +157,20 @@ pub fn spawn_placed(
 /// Logs each unknown class rather than failing the whole scenario — losing one
 /// ship out of a range is recoverable; losing the player is what the caller
 /// notices anyway, since the director immediately calls the run lost.
-pub fn spawn_scenario(commands: &mut Commands, table: &ShipTable, scenario: &Scenario) {
-    if !spawn_placed(commands, table, &scenario.player, true) {
+pub fn spawn_scenario(
+    commands: &mut Commands,
+    table: &ShipTable,
+    scenario: &Scenario,
+    fit: Option<ShipLoadout>,
+) {
+    if !spawn_placed(commands, table, &scenario.player, true, fit) {
         error!(
             "scenario '{}': unknown player class '{}' — no ship spawned",
             scenario.name, scenario.player.class
         );
     }
     for placed in &scenario.enemies {
-        if !spawn_placed(commands, table, placed, false) {
+        if !spawn_placed(commands, table, placed, false, None) {
             error!(
                 "scenario '{}': unknown class '{}' — ship skipped",
                 scenario.name, placed.class
@@ -227,7 +243,7 @@ mod tests {
         let mut queue = bevy::ecs::world::CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            spawn_scenario(&mut commands, &table, scenario);
+            spawn_scenario(&mut commands, &table, scenario, None);
         }
         queue.apply(&mut world);
         world

@@ -98,7 +98,8 @@ fn run_case(scenario: &Scenario, seed: u32, recorder: &mut Recorder) -> CaseReco
     let mut queue = CommandQueue::default();
     {
         let mut commands = Commands::new(&mut queue, &h.world);
-        spawn_scenario(&mut commands, &table, scenario);
+        // No menu here: the corpus measures the class's own default fit.
+        spawn_scenario(&mut commands, &table, scenario, None);
     }
     queue.apply(&mut h.world);
 

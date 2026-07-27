@@ -12,13 +12,18 @@ use bevy_time::Time;
 use std::time::Duration;
 
 use crate::ai::ai_system;
+use crate::barrels::{barrel_burn_system, barrel_drop_system};
 use crate::collide::{landmark_system, ram_system};
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
-use crate::drive::{battery_system, microwarp_system, speed_scale_system};
+use crate::drive::{
+    battery_draw_system, battery_recharge_system, emp_recovery_system, microwarp_system,
+    speed_scale_system,
+};
 use crate::emp::{emp_bolt_system, emp_system};
-use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
+use crate::events::{EmpImpact, MunitionIntercepted, ShipDestroyed, ShipHit};
 use crate::pilot::pilot_system;
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plunder};
+use crate::point_defense::point_defense_system;
 use crate::shield::{shield_refit_system, shield_regen_system};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
@@ -57,16 +62,19 @@ impl Harness {
         world.init_resource::<Messages<ShipHit>>();
         world.init_resource::<Messages<ShipDestroyed>>();
         world.init_resource::<Messages<EmpImpact>>();
+        world.init_resource::<Messages<MunitionIntercepted>>();
 
         let mut schedule = Schedule::default();
         // Mirrors SimPlugin's SimSet ordering, as one linear chain.
         schedule.add_systems(
             (
-                (drain_hits, drain_destroyed, drain_emp).chain(),
+                (drain_hits, drain_destroyed, drain_emp, drain_intercepts).chain(),
                 director_system,
                 (ai_system, pilot_system).chain(),
                 (
-                    battery_system,
+                    emp_recovery_system,
+                    battery_draw_system,
+                    battery_recharge_system,
                     torpedo_reload_system,
                     microwarp_system,
                     speed_scale_system,
@@ -82,7 +90,9 @@ impl Harness {
                     emp_system,
                     torpedo_launch_system,
                     torpedo_lock_system,
+                    barrel_drop_system,
                     projectile_system,
+                    point_defense_system,
                 )
                     .chain(),
                 torpedo_homing_system,
@@ -90,6 +100,7 @@ impl Harness {
                     collision_system,
                     emp_bolt_system,
                     torpedo_hit_system,
+                    barrel_burn_system,
                     destruction_system,
                 )
                     .chain(),
@@ -128,6 +139,9 @@ fn drain_destroyed(mut m: ResMut<Messages<ShipDestroyed>>) {
 fn drain_emp(mut m: ResMut<Messages<EmpImpact>>) {
     m.update();
 }
+fn drain_intercepts(mut m: ResMut<Messages<MunitionIntercepted>>) {
+    m.update();
+}
 
 #[cfg(test)]
 mod tests {
@@ -137,7 +151,7 @@ mod tests {
         Protagonist, ShipStats, Velocity,
     };
     use crate::shield::Shield;
-    use crate::spawn::{ship_bundle, ShipLoadout};
+    use crate::spawn::{ship_bundle, spawn_ship_in, ShipLoadout};
     use bevy_math::Vec2;
     use bevy_transform::components::Transform;
 
@@ -149,19 +163,19 @@ mod tests {
     fn ai_can_pilot_a_player_shaped_ship() {
         let mut h = Harness::new();
 
-        // An AI-piloted player ship at the origin.
-        h.world.spawn((
-            ship_bundle(
-                Faction::Corsairs,
-                ShipStats::default(),
-                100.0,
-                Vec2::ZERO,
-                0.0,
-                ShipLoadout::default(),
-            ),
-            Protagonist,
-            AiController::default(),
-        ));
+        // An AI-piloted player ship at the origin, carrying the player's own
+        // fit — `ship_bundle` alone is a bare hull, so a test that means
+        // "player-shaped" has to say so.
+        spawn_ship_in(
+            &mut h.world,
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            ShipLoadout::player(),
+        )
+        .insert((Protagonist, AiController::default()));
         // A House ship close enough to fight.
         let enemy = h
             .world
@@ -197,18 +211,16 @@ mod tests {
     #[test]
     fn ai_pilot_emps_a_close_target() {
         let mut h = Harness::new();
-        h.world.spawn((
-            ship_bundle(
-                Faction::Corsairs,
-                ShipStats::default(),
-                100.0,
-                Vec2::ZERO,
-                0.0,
-                ShipLoadout::player(),
-            ),
-            Protagonist,
-            AiController::piloting(),
-        ));
+        spawn_ship_in(
+            &mut h.world,
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            ShipLoadout::player(),
+        )
+        .insert((Protagonist, AiController::piloting()));
         // A House ship dead ahead, within EMP range.
         let enemy = h
             .world
@@ -443,18 +455,16 @@ mod tests {
     #[test]
     fn an_invulnerable_ship_takes_no_damage() {
         let mut h = Harness::new();
-        h.world.spawn((
-            ship_bundle(
-                Faction::Corsairs,
-                ShipStats::default(),
-                100.0,
-                Vec2::ZERO,
-                0.0,
-                ShipLoadout::player(),
-            ),
-            Protagonist,
-            AiController::piloting(),
-        ));
+        spawn_ship_in(
+            &mut h.world,
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            ShipLoadout::player(),
+        )
+        .insert((Protagonist, AiController::piloting()));
         let target = h
             .world
             .spawn((

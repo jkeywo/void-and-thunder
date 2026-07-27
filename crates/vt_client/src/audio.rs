@@ -236,7 +236,9 @@ fn sfx_abilities(
     sfx: Res<SfxAssets>,
     mut seed: Local<u32>,
     mut was: Local<(bool, bool, f32)>,
-    player: Query<(&BoostDrive, &Brace, &MicrowarpDrive), With<Player>>,
+    // Boost and the microwarp are a fit the loadout may leave off; brace is
+    // universal. Optional so a ship without one drive still gets the others.
+    player: Query<(Option<&BoostDrive>, &Brace, Option<&MicrowarpDrive>), With<Player>>,
 ) {
     let Ok((boost, brace, warp)) = player.single() else {
         // No ship: forget the last state so respawning does not fire a stale edge.
@@ -245,7 +247,7 @@ fn sfx_abilities(
     };
     let (was_boosting, was_bracing, last_warp_timer) = *was;
 
-    let boosting = boost.active;
+    let boosting = boost.is_some_and(|b| b.active);
     if boosting && !was_boosting {
         play_sound(
             &mut commands,
@@ -257,11 +259,13 @@ fn sfx_abilities(
         play_sound(&mut commands, &sfx, Shot::new(Sound::Brace));
     }
     // The cooldown jumping from ~0 up to its full duration is the warp firing.
-    if warp.timer > last_warp_timer + 0.01 {
+    // An unfitted drive holds at zero, so the edge never comes.
+    let warp_timer = warp.map_or(0.0, |w| w.timer);
+    if warp_timer > last_warp_timer + 0.01 {
         play_sound(&mut commands, &sfx, Shot::new(Sound::Warp));
     }
 
-    *was = (boosting, brace.active, warp.timer);
+    *was = (boosting, brace.active, warp_timer);
 }
 
 /// A slow pulse while the player's hull is critical. Deliberately sparse — an

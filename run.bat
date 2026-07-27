@@ -24,6 +24,10 @@ if /i "%1"=="fast" (
     cargo run -p vt_client --features fast-compile
     goto :end
 )
+if /i "%1"=="dev" (
+    cargo run -p vt_client --features dev-panel
+    goto :end
+)
 
 REM The hud branch uses a label (not an if-block): its PowerShell staging line
 REM contains parentheses, which would prematurely close a cmd `if (...)` block.

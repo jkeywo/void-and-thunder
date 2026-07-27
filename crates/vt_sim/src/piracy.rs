@@ -10,6 +10,7 @@ use bevy_ecs::prelude::*;
 use bevy_time::Time;
 use bevy_transform::components::Transform;
 
+use crate::barrels::FireBarrelRack;
 use crate::components::{
     AiController, Disabled, FireOrders, Helm, Hull, Invulnerable, Protagonist, Ship,
 };
@@ -60,6 +61,17 @@ pub struct Boarding {
     pub progress: f32,
 }
 
+/// A uniform draw from `lo..=hi`, tolerant of a reversed or equal pair.
+///
+/// Shared by both of the special slot's magazines so the two can never drift
+/// apart: a fix to how a resupply rolls has one place to land, not two that
+/// merely look alike.
+fn resupply_roll(seed: &mut u32, lo: u32, hi: u32) -> u32 {
+    let hi = hi.max(lo);
+    let span = hi - lo + 1;
+    lo + (lcg_next(seed) * span as f32) as u32 % span
+}
+
 /// Bevy system: cripple enemy ships whose hull has fallen low — they stop
 /// steering and firing and drift, boardable.
 pub fn cripple_system(
@@ -98,11 +110,21 @@ pub fn boarding_system(
     mut commands: Commands,
     mut plunder: ResMut<Plunder>,
     mut boarding: ResMut<Boarding>,
-    mut protagonist: Query<(&Transform, &mut Hull, Option<&mut TorpedoBay>), With<Protagonist>>,
+    mut protagonist: Query<
+        (
+            &Transform,
+            &mut Hull,
+            Option<&mut TorpedoBay>,
+            Option<&mut FireBarrelRack>,
+        ),
+        With<Protagonist>,
+    >,
     mut seed: Local<u32>,
     disabled: Query<(Entity, &Transform), (With<Ship>, With<Disabled>, Without<Invulnerable>)>,
 ) {
-    let Ok((protagonist, mut own_hull, mut own_torpedoes)) = protagonist.single_mut() else {
+    let Ok((protagonist, mut own_hull, mut own_torpedoes, mut own_barrels)) =
+        protagonist.single_mut()
+    else {
         *boarding = Boarding::default();
         return;
     };
@@ -137,14 +159,18 @@ pub fn boarding_system(
                 // over-repair, and a full hull simply wastes the salvage.
                 let repair = own_hull.max * tuning.board_repair_frac;
                 own_hull.current = (own_hull.current + repair).min(own_hull.max);
-                // And whatever torpedoes were in her racks. The range is
+                // And whatever ordnance was in her racks. The ranges are
                 // authored per class and may be zero at both ends, so a hull
                 // that is not meant to live off plunder simply gains nothing.
+                // Whichever the special slot carries resupplies the same way —
+                // that is the point of them both being finite.
                 if let Some(bay) = own_torpedoes.as_deref_mut() {
-                    let (lo, hi) = (bay.resupply_min, bay.resupply_max.max(bay.resupply_min));
-                    let span = hi - lo + 1;
-                    let roll = lo + (lcg_next(&mut seed) * span as f32) as u32 % span;
+                    let roll = resupply_roll(&mut seed, bay.resupply_min, bay.resupply_max);
                     bay.restock(roll);
+                }
+                if let Some(rack) = own_barrels.as_deref_mut() {
+                    let roll = resupply_roll(&mut seed, rack.resupply_min, rack.resupply_max);
+                    rack.restock(roll);
                 }
                 boarding.target = None;
                 boarding.progress = 0.0;
@@ -292,6 +318,49 @@ mod tests {
             60.0,
             "boarding should repair 10% of maximum hull"
         );
+    }
+
+    /// Both magazines in the special slot are finite and both are refilled by
+    /// taking ships, so a barrel rack must resupply exactly as tubes do. They go
+    /// through one shared roll for precisely this reason.
+    #[test]
+    fn boarding_restocks_barrels_as_well_as_torpedoes() {
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(SimTuning::default());
+        world.insert_resource(Plunder::default());
+        world.insert_resource(Boarding::default());
+        let me = world
+            .spawn((
+                Protagonist,
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Hull {
+                    current: 50.0,
+                    max: 100.0,
+                },
+                FireBarrelRack {
+                    magazine: 0,
+                    // A guaranteed draw, so the test is about the plumbing and
+                    // not about which way the die fell.
+                    resupply_min: 2,
+                    resupply_max: 2,
+                    ..FireBarrelRack::default()
+                },
+            ))
+            .id();
+        crippled_enemy(&mut world, Vec2::new(40.0, 0.0));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(boarding_system);
+        step(&mut world, &mut schedule, 1.0);
+        assert_eq!(
+            world.get::<FireBarrelRack>(me).unwrap().magazine,
+            0,
+            "no resupply before the prize is actually taken"
+        );
+
+        step(&mut world, &mut schedule, BOARD_DWELL);
+        assert_eq!(world.get::<FireBarrelRack>(me).unwrap().magazine, 2);
     }
 
     /// A repair must never push a hull past its maximum — an intact ship simply

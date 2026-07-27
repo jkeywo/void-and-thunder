@@ -15,17 +15,21 @@
 //! microwarp dilates time (bullet-time) from a rechargeable aim battery.
 //! Torpedo locking does not: its locks accrue on their own timer, so the sweep
 //! is unhurried already.
+//!
+//! The ship has three loadout slots, chosen on the title card, and each slot has
+//! *one* key: what the key does depends on what is bolted into the slot.
 //!   W / S      — throttle forward / reverse
 //!   A / D      — turn to port / starboard
-//!   LMB / RMB  — hold to aim the port / starboard broadside; the horizontal aim
-//!                axis sweeps the volley across the arc and the camera yaw with
-//!                it. Release to fire.
-//!   Q          — EMP: hold to auto-track and drain a target's drive
-//!   Left Ctrl  — torpedoes: hold to lock (1 + 1 per 0.5s), release to volley.
-//!                The camera lifts directly overhead for a top-down aim.
-//!   Left Shift — microwarp: hold to place a teleport point (top-down), release
-//!                to warp
-//!   Space      — boost (rechargeable battery)
+//!   LMB / RMB  — broadside slot: hold to aim the port / starboard bank; the
+//!                horizontal aim axis sweeps the volley across the arc and the
+//!                camera yaw with it. Release to fire. (Long nines / carronades.)
+//!   Space      — battery slot: hold to run whichever device draws on the ship's
+//!                battery — the boost drive, the disruptor (auto-tracking EMP),
+//!                or the point-defence screen.
+//!   Left Shift — special slot: torpedoes (hold to lock 1 + 1 per 0.5s, release
+//!                to volley, camera overhead), the microwarp (hold to place a
+//!                teleport point, release to warp), or fire barrels (hold to roll
+//!                burning barrels off the stern at the rack's own cadence).
 //!   C          — brace (cut incoming damage)
 //!   Board      — hold position within range of a crippled hulk for 3s to loot it
 //!                (a ring fills to show progress; no key needed)
@@ -39,8 +43,8 @@
 //! amber when loaded, dim red while reloading. Reverse is ~25% of forward speed.
 //!
 //! Gamepad: left stick throttle/steer, right stick aim/camera (rate-based, like a
-//! mouse, outside broadside aiming), LT/RT broadsides, LB torpedoes, RB microwarp,
-//! X EMP, A boost, Y brace, Start pause (restart on the game-over screen).
+//! mouse, outside broadside aiming), LT/RT broadsides, A battery slot, RB special
+//! slot, Y brace, Start pause (restart on the game-over screen).
 
 use bevy::asset::AssetPath;
 // Bevy 0.19 moved bloom out of the core pipeline into `bevy_post_process`, and
@@ -84,8 +88,8 @@ use camera::{camera_orbit, CameraRig, FreeLook, MainCamera};
 
 mod visuals;
 use visuals::{
-    attach_empbolt_visuals, attach_projectile_visuals, attach_ship_visuals, attach_torpedo_visuals,
-    bank_ships, damage_tint, orient_torpedoes, tick_hit_flash,
+    attach_barrel_visuals, attach_empbolt_visuals, attach_projectile_visuals, attach_ship_visuals,
+    attach_torpedo_visuals, bank_ships, damage_tint, orient_torpedoes, tick_hit_flash,
 };
 
 mod input;
@@ -98,8 +102,8 @@ use input::{
 mod gizmos;
 use gizmos::{
     draw_aim_beams, draw_aim_lead, draw_boarding, draw_charge_telegraph, draw_grid,
-    draw_microwarp_range, draw_reticle, draw_torpedo_locks, draw_torpedo_range, microwarp_ghost,
-    MicrowarpGhost,
+    draw_microwarp_range, draw_point_defense_radius, draw_reticle, draw_torpedo_locks,
+    draw_torpedo_range, microwarp_ghost, MicrowarpGhost,
 };
 
 mod status_ring;
@@ -126,8 +130,8 @@ use bullet_time::{aim_time_dilation, AimBattery, Hitstop};
 
 mod session;
 use session::{
-    await_data, clear_field, freeze_for_menu, restart, start_run, unfreeze_for_run, watch_outcome,
-    GameState,
+    apply_hud_actions, await_data, clear_field, freeze_for_menu, restart, start_run,
+    unfreeze_for_run, watch_outcome, GameState,
 };
 
 // ---- Presentation constants ----
@@ -197,6 +201,9 @@ pub struct GameMaterials {
     pub shot: Handle<StandardMaterial>,
     pub emp: Handle<StandardMaterial>,
     pub torpedo: Handle<StandardMaterial>,
+    /// Burning fire barrels. Hot orange and unlit, like the shot — a fire on the
+    /// plane should read at a glance as something to steer around.
+    pub barrel: Handle<StandardMaterial>,
     ghost: Handle<StandardMaterial>,
 }
 
@@ -297,6 +304,7 @@ fn main() {
             (
                 attach_ship_visuals,
                 attach_projectile_visuals,
+                attach_barrel_visuals,
                 attach_empbolt_visuals,
                 attach_torpedo_visuals,
                 orient_torpedoes,
@@ -324,6 +332,7 @@ fn main() {
                 draw_torpedo_range,
                 draw_boarding,
                 draw_microwarp_range,
+                draw_point_defense_radius,
                 update_offscreen_markers,
             )
                 .after(SmoothingSet),
@@ -360,10 +369,14 @@ fn main() {
         // on the design panel's input guard.
         .add_systems(Update, log_gamepads)
         .add_systems(Update, toggle_fullscreen)
-        // Start screen: wait for the player to cast off.
+        // Start screen: wait for the player to cast off, by key/pad or by
+        // clicking a chip on the card. The chips go through the HUD action
+        // channel, which is why the two run chained — an action raised by the
+        // page this frame is acted on in the same frame it arrives.
         .add_systems(
             Update,
-            start_run
+            (start_run, apply_hud_actions)
+                .chain()
                 .run_if(in_state(GameState::Menu))
                 .run_if(game_has_input),
         )
@@ -399,6 +412,12 @@ fn setup(
         shot: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.9, 0.4),
             unlit: true,
+            ..default()
+        }),
+        barrel: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.45, 0.08),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
             ..default()
         }),
         emp: materials.add(StandardMaterial {

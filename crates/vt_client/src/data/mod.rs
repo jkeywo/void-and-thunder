@@ -31,6 +31,7 @@ use std::marker::PhantomData;
 use vt_sim::prelude::SimTuning;
 
 pub mod feel;
+pub mod loadouts;
 pub mod rig;
 pub mod scenario;
 pub mod ships;
@@ -49,6 +50,7 @@ mod corpus;
 pub(crate) mod compose;
 
 pub use feel::FeelTuning;
+pub use loadouts::{LoadoutCatalogue, SelectedLoadout};
 pub use rig::ModelRigs;
 pub use scenario::{director_for, spawn_scenario, Scenario};
 pub use ships::{set_director, ShipTable};
@@ -62,6 +64,8 @@ pub mod paths {
     pub const FEEL_TUNING: &str = "data/feel.tuning.ron";
     /// The ship classes every ship is an instance of.
     pub const SHIPS: &str = "data/ships.ron";
+    /// What the player may fit in each of the three loadout slots.
+    pub const LOADOUTS: &str = "data/loadouts.ron";
     /// The normal encounter: a player, and three escalating waves.
     pub const SKIRMISH: &str = "data/scenarios/skirmish.scn.ron";
     /// One stationary, inert, invulnerable target — somewhere to tune against.
@@ -193,6 +197,7 @@ pub struct DataHandles {
     pub sim_tuning: Handle<SimTuningAsset>,
     pub feel: Handle<FeelTuning>,
     pub ships: Handle<ShipTable>,
+    pub loadouts: Handle<LoadoutCatalogue>,
     /// Both scenarios stay loaded so switching to the test range is instant and
     /// a hot-reload watch stays on each.
     pub scenarios: Vec<(&'static str, Handle<Scenario>)>,
@@ -234,10 +239,12 @@ impl Plugin for DataPlugin {
         app.init_asset::<SimTuningAsset>()
             .init_asset::<FeelTuning>()
             .init_asset::<ShipTable>()
+            .init_asset::<LoadoutCatalogue>()
             .init_asset::<Scenario>()
             .register_asset_loader(RonAssetLoader::<SimTuningAsset>::new(&["tuning.ron"]))
             .register_asset_loader(RonAssetLoader::<FeelTuning>::new(&["tuning.ron"]))
             .register_asset_loader(RonAssetLoader::<ShipTable>::new(&["ron"]))
+            .register_asset_loader(RonAssetLoader::<LoadoutCatalogue>::new(&["ron"]))
             .register_asset_loader(RonAssetLoader::<Scenario>::new(&["scn.ron"]))
             .init_asset::<rig::ModelRig>()
             .register_asset_loader(RonAssetLoader::<rig::ModelRig>::new(&["model.ron"]))
@@ -249,6 +256,10 @@ impl Plugin for DataPlugin {
             // the resource, and the loader copies into it. One authoritative
             // copy, whichever end the edit came from.
             .init_resource::<ShipTable>()
+            // Same story for the loadout catalogue, plus the player's standing
+            // choice of what to fit from it.
+            .init_resource::<LoadoutCatalogue>()
+            .init_resource::<SelectedLoadout>()
             .init_resource::<FeelTuning>()
             .add_systems(Startup, begin_load)
             .add_systems(
@@ -257,6 +268,7 @@ impl Plugin for DataPlugin {
                     apply_sim_tuning,
                     apply_feel_tuning,
                     apply_ship_table,
+                    apply_loadout_catalogue,
                     apply_model_rigs,
                 ),
             );
@@ -271,6 +283,7 @@ fn begin_load(server: Res<AssetServer>, mut handles: ResMut<DataHandles>) {
     handles.sim_tuning = server.load(paths::SIM_TUNING);
     handles.feel = server.load(paths::FEEL_TUNING);
     handles.ships = server.load(paths::SHIPS);
+    handles.loadouts = server.load(paths::LOADOUTS);
     handles.scenarios = paths::SCENARIOS
         .iter()
         .map(|(_, path)| (*path, server.load(*path)))
@@ -346,6 +359,29 @@ fn apply_ship_table(
         }
         *table = loaded.clone();
         info!("ship classes reloaded from {}", paths::SHIPS);
+    }
+}
+
+/// Copy the loaded (or reloaded) loadout catalogue into the resource the menu
+/// and the spawn path read. Same equality guard as the class table: comparing
+/// values rather than timestamps is what stops a save/watch feedback loop.
+fn apply_loadout_catalogue(
+    mut events: MessageReader<AssetEvent<LoadoutCatalogue>>,
+    assets: Res<Assets<LoadoutCatalogue>>,
+    mut catalogue: ResMut<LoadoutCatalogue>,
+) {
+    for event in events.read() {
+        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = event else {
+            continue;
+        };
+        let Some(loaded) = assets.get(*id) else {
+            continue;
+        };
+        if *catalogue == *loaded {
+            continue;
+        }
+        *catalogue = loaded.clone();
+        info!("loadout catalogue reloaded from {}", paths::LOADOUTS);
     }
 }
 

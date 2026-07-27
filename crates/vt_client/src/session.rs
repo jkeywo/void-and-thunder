@@ -7,9 +7,10 @@ use bevy::time::Virtual;
 use vt_sim::prelude::*;
 
 use crate::data::{
-    director_for, paths, set_director, spawn_scenario, ActiveScenario, DataHandles, Scenario,
-    SelectedScenario, ShipTable,
+    director_for, paths, set_director, spawn_scenario, ActiveScenario, DataHandles,
+    LoadoutCatalogue, Scenario, SelectedLoadout, SelectedScenario, ShipTable,
 };
+use crate::hud::{HudAction, Slot};
 use crate::input::ThrustState;
 
 /// Where the session is: waiting on data, parked on the title card, mid-run, or
@@ -86,6 +87,8 @@ pub fn await_data(
     scenarios: Res<Assets<Scenario>>,
     selected: Res<SelectedScenario>,
     table: Res<ShipTable>,
+    catalogue: Res<LoadoutCatalogue>,
+    fit: Res<SelectedLoadout>,
     mut active: ResMut<ActiveScenario>,
     mut director: ResMut<SpawnDirector>,
     mut bounds: ResMut<SystemBounds>,
@@ -116,6 +119,8 @@ pub fn await_data(
         &mut commands,
         &table,
         &scenario,
+        &catalogue,
+        *fit,
         &mut director,
         &mut bounds,
         &mut active,
@@ -128,31 +133,41 @@ pub fn await_data(
 ///
 /// Shared by first load and restart so a restarted run cannot drift from a fresh
 /// one — the bug being that a restarted test range quietly grows waves.
+#[allow(clippy::too_many_arguments)]
 pub fn enter_scenario(
     commands: &mut Commands,
     table: &ShipTable,
     scenario: &Scenario,
+    catalogue: &LoadoutCatalogue,
+    fit: SelectedLoadout,
     director: &mut SpawnDirector,
     bounds: &mut SystemBounds,
     active: &mut ActiveScenario,
 ) {
     bounds.radius = scenario.bounds_radius;
     set_director(director, director_for(scenario, table));
-    spawn_scenario(commands, table, scenario);
+    // The class says what kind of ship the protagonist flies; the catalogue says
+    // what is bolted to it. Resolved here rather than at the spawn site so first
+    // load and restart cannot drift apart.
+    let player_fit = table
+        .find(&scenario.player.class)
+        .map(|(_, class)| catalogue.fit(class.loadout, fit));
+    spawn_scenario(commands, table, scenario, player_fit);
     active.0 = scenario.clone();
 }
 
-/// On the start screen, any of Space / Enter / a click / the pad's South or
-/// Start button begins the run — and `T` (or the pad's North) starts it on the
-/// test range instead.
+/// On the start screen, Space / Enter or the pad's South or Start button begins
+/// the run — and `T` (or the pad's North) starts it on the test range instead.
 ///
-/// The test range is a keypress rather than a button on the card because the
-/// card is a decorative overlay: it is `pointer-events: none`, the native HUD is
-/// an Ultralight pixel buffer with no hit-testing, and the HUD→sim action
-/// channel is an unused stub. A button would mean building all three.
+/// The card also carries real chips for all of this, and for the three loadout
+/// slots (see [`apply_hud_actions`]). The keyboard route stays because a chip is
+/// only reachable with a pointer, and the pad has no pointer at all.
+///
+/// Clicking *anywhere* used to start the run. That has to go: the card now has
+/// buttons on it, and "click a chip to choose carronades" and "click to cast
+/// off" cannot both own the same click.
 pub fn start_run(
     keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
     gamepads: Query<&Gamepad>,
     mut selected: ResMut<SelectedScenario>,
     mut next: ResMut<NextState<GameState>>,
@@ -173,8 +188,53 @@ pub fn start_run(
     let key_start = keys.just_pressed(KeyCode::Space)
         || keys.just_pressed(KeyCode::Enter)
         || keys.just_pressed(KeyCode::NumpadEnter);
-    if key_start || mouse.just_pressed(MouseButton::Left) || pad_start {
+    if key_start || pad_start {
         next.set(GameState::Playing);
+    }
+}
+
+/// Act on what the title card's chips asked for.
+///
+/// The one place a [`HudAction`] turns into a change to the game. Deliberately
+/// small and total: the page can pick a scenario, fit a slot, or cast off, and
+/// nothing else — a HUD is a control surface, not a scripting host.
+///
+/// Runs on the start screen only. An action arriving mid-run is not
+/// something the page can currently raise, and acting on one would mean the HUD
+/// could re-fit a ship that is already flying.
+pub fn apply_hud_actions(
+    mut actions: MessageReader<HudAction>,
+    catalogue: Res<LoadoutCatalogue>,
+    mut selected: ResMut<SelectedScenario>,
+    mut fit: ResMut<SelectedLoadout>,
+    mut next: ResMut<NextState<GameState>>,
+) {
+    let counts = catalogue.counts();
+    for action in actions.read() {
+        match action {
+            HudAction::StartRun => next.set(GameState::Playing),
+            HudAction::SelectScenario(path) => {
+                selected.0 = path;
+                // Re-lay the field from the other scenario, exactly as the `T`
+                // key does — a scenario swap is a reload, not a state flip.
+                next.set(GameState::Loading);
+            }
+            HudAction::SelectSlot { slot, option } => {
+                // Clamp rather than trust: the page's chip count comes from a
+                // snapshot that may be a frame behind a hot-reloaded catalogue.
+                let (limit, target) = match slot {
+                    Slot::Broadside => (counts[0], &mut fit.broadside),
+                    Slot::Battery => (counts[1], &mut fit.battery),
+                    Slot::Special => (counts[2], &mut fit.special),
+                };
+                if *option < limit {
+                    *target = *option;
+                }
+            }
+            // Only meaningful on the game-over card, which `restart` owns.
+            HudAction::Restart => {}
+            HudAction::Unknown(_) => {}
+        }
     }
 }
 
@@ -199,6 +259,8 @@ pub fn restart(
     ships: Query<Entity, With<Ship>>,
     projectiles: Query<Entity, With<Projectile>>,
     table: Res<ShipTable>,
+    catalogue: Res<LoadoutCatalogue>,
+    fit: Res<SelectedLoadout>,
     mut active: ResMut<ActiveScenario>,
     mut director: ResMut<SpawnDirector>,
     mut bounds: ResMut<SystemBounds>,
@@ -228,6 +290,8 @@ pub fn restart(
         &mut commands,
         &table,
         &scenario,
+        &catalogue,
+        *fit,
         &mut director,
         &mut bounds,
         &mut active,

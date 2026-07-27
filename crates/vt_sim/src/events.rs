@@ -6,7 +6,7 @@
 //! rules. Positions are world-space.
 
 use bevy_ecs::prelude::*;
-use bevy_math::Vec2;
+use bevy_math::{Vec2, Vec3};
 
 use crate::components::Faction;
 use crate::shield::DamageReport;
@@ -62,4 +62,18 @@ pub struct ShipDestroyed {
 #[derive(Message, Clone, Copy, Debug)]
 pub struct EmpImpact {
     pub position: Vec2,
+}
+
+/// A point-defence screen swatted something out of the air.
+///
+/// The sim spawns no tracer of its own: this says where the kill happened and
+/// where it was fired from, and the client draws the line. Carrying `from` saves
+/// the presentation layer a lookup of a ship it would have to find by position,
+/// and the emitter may well have moved by the time it reads this.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct MunitionIntercepted {
+    /// Where the munition was, in full 3D — a torpedo dies well off the plane.
+    pub position: Vec3,
+    /// The emitter that took it.
+    pub from: Vec2,
 }

@@ -86,6 +86,8 @@ static FIELDS: SpecTable = SpecTable::new(&[
     ("EmpWeapon", "bolt_speed", FieldSpec::config(0.0, 1000.0)),
     ("EmpWeapon", "bolt_damage_frac", FieldSpec::config(0.0, 1.0)),
     ("EmpWeapon", "range", FieldSpec::config(0.0, 2000.0)),
+    ("EmpWeapon", "drain_per_sec", FieldSpec::config(0.0, 5.0)),
+    ("EmpWeapon", "powered", FieldSpec::live()),
     // EmpDefense. Note `damage` here is EMP *soaked*, not damage dealt — a
     // live value, and the reason this table is keyed by owner and not by name.
     ("EmpDefense", "damage", FieldSpec::live()),
@@ -95,16 +97,17 @@ static FIELDS: SpecTable = SpecTable::new(&[
         "recovery_per_sec",
         FieldSpec::config(0.0, 60.0),
     ),
+    // The battery slot's shared pool. `charge` and `drawn` are the running
+    // ship's, not its class's — an edit to capacity must not refill a spent pool.
+    ("Battery", "charge", FieldSpec::live()),
+    ("Battery", "drawn", FieldSpec::live()),
+    ("Battery", "max", FieldSpec::config(0.0, 20.0)),
+    ("Battery", "recharge_per_sec", FieldSpec::config(0.0, 5.0)),
     // Drives.
     ("BoostDrive", "multiplier", FieldSpec::config(1.0, 4.0)),
-    ("BoostDrive", "battery", FieldSpec::live()),
-    ("BoostDrive", "battery_max", FieldSpec::config(0.0, 20.0)),
     ("BoostDrive", "drain_per_sec", FieldSpec::config(0.0, 5.0)),
-    (
-        "BoostDrive",
-        "recharge_per_sec",
-        FieldSpec::config(0.0, 5.0),
-    ),
+    ("BoostDrive", "active", FieldSpec::live()),
+    ("BoostDrive", "engaged", FieldSpec::live()),
     ("MicrowarpDrive", "was_holding", FieldSpec::live()),
     ("MicrowarpDrive", "timer", FieldSpec::live()),
     ("MicrowarpDrive", "cooldown", FieldSpec::config(0.0, 60.0)),
@@ -204,7 +207,9 @@ mod tests {
             ("Broadside", "port"),
             ("Broadside", "starboard"),
             ("TorpedoBay", "loaded"),
-            ("BoostDrive", "battery"),
+            ("Battery", "charge"),
+            ("BoostDrive", "engaged"),
+            ("EmpWeapon", "powered"),
             ("EmpDefense", "damage"),
         ] {
             assert_eq!(

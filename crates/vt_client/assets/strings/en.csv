@@ -35,11 +35,6 @@ controls.kbm.broadsides,Keyboard control description for the mouse buttons,Aim &
 controls.pad.throttle_steer,Pad control description for the left stick,Throttle / steer
 controls.pad.aim_camera,Pad control description for the right stick,Aim & camera
 controls.pad.broadsides,Pad control description for the triggers,Aim & fire port / starboard broadside
-controls.emp,Control description for the EMP weapon,EMP — hold to track and drain a target
-controls.torpedoes,Control description for the torpedo bay,"Torpedoes — hold to lock, release to volley"
-controls.microwarp,Control description for the microwarp drive,"Microwarp — hold to place, release to warp"
-controls.boost,Control description for the boost drive,Boost
-controls.boost.gamepad,"Control description for boost on a pad, where the same button also starts a run",Boost — also starts and restarts a run
 controls.brace,Control description for bracing,Brace — cut incoming damage
 controls.board,Control description for boarding a crippled ship,Board — hold alongside a crippled hulk
 controls.ai_pilot,Control description for handing the ship to the AI pilot,Toggle AI pilot
@@ -48,3 +43,28 @@ controls.restart,Control description for restarting after a run ends,Restart aft
 controls.pause_restart,"Control description on a pad, where one button both pauses and restarts",Pause / restart after a run ends
 controls.fullscreen,Control description for fullscreen,Toggle fullscreen
 controls.panel,Control description for this very panel,Toggle this panel
+title.cast_off,Title-card chip that begins the run,Cast off
+title.test_range,Title-card chip that swaps to the tuning range,Test range
+title.slot.broadside,Label for the broadside row of loadout chips,Guns
+title.slot.battery,Label for the battery row of loadout chips,Battery
+title.slot.special,Label for the special row of loadout chips,Special
+loadout.long_nines.name,Name of the long-nines broadside,Long Nines
+loadout.long_nines.desc,Tooltip for the long nines,"Three heavy guns on a ten-second reload. One committed volley; missing it hurts."
+loadout.carronades.name,Name of the carronade broadside,Carronades
+loadout.carronades.desc,Tooltip for the carronades,"Six light guns, reloading fast over a wide arc, but barely half the reach. A brawler."
+loadout.disruptor.name,Name of the disruptor battery device,Disruptor
+loadout.disruptor.desc,Tooltip for the disruptor,"Hold to run an auto-tracking emitter down a target's drive. Costs the battery an escape would have."
+loadout.boost.name,Name of the boost-drive battery device,Boost Drive
+loadout.boost.desc,Tooltip for the boost drive,Hold for half again the speed while the battery lasts.
+loadout.point_defense.name,Name of the point-defence battery device,Point Defence
+loadout.point_defense.desc,Tooltip for point defence,"Hold to swat incoming shot, bolts and torpedoes out of the air. A deeper pool than the others."
+loadout.torpedoes.name,Name of the torpedo special,Torpedoes
+loadout.torpedoes.desc,Tooltip for torpedoes,"Hold to sweep locks across a formation, release for a homing salvo. Restocked by boarding."
+loadout.microwarp.name,Name of the microwarp special,Microwarp
+loadout.microwarp.desc,Tooltip for the microwarp,"Hold to place a jump point, release to be there. Twenty seconds between jumps."
+loadout.barrels.name,Name of the fire-barrel special,Fire Barrels
+loadout.barrels.desc,Tooltip for fire barrels,"Roll burning barrels off the stern to seal a lane behind you. Restocked by boarding."
+controls.battery_slot,Control row for the battery slot key,Battery slot — boost / disruptor / point defence
+controls.special_slot,Control row for the special slot key,Special slot — torpedoes / microwarp / fire barrels
+hud.special.microwarp,Label over the special readout when a microwarp is fitted,MICROWARP
+hud.special.barrels,Label over the special readout when fire barrels are fitted,FIRE BARRELS

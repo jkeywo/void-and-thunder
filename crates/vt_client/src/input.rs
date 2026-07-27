@@ -365,12 +365,24 @@ pub fn player_input(
             &mut Helm,
             &mut FireOrders,
             &mut Brace,
-            &mut BoostDrive,
+            // The drives are a *fit*: a loadout may leave either off. Demanding
+            // them non-optionally meant an unfitted ship failed `single_mut`
+            // below and the player lost the helm entirely.
+            Option<&mut BoostDrive>,
             &mut PilotIntent,
             &Transform,
             &Heading,
             &Broadside,
-            &MicrowarpDrive,
+            Option<&MicrowarpDrive>,
+            // The rest of the fit, as presence alone: the slot keys below ask
+            // "what is this ship carrying?" rather than naming a device, so the
+            // same two buttons drive whichever one is bolted on.
+            (
+                Has<EmpWeapon>,
+                Has<PointDefense>,
+                Has<TorpedoBay>,
+                Has<FireBarrelRack>,
+            ),
         ),
         With<Player>,
     >,
@@ -380,8 +392,18 @@ pub fn player_input(
     if paused.0 || player_ai.on {
         return;
     }
-    let Ok((mut helm, mut orders, mut brace, mut boost, mut pilot, transform, heading, bank, warp)) =
-        player.single_mut()
+    let Ok((
+        mut helm,
+        mut orders,
+        mut brace,
+        mut boost,
+        mut pilot,
+        transform,
+        heading,
+        bank,
+        warp,
+        (has_disruptor, has_screen, has_tubes, has_barrels),
+    )) = player.single_mut()
     else {
         return;
     };
@@ -414,16 +436,17 @@ pub fn player_input(
         turn -= 1.0;
     }
 
-    // Broadsides on the mouse buttons; EMP on Q.
+    // Broadsides on the mouse buttons. Beyond that there are only two kit keys,
+    // one per loadout slot — Space runs whatever draws on the battery, Shift
+    // works whatever the special slot holds. Which device answers is decided
+    // further down by what the ship is carrying, not here.
     let mut aim_port = mouse.pressed(MouseButton::Left);
     let mut aim_starboard = mouse.pressed(MouseButton::Right);
     let mut fire_port = mouse.just_released(MouseButton::Left);
     let mut fire_starboard = mouse.just_released(MouseButton::Right);
-    let mut emp_fire = keys.pressed(KeyCode::KeyQ);
-    let mut torpedo_hold = keys.pressed(KeyCode::ControlLeft);
-    let mut microwarp_hold = keys.pressed(KeyCode::ShiftLeft);
+    let mut battery_hold = keys.pressed(KeyCode::Space);
+    let mut special_hold = keys.pressed(KeyCode::ShiftLeft);
     let mut bracing = keys.pressed(KeyCode::KeyC);
-    let mut boosting = keys.pressed(KeyCode::Space);
     let mut board_now = keys.just_pressed(KeyCode::KeyB);
 
     // --- Gamepad (first connected pad): the final scheme ---
@@ -454,11 +477,12 @@ pub fn player_input(
         aim_starboard |= pad.pressed(GamepadButton::RightTrigger2); // RT
         fire_port |= pad.just_released(GamepadButton::LeftTrigger2);
         fire_starboard |= pad.just_released(GamepadButton::RightTrigger2);
-        torpedo_hold |= pad.pressed(GamepadButton::LeftTrigger); // LB
-        microwarp_hold |= pad.pressed(GamepadButton::RightTrigger); // RB
-        emp_fire |= pad.pressed(GamepadButton::West); // X / Square
+        // Two slots, two buttons — and they are the two the old fixed kit put
+        // boost and the microwarp on, so the default fit keeps its muscle
+        // memory. LB and X are free.
+        special_hold |= pad.pressed(GamepadButton::RightTrigger); // RB
         bracing |= pad.pressed(GamepadButton::North); // Y / Triangle
-        boosting |= pad.pressed(GamepadButton::South); // A / Cross
+        battery_hold |= pad.pressed(GamepadButton::South); // A / Cross
         board_now |= pad.just_pressed(GamepadButton::East); // B / Circle
     }
 
@@ -467,15 +491,29 @@ pub fn player_input(
     aim.aiming.port = aim_port;
     aim.aiming.starboard = aim_starboard;
 
+    // --- Resolve the two slot keys against what the ship actually carries ---
+    //
+    // Each device still reads its own intent field in the sim, so the AI's
+    // per-ability scoring survives untouched. All that happens here is that one
+    // key is routed to whichever device is present — a ship that fits no
+    // disruptor simply never has `emp_fire` raised.
+    let emp_fire = has_disruptor && battery_hold;
+    let point_defense_fire = has_screen && battery_hold;
+    let torpedo_hold = has_tubes && special_hold;
+    let barrel_drop = has_barrels && special_hold;
+
     // The microwarp can't even be *aimed* while it's recharging — suppress the
     // hold so the top-down view, ghost preview and aim-battery drain never engage
     // on cooldown. (The sim also gates the warp itself on the same timer.)
-    let microwarp_hold = microwarp_hold && warp.timer <= 0.0;
+    let microwarp_hold = special_hold && warp.is_some_and(|w| w.timer <= 0.0);
 
     // --- Aim: gather raw device state, then hand off to the pure decision ---
     let ship = transform.translation.truncate();
     let dt = real.delta_secs();
     let aiming_broadside = aim_port || aim_starboard;
+    // What pulls the aim cursor out. Only the *aimed* devices count: the screen
+    // and the barrel rack are pointed nowhere, so dragging a cursor out for them
+    // would be asking the player to aim something that cannot be aimed.
     let kit_active = emp_fire || torpedo_hold || microwarp_hold;
     let rest_point = ship + heading.forward() * 320.0;
     let right_stick =
@@ -562,11 +600,15 @@ pub fn player_input(
         ));
     }
     brace.active = bracing;
-    boost.active = boosting;
+    if let Some(boost) = boost.as_mut() {
+        boost.active = battery_hold;
+    }
     pilot.aim_point = decision.aim_point;
     pilot.emp_fire = emp_fire;
+    pilot.point_defense_fire = point_defense_fire;
     pilot.torpedo_hold = torpedo_hold;
     pilot.microwarp_hold = microwarp_hold;
+    pilot.barrel_drop = barrel_drop;
     if board_now {
         board.active = true;
     }

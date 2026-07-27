@@ -86,16 +86,31 @@ mod tests {
     /// languages this game writes text in: Rust lookups, the HUD page's
     /// `t(...)` calls, and its `data-i18n` attributes.
     ///
-    /// v&t has no content-derived ids — every id is a literal somewhere — so
-    /// the derived set is empty and the orphan half is exact by construction.
+    /// Almost every id is a literal somewhere. The exception is the loadout
+    /// menu: the card builds `t(option.id + ".name")` from ids the *host* sent
+    /// it, so no scan can see them. Those are handed to the audit explicitly —
+    /// which keeps the orphan half exact rather than blinding it with a prefix,
+    /// so deleting an option still reports its rows as unreachable.
+    ///
+    /// The slot *labels* stay literal in the page for the same reason — see the
+    /// SLOTS table in hud.html.
     #[test]
     fn every_id_is_defined_and_every_row_is_reached() {
+        let catalogue = crate::data::LoadoutCatalogue::default();
+        let options = catalogue
+            .broadsides
+            .iter()
+            .map(|o| o.id.clone())
+            .chain(catalogue.batteries.iter().map(|o| o.id.clone()))
+            .chain(catalogue.specials.iter().map(|o| o.id.clone()))
+            .flat_map(|id| [format!("{id}.name"), format!("{id}.desc")]);
         let report = audit(
             table(),
             AuditInput::new(&[manifest("src"), manifest("assets/ui")])
                 // This module's own macro definitions name `tr!(` and
                 // `trf!(` without looking anything up.
-                .skip("strings.rs"),
+                .skip("strings.rs")
+                .derived(options),
         );
         assert!(report.files_scanned > 0, "the audit scanned nothing");
         assert!(report.ok(), "\n{report}");

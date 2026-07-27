@@ -65,9 +65,12 @@ pub fn apply_class_edits(
         &mut Collider,
         &mut EmpDefense,
         &mut Broadside,
-        &mut EmpWeapon,
-        &mut TorpedoBay,
-        &mut MicrowarpDrive,
+        // Every device but the guns is a fit the loadout may leave off; a
+        // non-optional query here silently dropped the whole ship out of the
+        // panel's reach the moment one was missing.
+        Option<&mut EmpWeapon>,
+        Option<&mut TorpedoBay>,
+        Option<&mut MicrowarpDrive>,
         Option<&mut AiController>,
     )>,
 ) {
@@ -75,18 +78,8 @@ pub fn apply_class_edits(
         return;
     }
 
-    for (
-        class_id,
-        mut stats,
-        mut hull,
-        mut collider,
-        mut emp_def,
-        mut bank,
-        mut emp,
-        mut bay,
-        mut warp,
-        ai,
-    ) in &mut ships
+    for (class_id, mut stats, mut hull, mut collider, mut emp_def, mut bank, emp, bay, warp, ai) in
+        &mut ships
     {
         let Some(class) = table.get(*class_id) else {
             // The class was removed by a reload. Leaving the ship exactly as it
@@ -98,9 +91,15 @@ pub fn apply_class_edits(
         *collider = class.collider;
         merge_config(emp_def.as_mut(), &class.emp_defense);
         merge_config(bank.as_mut(), &class.loadout.broadside);
-        merge_config(emp.as_mut(), &class.loadout.emp);
-        merge_config(bay.as_mut(), &class.loadout.torpedoes);
-        merge_config(warp.as_mut(), &class.loadout.microwarp);
+        if let Some(mut emp) = emp {
+            merge_config(emp.as_mut(), &class.loadout.emp);
+        }
+        if let Some(mut bay) = bay {
+            merge_config(bay.as_mut(), &class.loadout.torpedoes);
+        }
+        if let Some(mut warp) = warp {
+            merge_config(warp.as_mut(), &class.loadout.microwarp);
+        }
         if let Some(mut ai) = ai {
             merge_config(ai.as_mut(), &class.ai);
         }
@@ -178,5 +177,50 @@ mod tests {
 
         assert_eq!(live.resist, 250.0);
         assert_eq!(live.damage, 60.0, "the ship is still EMP'd");
+    }
+
+    /// A ship is a fit, not a fixed kit. A hull that carries no tubes must still
+    /// track its class: the query used to demand every device, so one missing
+    /// component quietly took the whole ship out of the panel's reach and edits
+    /// to its hull, stats and guns stopped landing.
+    #[test]
+    fn a_ship_without_the_full_kit_still_tracks_its_class() {
+        use crate::data::ships::{NamedClass, ShipClass, ShipTable};
+        use bevy::prelude::*;
+        use vt_sim::prelude::{spawn_ship_in, Faction, ShipStats};
+
+        let mut app = App::new();
+        app.insert_resource(ShipTable {
+            classes: vec![NamedClass {
+                name: "stripped".into(),
+                class: ShipClass {
+                    hull: 250.0,
+                    ..ShipClass::default()
+                },
+            }],
+        })
+        .add_systems(Update, apply_class_edits);
+
+        // An all-`None` fit: a hull with guns and nothing else.
+        let ship = spawn_ship_in(
+            app.world_mut(),
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            Default::default(),
+        )
+        .insert(ClassId(0))
+        .id();
+        assert!(app.world().get::<TorpedoBay>(ship).is_none());
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Hull>(ship).unwrap().max,
+            250.0,
+            "the class edit must reach a ship that is missing devices"
+        );
     }
 }

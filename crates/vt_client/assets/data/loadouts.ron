@@ -1,0 +1,78 @@
+// What the player may bolt onto their sloop, chosen on the title card.
+//
+// Three slots, and a fit is exactly one option from each. Index 0 in every slot
+// is the default fit — the ship the game hands a player who never opens the
+// menu — so reordering a list changes what "no choice" means.
+//
+// `id` is a string-table key, not display text: the menu resolves it through
+// en.csv like everything else the HUD says.
+//
+// Any field may be omitted to inherit the compiled-in default; an option only
+// needs to say how it differs. A device left out of a slot's option is one that
+// fit does not carry at all, which is what makes a choice a real trade.
+(
+    broadsides: [
+        (
+            id: "loadout.long_nines",
+            // One big committed volley on a long reload: the shot the whole ship
+            // is aimed with, and missing it hurts.
+            broadside: (cooldown: 10.0),
+        ),
+        (
+            id: "loadout.carronades",
+            // The brawler's answer: twice the guns at half the weight, reloading
+            // three times as fast, but throwing barely half as far — 180 x the
+            // 2.5s shot lifetime is about 450, against the nines' 810. It trades
+            // the decision for a rhythm, and range for presence.
+            broadside: (
+                cooldown: 3.5,
+                damage: 6.0,
+                muzzle_speed: 180.0,
+                guns: 6,
+                // 90 deg either way: at this range you are already committed to
+                // the ship you are alongside.
+                arc: 1.5707964,
+                charge_time: 0.0,
+            ),
+        ),
+    ],
+    batteries: [
+        (
+            // First, so an untouched selection is the kit the game shipped with.
+            // Hold to run the emitter down a target's drive; it costs the same
+            // pool an escape would have, which is what makes it a decision.
+            id: "loadout.disruptor",
+            emp: Some(()),
+        ),
+        (
+            // 1.6x speed while held. Mobility instead of control.
+            id: "loadout.boost",
+            boost: Some(()),
+        ),
+        (
+            // A bubble that swats incoming shot, bolts and torpedoes out of the
+            // air. A deeper pool than the others: the screen is meant to be held
+            // up through a whole pass, where boost is spent in bursts.
+            id: "loadout.point_defense",
+            point_defense: Some(()),
+            battery: (charge: 4.5, max: 4.5),
+        ),
+    ],
+    specials: [
+        (
+            id: "loadout.torpedoes",
+            torpedoes: Some(()),
+        ),
+        (
+            id: "loadout.microwarp",
+            // 20s: warping is an escape, not a manoeuvre.
+            microwarp: Some((cooldown: 20.0)),
+        ),
+        (
+            // Roll burning barrels off the stern. The only special that is not
+            // aimed — it asks when, not where.
+            id: "loadout.barrels",
+            barrels: Some(()),
+        ),
+    ],
+)

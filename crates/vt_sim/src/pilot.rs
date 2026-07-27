@@ -48,7 +48,7 @@ use crate::components::{
     AiController, Brace, Disabled, EmpDefense, Faction, FireOrders, Heading, Helm, Hull,
     PilotIntent, Ship, Velocity,
 };
-use crate::drive::{BoostDrive, MicrowarpDrive};
+use crate::drive::{Battery, BoostDrive, MicrowarpDrive};
 use crate::emp::EmpWeapon;
 use crate::piracy::BoardIntent;
 use crate::shield::{Shield, ShieldArc};
@@ -201,8 +201,8 @@ pub struct Kit {
     pub warp_range: f32,
     pub warp_ready: bool,
     pub board_range: f32,
-    /// Boost battery remaining, as a fraction.
-    pub boost_frac: f32,
+    /// Charge left in the battery slot's pool, as a fraction.
+    pub battery_frac: f32,
     /// Charge in the bow arc as a fraction of its own capacity. Zero on a hull
     /// with no shields fitted, which is what makes every shield term below
     /// vanish for such a ship rather than needing a special case.
@@ -348,6 +348,12 @@ pub struct Plan {
     pub emp_fire: bool,
     pub torpedo_hold: bool,
     pub microwarp_hold: bool,
+    /// The two newest devices. The brain does not score them yet — it always
+    /// plans *not* to use them — but they still ride in the plan so applying it
+    /// clears whatever the client last wrote. Without that, taking the helm with
+    /// a barrel key held would leave the rack dropping forever.
+    pub point_defense_fire: bool,
+    pub barrel_drop: bool,
     pub warp_prime: f32,
     pub board: bool,
     pub boost: bool,
@@ -377,6 +383,8 @@ impl Plan {
             emp_fire: false,
             torpedo_hold: false,
             microwarp_hold: false,
+            point_defense_fire: false,
+            barrel_drop: false,
             warp_prime: 0.0,
             board: false,
             boost: false,
@@ -553,7 +561,7 @@ fn score_ram(s: &Situation, t: &PilotTuning) -> f32 {
     t.w_ram
         * close
         * (0.3 + 0.7 * aligned)
-        * s.kit.boost_frac
+        * s.kit.battery_frac
         * nerve
         * (0.3 + 0.7 * need)
         * presentation(s, true, t)
@@ -1029,16 +1037,23 @@ pub fn pilot_system(
             &Faction,
             &AiController,
             &mut PilotBrain,
+            // Only the guns and the shield are guaranteed: every ship has a
+            // broadside, and `ship_bundle` always inserts a `Shield` (an
+            // unshielded hull is one with zero-capacity banks, not a missing
+            // component). Everything else is a *fit* the loadout may leave off,
+            // so the brain reads it as an option and `Kit` answers "not
+            // carried" — the scores already refuse a zero-range ability.
             (
                 &Broadside,
-                &EmpWeapon,
-                &TorpedoBay,
-                &TorpedoLock,
-                &MicrowarpDrive,
+                Option<&EmpWeapon>,
+                Option<&TorpedoBay>,
+                Option<&TorpedoLock>,
+                Option<&MicrowarpDrive>,
                 &Shield,
             ),
             (
-                &mut BoostDrive,
+                Option<&Battery>,
+                Option<&mut BoostDrive>,
                 &mut Brace,
                 &mut PilotIntent,
                 &mut Helm,
@@ -1085,7 +1100,7 @@ pub fn pilot_system(
         ai,
         mut brain,
         (bank, emp, bay, lock, warp, shield),
-        (mut boost, mut brace, mut intent, mut helm, mut orders),
+        (battery, mut boost, mut brace, mut intent, mut helm, mut orders),
     ) in &mut ships
     {
         if !ai.use_abilities {
@@ -1113,25 +1128,31 @@ pub fn pilot_system(
             }
         }
 
+        // An unfitted device reads as zero reach / zero tubes / not ready, which
+        // is already how every score refuses to reach for something it cannot
+        // use — see `score_torpedo`, `score_emp` and `score_microwarp`. No
+        // special case needed anywhere below this line.
         let kit = Kit {
             gun_reach: bank.muzzle_speed * tuning.projectile_ttl,
             gun_arc: bank.arc,
             muzzle_speed: bank.muzzle_speed,
             port_ready: bank.ready(true),
             starboard_ready: bank.ready(false),
-            emp_range: emp.range,
-            emp_arc: emp.arc,
-            torpedo_range: bay.range,
-            lock_radius: bay.lock_radius,
-            tubes: bay.loaded,
-            stock_frac: ((bay.loaded + bay.magazine as f32)
-                / (bay.tubes_max as f32 + bay.magazine_max as f32).max(1.0))
-            .clamp(0.0, 1.0),
-            locks: lock.locks,
-            warp_range: warp.range,
-            warp_ready: warp.timer <= 0.0,
+            emp_range: emp.map_or(0.0, |e| e.range),
+            emp_arc: emp.map_or(0.0, |e| e.arc),
+            torpedo_range: bay.map_or(0.0, |b| b.range),
+            lock_radius: bay.map_or(0.0, |b| b.lock_radius),
+            tubes: bay.map_or(0.0, |b| b.loaded),
+            stock_frac: bay.map_or(0.0, |b| {
+                ((b.loaded + b.magazine as f32)
+                    / (b.tubes_max as f32 + b.magazine_max as f32).max(1.0))
+                .clamp(0.0, 1.0)
+            }),
+            locks: lock.map_or(0, |l| l.locks),
+            warp_range: warp.map_or(0.0, |w| w.range),
+            warp_ready: warp.is_some_and(|w| w.timer <= 0.0),
             board_range: tuning.board_range,
-            boost_frac: (boost.battery / boost.battery_max.max(0.01)).clamp(0.0, 1.0),
+            battery_frac: battery.map_or(0.0, Battery::fraction),
             fore_frac: shield.fraction(ShieldArc::Fore),
             aft_frac: shield.fraction(ShieldArc::Aft),
             // A cooling bank is one that was hit inside the regen delay — the
@@ -1178,7 +1199,11 @@ pub fn pilot_system(
         intent.emp_fire = decided.emp_fire;
         intent.torpedo_hold = decided.torpedo_hold;
         intent.microwarp_hold = decided.microwarp_hold;
-        boost.active = decided.boost;
+        intent.point_defense_fire = decided.point_defense_fire;
+        intent.barrel_drop = decided.barrel_drop;
+        if let Some(boost) = boost.as_mut() {
+            boost.active = decided.boost;
+        }
         brace.active = decided.brace;
         if decided.board {
             board_intent.active = true;
@@ -1207,7 +1232,7 @@ mod tests {
             warp_range: 506.0,
             warp_ready: true,
             board_range: 95.0,
-            boost_frac: 1.0,
+            battery_frac: 1.0,
             fore_frac: 0.0,
             aft_frac: 0.0,
             fore_suppressed: false,
@@ -1322,7 +1347,7 @@ mod tests {
         k.starboard_ready = false;
         k.tubes = 0.0;
         k.stock_frac = 0.0;
-        k.boost_frac = 0.0; // no battery, so ramming is not the answer either
+        k.battery_frac = 0.0; // no battery, so ramming is not the answer either
         let s = at(vec![contact(Vec2::new(300.0, 0.0))], vec![], k);
         let p = decide(&s);
         assert_eq!(p.action, Action::Emp, "scores were {:?}", p.scores);
@@ -1925,5 +1950,69 @@ mod tests {
         assert!(world.get::<Shield>(pilot).is_some());
         assert!(world.get::<Collider>(pilot).is_some());
         assert!(world.get::<SpeedScale>(pilot).is_some());
+    }
+
+    /// A ship is a *fit*, not a fixed kit: the loadout may leave any device off,
+    /// and an all-`None` fit is a hull with nothing but its guns. The brain must
+    /// still fly it — a non-optional kit query here used to drop such a ship out
+    /// of `pilot_system` entirely and leave it drifting, helm untouched.
+    #[test]
+    fn the_pilot_flies_a_ship_that_carries_no_kit_but_its_guns() {
+        use crate::components::ShipStats;
+        use crate::spawn::{spawn_ship_in, ShipLoadout};
+        use bevy_app::prelude::*;
+
+        let mut app = App::new();
+        app.init_resource::<SimTuning>()
+            .init_resource::<BoardIntent>()
+            .init_resource::<Time>()
+            .add_systems(Update, pilot_system);
+
+        let stripped = spawn_ship_in(
+            app.world_mut(),
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            ShipLoadout::default(),
+        )
+        .insert(AiController::piloting())
+        .id();
+        // Sanity: the fit really did leave the kit off.
+        assert!(app.world().get::<EmpWeapon>(stripped).is_none());
+        assert!(app.world().get::<TorpedoBay>(stripped).is_none());
+        assert!(app.world().get::<MicrowarpDrive>(stripped).is_none());
+        assert!(app.world().get::<BoostDrive>(stripped).is_none());
+
+        spawn_ship_in(
+            app.world_mut(),
+            Faction::Houses,
+            ShipStats::default(),
+            100.0,
+            Vec2::new(0.0, 250.0),
+            0.0,
+            ShipLoadout::enemy(),
+        )
+        .insert(AiController::default());
+
+        app.update();
+
+        let world = app.world();
+        let helm = world.get::<Helm>(stripped).unwrap();
+        assert!(
+            helm.throttle != 0.0 || helm.turn != 0.0,
+            "a gun-only ship must still be flown"
+        );
+        // And it must never reach for something it is not carrying.
+        let intent = world.get::<PilotIntent>(stripped).unwrap();
+        assert!(!intent.emp_fire, "no emitter fitted");
+        assert!(!intent.torpedo_hold, "no tubes fitted");
+        assert!(!intent.microwarp_hold, "no warp drive fitted");
+        assert_ne!(
+            world.get::<PilotBrain>(stripped).unwrap().action,
+            Action::Microwarp,
+            "a drive it does not have is never the plan"
+        );
     }
 }

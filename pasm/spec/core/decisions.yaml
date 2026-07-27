@@ -210,3 +210,71 @@ entities:
           and composing each sparse class over the defaults through the
           vellum-compose catalog reproduces the edited table exactly.
       references: [scenarios, data-tuning, ship-visuals, dev-panel]
+
+  - decision: modular-loadout-slots
+    core:
+      status: accepted
+      confidence: confirmed
+      title: The ship is a fit, chosen on the title card, and the HUD can finally ask for it
+      summary: >-
+        The kit becomes three slots the player picks before a run: broadside,
+        battery and special. Four choices fell out of building it.
+
+        Fitting is component *presence*, not a flag. An unfitted device is one
+        ship_bundle never inserts, so the system that services it never sees the
+        ship. Bevy has no Bundle impl for Option, so the optional half is applied
+        by fit_devices after the shared hull, and spawn_ship / spawn_ship_in are
+        the two ways to get both halves at once.
+
+        Intents stay named after devices (emp_fire, torpedo_hold, barrel_drop)
+        rather than after slots. The input layer resolves one key against what
+        the ship carries. Slot-named intents would force every device system to
+        additionally learn whether it is "the special" — information the ECS
+        already encodes by presence — and would destroy pilot.rs's per-ability
+        arbitration, which explicitly chooses between the microwarp and the
+        tubes.
+
+        The catalogue lives in its own loadouts.ron, not in ships.ron. That file
+        answers "what is a house patrol"; this one answers "what may the
+        protagonist bolt on", and folding them together would make every class
+        carry a list of alternatives it never uses.
+
+        The HUD-to-host channel is a queue the host polls, not a callback. Neither
+        host can be called into — Ultralight exposes no window.ipc, and nothing
+        listened for the DOM event the wasm path used to dispatch — but both can
+        read a value back, so both simply ask. A JS function object through
+        lock_js_context would mean an FnMut boxed into JS-owned data with a
+        finalizer that aborts on unwind, re-registered on every page load.
+      rationale:
+        - >-
+          Clicking anywhere on the title card no longer starts a run. The card
+          has buttons on it now, and "click a chip to choose carronades" and
+          "click to cast off" cannot both own the same click.
+        - >-
+          The default fit is the disruptor, not the boost drive. The emitter
+          turns out to be what makes a broadside connect: a ship that cannot be
+          slowed out-turns a ten-second reload, and the scenario corpus deadlocks
+          on a last survivor neither side can hit. That is a property of the fit,
+          not a quirk of the AI, so it belongs in what a player who never opens
+          the menu is handed.
+        - >-
+          Four systems demanded every kit component non-optionally, so removing
+          one silently broke something unrelated - most sharply player_input,
+          where a missing drive failed the whole query and the player lost the
+          helm. Making them optional came first, as its own change with no
+          behaviour attached.
+        - >-
+          The AI does not score the two new devices yet. It plans not to use
+          them, but still carries them in its Plan so applying it clears what the
+          client last wrote — otherwise taking the helm with a barrel key held
+          would leave the rack dropping forever.
+      references:
+        [
+          loadout-selection,
+          battery-power,
+          point-defense,
+          fire-barrels,
+          hud-action-channel,
+          controller-input,
+        ]
+

@@ -197,7 +197,13 @@ mod tests {
         let mut table = ShipTable::default();
         let class = &mut table.classes[0].class;
         class.loadout.broadside.port.timer = 7.5;
-        class.loadout.torpedoes.loaded = 1.0;
+        // The default fit carries a bay, so this is a real half-spent magazine.
+        class
+            .loadout
+            .torpedoes
+            .as_mut()
+            .expect("the sloop fits tubes")
+            .loaded = 1.0;
         class.emp_defense.damage = 42.0;
 
         let config = PrettyConfig::new().struct_names(false);
@@ -223,7 +229,11 @@ mod tests {
         );
         assert_eq!(round.emp_defense.damage, 0.0, "EMP soak reset");
         assert_eq!(
-            round.loadout.torpedoes.loaded,
+            round
+                .loadout
+                .torpedoes
+                .expect("the sloop fits tubes")
+                .loaded,
             vt_sim::prelude::TorpedoBay::default().loaded,
             "a saved class hands new ships a full magazine, not a spent one"
         );

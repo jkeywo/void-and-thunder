@@ -20,8 +20,14 @@ use crate::components::{Collider, EmpDefense, Faction, Heading, PilotIntent, Shi
 use crate::events::EmpImpact;
 use crate::util::wrap_angle as wrap;
 
-/// A frontal EMP emitter. While held it swivels within `arc` toward a lead of
-/// the target and fires [`EmpBolt`]s on `cooldown`. Player-only for now.
+/// A frontal EMP emitter — the disruptor. While held *and* paid for out of the
+/// ship's [`Battery`](crate::drive::Battery) it swivels within `arc` toward a
+/// lead of the target and fires [`EmpBolt`]s on `cooldown`.
+///
+/// The battery is what makes it a choice. On a free cooldown this was a button
+/// with no cost, so there was never a reason to let go of it; sharing the pool
+/// with the boost drive means running a ship down and running *away* from it are
+/// the same resource.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct EmpWeapon {
@@ -39,6 +45,12 @@ pub struct EmpWeapon {
     pub bolt_damage_frac: f32,
     /// Maximum engagement range.
     pub range: f32,
+    /// Battery spent per second while the emitter is held.
+    pub drain_per_sec: f32,
+    /// Set by [`battery_draw_system`](crate::drive::battery_draw_system): held
+    /// *and* paid for. Live state, and the only thing `emp_system` fires on.
+    #[serde(skip)]
+    pub powered: bool,
 }
 
 impl Default for EmpWeapon {
@@ -53,6 +65,10 @@ impl Default for EmpWeapon {
             bolt_speed: 360.0,
             bolt_damage_frac: 0.25,
             range: 620.0,
+            // Slower than the boost drive's 1.0/s: the disruptor is meant to be
+            // worked in bursts across a whole pass, not spent in three seconds.
+            drain_per_sec: 0.7,
+            powered: false,
         }
     }
 }
@@ -109,7 +125,10 @@ pub fn emp_system(
     let dt = time.delta_secs();
     for (transform, heading, faction, mut emp, intent) in &mut shooters {
         emp.timer = (emp.timer - dt).max(0.0);
-        if !intent.emp_fire {
+        // `powered` is the pilot's hold and the battery's answer already folded
+        // together upstream, so a flat pool silences the emitter without this
+        // system needing to know a battery exists.
+        if !emp.powered {
             continue;
         }
         let pos = transform.translation.truncate();

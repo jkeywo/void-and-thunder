@@ -3,55 +3,86 @@
 //! The director sends escalating waves of hostile ships at the protagonist.
 //! When a wave is cleared the next (larger) one arrives; clear them all to win.
 //! If the protagonist dies, the encounter is lost. All ship construction lives
-//! in [`ship_bundle`] so there is exactly one way to make a ship.
+//! in [`ship_bundle`] (the hull every ship shares) plus [`fit_devices`] (the
+//! per-ship loadout), so there is exactly one way to make a ship — and
+//! [`spawn_ship`] is both halves in one call.
 
 use bevy_ecs::prelude::*;
+use bevy_ecs::system::EntityCommands;
+use bevy_ecs::world::EntityWorldMut;
 use bevy_math::{Quat, Vec2};
 use bevy_reflect::Reflect;
 use bevy_transform::components::Transform;
 use serde::{Deserialize, Serialize};
 use std::f32::consts::TAU;
 
+use crate::barrels::FireBarrelRack;
 use crate::combat::Broadside;
 use crate::components::{
     AiController, AngularVelocity, Brace, ClassId, Collider, EmpDefense, Faction, FireOrders,
     Heading, Helm, Hull, PilotIntent, Protagonist, Ship, ShipStats, SpeedScale, Velocity,
 };
-use crate::drive::{BoostDrive, MicrowarpDrive};
+use crate::drive::{Battery, BoostDrive, MicrowarpDrive};
 use crate::emp::EmpWeapon;
 use crate::pilot::PilotBrain;
+use crate::point_defense::PointDefense;
 use crate::shield::Shield;
 use crate::torpedo::{TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
 use crate::world::SystemBounds;
 
-/// A ship's full weapon/drive loadout. Every ship carries the same kit; presets
-/// differ only in tuning, so a player and an AI ship are the same entity shape.
+/// A ship's *fit*: what it actually carries, not a fixed kit it always has.
+///
+/// Guns and a shield are universal — every hull has a broadside, and an
+/// unshielded ship is one with zero-capacity banks rather than a missing
+/// component. Everything else is optional, and "not fitted" means the component
+/// is simply never inserted, so the system that services it never sees the ship.
+/// That is what makes the three loadout slots a real choice rather than a set of
+/// flags: a hull with no torpedo bay has no tubes to reload and no magazine to
+/// read, not an empty one.
+///
+/// Stays `Copy` on purpose — it is embedded in the `Copy` resources
+/// [`DirectorSettings`] and [`FinaleWave`], so nothing heap-allocated may go in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, Reflect)]
 #[serde(default)]
 pub struct ShipLoadout {
     pub broadside: Broadside,
-    pub emp: EmpWeapon,
-    pub torpedoes: TorpedoBay,
-    pub boost: BoostDrive,
-    pub microwarp: MicrowarpDrive,
     /// Fore/aft shields. Defaults to a `max` of zero — no shields fitted — so a
     /// class opts in with one authored number and every existing hull is
     /// unchanged.
     pub shield: Shield,
+    /// The pool every device in the battery slot draws from. Fitted alongside
+    /// exactly one of `boost`, `emp` or `point_defense`.
+    pub battery: Option<Battery>,
+    pub boost: Option<BoostDrive>,
+    pub emp: Option<EmpWeapon>,
+    pub point_defense: Option<PointDefense>,
+    /// The special slot: exactly one of these three.
+    pub torpedoes: Option<TorpedoBay>,
+    pub microwarp: Option<MicrowarpDrive>,
+    pub barrels: Option<FireBarrelRack>,
 }
 
 impl ShipLoadout {
-    /// The player's loadout: a heavy 10s broadside and a 20s microwarp.
+    /// The player's default fit: long nines, the disruptor, and torpedoes.
+    ///
+    /// One device per slot, which is the shape every fit takes — the loadout
+    /// catalogue swaps *which* one, never how many.
+    ///
+    /// The disruptor rather than the boost drive, because the emitter turns out
+    /// to be what makes a broadside connect: a ship that cannot be slowed simply
+    /// out-turns a ten-second reload, and the scenario corpus deadlocks on a
+    /// last survivor neither side can hit. That is a real property of the fit
+    /// rather than a quirk of the AI, so it belongs in what the game hands a
+    /// player who never opens the menu.
     pub fn player() -> Self {
         Self {
             broadside: Broadside {
                 cooldown: 10.0,
                 ..Broadside::default()
             },
-            microwarp: MicrowarpDrive {
-                cooldown: 20.0,
-                ..MicrowarpDrive::default()
-            },
+            battery: Some(Battery::default()),
+            emp: Some(EmpWeapon::default()),
+            torpedoes: Some(TorpedoBay::default()),
             // Fore and aft banks of 22.5 against a 50-point hull: a
             // well-presented side still roughly doubles your effective health,
             // but every exchange matters more than it did. Enemies fit none
@@ -95,7 +126,12 @@ impl ShipLoadout {
         }
     }
 
-    /// An enemy's loadout: a slower broadside that telegraphs a 0.5s charge.
+    /// An enemy's fit: a slower broadside that telegraphs a 0.5s charge, and
+    /// nothing else at all.
+    ///
+    /// Enemies already flew the guns only — their controllers set
+    /// `use_abilities: false`, so the kit was carried and never used. Now it is
+    /// not carried, which says the same thing in the data instead of in a flag.
     pub fn enemy() -> Self {
         Self {
             broadside: Broadside {
@@ -108,10 +144,15 @@ impl ShipLoadout {
     }
 }
 
-/// The one true ship constructor. Every ship is the same entity shape: base
-/// hull + the full [`ShipLoadout`] + a [`PilotIntent`] its controller writes
-/// (alongside the [`PilotBrain`] the utility AI thinks in, empty until an
-/// [`AiController`] with the kit enabled takes the ship over).
+/// The hull every ship shares: motion, helm, damage state, guns and a shield,
+/// plus the [`PilotIntent`] its controller writes (alongside the [`PilotBrain`]
+/// the utility AI thinks in, empty until an [`AiController`] with the kit
+/// enabled takes the ship over).
+///
+/// This is only *half* a ship — the optional devices come from [`fit_devices`],
+/// which is why almost every caller wants [`spawn_ship`] or [`spawn_ship_in`]
+/// instead. Spawning this bundle alone gives a hull with nothing but its guns.
+///
 /// The player adds [`Protagonist`]; an AI adds [`AiController`]. Which one drives
 /// the ship — the client or the sim's AI — is the *only* difference.
 ///
@@ -149,19 +190,102 @@ pub fn ship_bundle(
         EmpDefense::default(),
         SpeedScale::default(),
         Transform::from_translation(pos.extend(0.0)).with_rotation(Quat::from_rotation_z(heading)),
-        // The full kit — identical set on every ship. Torpedoes carry three
-        // components: static config/reload (from the loadout) plus the two
-        // always-empty-at-spawn transient lifecycles (aim-lock, launch-queue).
-        (
-            loadout.broadside,
-            loadout.emp,
-            loadout.torpedoes.stocked(),
+        // The guns, which every hull has. The optional half of the fit is bolted
+        // on separately by [`fit_devices`] — see there for why.
+        loadout.broadside,
+    )
+}
+
+/// Somewhere a just-spawned ship can have its fitted devices bolted on.
+///
+/// [`ship_bundle`] builds the hull every ship shares; the *fit* is per-ship and
+/// conditional, and Bevy has no `Bundle` impl for `Option<B>`, so the optional
+/// half cannot ride along in the tuple. Both spawn paths — deferred `Commands`
+/// and the direct `World` access the harness and tests use — go through this
+/// trait, so there is still exactly one description of what a fit puts on a ship.
+pub trait FitTarget {
+    fn fit<B: Bundle>(&mut self, bundle: B);
+}
+
+impl FitTarget for EntityCommands<'_> {
+    fn fit<B: Bundle>(&mut self, bundle: B) {
+        self.insert(bundle);
+    }
+}
+
+impl FitTarget for EntityWorldMut<'_> {
+    fn fit<B: Bundle>(&mut self, bundle: B) {
+        self.insert(bundle);
+    }
+}
+
+/// Bolt a loadout's fitted devices onto a ship built by [`ship_bundle`].
+///
+/// An unfitted device inserts nothing at all, so the system that services it
+/// never sees this ship: the loadout slots live in the archetype rather than in
+/// a pile of `enabled` flags. A magazine enters the field full — the file
+/// describes the fit and the live counts are derived from it — and a torpedo bay
+/// brings its two transient lifecycle components (aim-lock, launch-queue), which
+/// mean nothing without it.
+pub fn fit_devices(ship: &mut impl FitTarget, loadout: ShipLoadout) {
+    if let Some(battery) = loadout.battery {
+        ship.fit(battery);
+    }
+    if let Some(boost) = loadout.boost {
+        ship.fit(boost);
+    }
+    if let Some(emp) = loadout.emp {
+        ship.fit(emp);
+    }
+    if let Some(screen) = loadout.point_defense {
+        ship.fit(screen);
+    }
+    if let Some(bay) = loadout.torpedoes {
+        ship.fit((
+            bay.stocked(),
             TorpedoLock::default(),
             TorpedoLaunchQueue::default(),
-            loadout.boost,
-            loadout.microwarp,
-        ),
-    )
+        ));
+    }
+    if let Some(warp) = loadout.microwarp {
+        ship.fit(warp);
+    }
+    if let Some(rack) = loadout.barrels {
+        ship.fit(rack.stocked());
+    }
+}
+
+/// Spawn a complete ship — the shared hull plus its fit — and hand back its
+/// [`EntityCommands`] so the caller can add whatever makes it *this* ship: a
+/// [`Protagonist`] marker, an [`AiController`], a [`ClassId`].
+pub fn spawn_ship<'a>(
+    commands: &'a mut Commands,
+    faction: Faction,
+    stats: ShipStats,
+    hull_max: f32,
+    pos: Vec2,
+    heading: f32,
+    loadout: ShipLoadout,
+) -> EntityCommands<'a> {
+    let mut ship = commands.spawn(ship_bundle(faction, stats, hull_max, pos, heading, loadout));
+    fit_devices(&mut ship, loadout);
+    ship
+}
+
+/// Spawn a complete ship straight into a `World` — the direct-access twin of
+/// [`spawn_ship`], for the headless harness and tests, which have no `Commands`.
+pub fn spawn_ship_in(
+    world: &mut World,
+    faction: Faction,
+    stats: ShipStats,
+    hull_max: f32,
+    pos: Vec2,
+    heading: f32,
+    loadout: ShipLoadout,
+) -> EntityWorldMut<'_> {
+    let mut ship = world.spawn(ship_bundle(faction, stats, hull_max, pos, heading, loadout));
+    fit_devices(&mut ship, loadout);
+    ship
 }
 
 /// How the current encounter is going.
@@ -399,11 +523,16 @@ pub fn director_system(
         // Face the origin — waves ring the system edge, so this points each
         // arrival inward, at the action.
         let heading = (-pos).to_angle();
-        commands.spawn((
-            ship_bundle(faction_of(&settings), stats, hull, pos, heading, loadout),
-            class,
-            ai,
-        ));
+        spawn_ship(
+            &mut commands,
+            faction_of(&settings),
+            stats,
+            hull,
+            pos,
+            heading,
+            loadout,
+        )
+        .insert((class, ai));
     }
     encounter.enemies_remaining = count;
 }
@@ -431,6 +560,73 @@ pub fn reset_encounter(director: &mut SpawnDirector, encounter: &mut Encounter) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole point of the fit: a ship carries the devices its loadout names
+    /// and *nothing else*. A component that is merely present-but-idle would put
+    /// the fit back into flags, and every system would have to ask twice.
+    #[test]
+    fn a_ship_carries_only_the_devices_its_loadout_fits() {
+        let mut world = World::new();
+        let fit = ShipLoadout {
+            point_defense: Some(PointDefense::default()),
+            barrels: Some(FireBarrelRack::default()),
+            battery: Some(Battery::default()),
+            ..ShipLoadout::default()
+        };
+        let ship = spawn_ship_in(
+            &mut world,
+            Faction::Corsairs,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            fit,
+        )
+        .id();
+
+        assert!(world.get::<PointDefense>(ship).is_some());
+        assert!(world.get::<FireBarrelRack>(ship).is_some());
+        assert!(world.get::<Battery>(ship).is_some());
+        assert!(world.get::<BoostDrive>(ship).is_none(), "not fitted");
+        assert!(world.get::<EmpWeapon>(ship).is_none(), "not fitted");
+        assert!(world.get::<TorpedoBay>(ship).is_none(), "not fitted");
+        assert!(world.get::<MicrowarpDrive>(ship).is_none(), "not fitted");
+        // The bay's two transient lifecycles mean nothing without a bay.
+        assert!(world.get::<TorpedoLock>(ship).is_none());
+        assert!(world.get::<TorpedoLaunchQueue>(ship).is_none());
+        // Guns and a shield are universal, fit or no fit.
+        assert!(world.get::<Broadside>(ship).is_some());
+        assert!(world.get::<Shield>(ship).is_some());
+        // And a magazine enters the field full.
+        assert_eq!(
+            world.get::<FireBarrelRack>(ship).unwrap().magazine,
+            FireBarrelRack::default().magazine_max
+        );
+    }
+
+    /// Enemies fly the guns only. They always did — `use_abilities: false` — but
+    /// now the data says so instead of a flag on a kit they carried and ignored.
+    #[test]
+    fn an_enemy_carries_no_kit_at_all() {
+        let mut world = World::new();
+        let ship = spawn_ship_in(
+            &mut world,
+            Faction::Houses,
+            ShipStats::default(),
+            100.0,
+            Vec2::ZERO,
+            0.0,
+            ShipLoadout::enemy(),
+        )
+        .id();
+
+        assert!(world.get::<Broadside>(ship).is_some());
+        assert!(world.get::<Battery>(ship).is_none());
+        assert!(world.get::<EmpWeapon>(ship).is_none());
+        assert!(world.get::<TorpedoBay>(ship).is_none());
+        assert!(world.get::<BoostDrive>(ship).is_none());
+        assert!(world.get::<MicrowarpDrive>(ship).is_none());
+    }
 
     /// The last wave is the thing the run has been building toward, and it is a
     /// *different* ship — not more of the same, and not scaled by the ordinary

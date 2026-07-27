@@ -24,13 +24,13 @@
 
 use bevy::prelude::*;
 use vt_sim::prelude::{
-    agility_at, Boarding, BoostDrive, Broadside, Encounter, Hull, MicrowarpDrive, Outcome, Plunder,
-    Shield, ShieldArc, ShipStats, SimTuning, TorpedoBay, TorpedoLock, Velocity,
+    agility_at, Battery, Boarding, Broadside, Encounter, FireBarrelRack, Hull, MicrowarpDrive,
+    Outcome, Plunder, Shield, ShieldArc, ShipStats, SimTuning, TorpedoBay, TorpedoLock, Velocity,
 };
 
 use crate::bullet_time::AimBattery;
 use crate::camera::camera_orbit;
-use crate::data::FeelTuning;
+use crate::data::{paths, FeelTuning};
 use crate::input::{ControlsPanel, InputMethod, Paused, PlayerAi, ThrustState};
 use crate::interpolate::SmoothingSet;
 use crate::session::GameState;
@@ -72,7 +72,15 @@ impl Plugin for HudBridgePlugin {
             info!("HUD: native Ultralight transport ENABLED (native-html-hud feature)");
             app.add_systems(Update, native::init).add_systems(
                 Update,
-                native::render_hud
+                (
+                    // Resize first so a click is mapped against the size the
+                    // page is actually laid out at; then forward input, so an
+                    // action raised this frame is acted on this frame.
+                    native::resize_hud,
+                    native::forward_input,
+                    native::render_hud,
+                )
+                    .chain()
                     .after(gather_hud_state)
                     .after(gather_ring_state),
             );
@@ -89,14 +97,106 @@ pub struct HudSnapshot {
     pub seq: u64,
 }
 
-/// An action coming *from* the HUD (a button press). This readout HUD emits none
-/// yet; the type exists so the seam is ready when controls are added. A transport
-/// parses `game.send(action, payload)` messages into these and dispatches them.
-#[derive(Message, Debug, Clone)]
-#[allow(dead_code)] // seam: no HUD controls emit actions yet
+/// Which loadout slot a menu chip is talking about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    Broadside,
+    Battery,
+    Special,
+}
+
+impl Slot {
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "broadside" => Some(Self::Broadside),
+            "battery" => Some(Self::Battery),
+            "special" => Some(Self::Special),
+            _ => None,
+        }
+    }
+}
+
+/// An action coming *from* the HUD — a chip on the title card being clicked.
+///
+/// The page speaks `game.send(action, payload)`; [`parse_hud_action`] turns one
+/// drained line into one of these, and `session::apply_hud_actions` is the only
+/// thing that acts on them. Keeping the vocabulary small and explicit is what
+/// stops the page from being able to ask the game for anything it likes.
+#[derive(Message, Debug, Clone, PartialEq)]
 pub enum HudAction {
-    // e.g. FireTorpedo { tube: u8 }, Undock, ... — add as the HUD grows.
+    /// Cast off — begin the run with whatever is currently selected.
+    StartRun,
+    /// Switch which scenario the next run lays out.
+    SelectScenario(&'static str),
+    /// Fit `option` into `slot`.
+    SelectSlot { slot: Slot, option: usize },
+    /// Run it back, from the game-over card.
+    Restart,
+    /// Something the host does not recognise. Kept rather than dropped so a
+    /// mismatch between page and host shows up in a log instead of as silence.
     Unknown(String),
+}
+
+/// Parse one drained line — `action|key=value|key=value` — into an action.
+///
+/// Deliberately hand-rolled and total: the host builds its own JSON with
+/// `format!` and carries no parser, and this is the one part of the whole
+/// channel that can be tested without a browser or a GPU.
+pub fn parse_hud_action(line: &str) -> Option<HudAction> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut parts = line.split('|');
+    let action = parts.next()?;
+    let mut slot = None;
+    let mut option = None;
+    let mut name = None;
+    for pair in parts {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        match key {
+            "slot" => slot = Slot::parse(value),
+            "option" => option = value.parse::<usize>().ok(),
+            "name" => name = Some(value),
+            _ => {}
+        }
+    }
+
+    Some(match action {
+        "start_run" => HudAction::StartRun,
+        "restart" => HudAction::Restart,
+        // The scenario paths are `&'static str` constants, so the page names one
+        // rather than handing over a path — a HUD must not be able to ask the
+        // game to load an arbitrary file.
+        "select_scenario" => match name {
+            Some("skirmish") => HudAction::SelectScenario(paths::SKIRMISH),
+            Some("test_range") => HudAction::SelectScenario(paths::TEST_RANGE),
+            _ => HudAction::Unknown(line.to_string()),
+        },
+        "select_slot" => match (slot, option) {
+            (Some(slot), Some(option)) => HudAction::SelectSlot { slot, option },
+            _ => HudAction::Unknown(line.to_string()),
+        },
+        _ => HudAction::Unknown(line.to_string()),
+    })
+}
+
+/// Parse a whole drained batch — one action per line.
+pub fn parse_hud_actions(text: &str) -> Vec<HudAction> {
+    text.lines().filter_map(parse_hud_action).collect()
+}
+
+/// The loadout catalogue and the player's standing choice from it, as one system
+/// parameter.
+///
+/// Bundled purely because `gather_hud_state` was already at Bevy's system-param
+/// limit. They belong together anyway: neither says anything useful alone.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct LoadoutState<'w> {
+    catalogue: Res<'w, crate::data::LoadoutCatalogue>,
+    fit: Res<'w, crate::data::SelectedLoadout>,
 }
 
 /// Read the player ship's live components plus the encounter/session state and
@@ -128,11 +228,12 @@ fn gather_hud_state(
             &Velocity,
             &ShipStats,
             Option<&Shield>,
-            Option<&BoostDrive>,
+            Option<&Battery>,
             Option<&Broadside>,
             Option<&MicrowarpDrive>,
             Option<&TorpedoBay>,
             Option<&TorpedoLock>,
+            Option<&FireBarrelRack>,
         ),
         With<Player>,
     >,
@@ -149,6 +250,7 @@ fn gather_hud_state(
     tuning: Res<SimTuning>,
     state: Res<State<GameState>>,
     career: Res<crate::progress::Career>,
+    loadout: LoadoutState,
     mut snap: ResMut<HudSnapshot>,
 ) {
     let screen = match state.get() {
@@ -162,6 +264,58 @@ fn gather_hud_state(
     let mut j = String::with_capacity(384);
     j.push('{');
     j.push_str(&format!("\"screen\":\"{screen}\""));
+
+    // ---- The loadout slots, for the title card ----
+    //
+    // Emitted on the start screen only: mid-run the card is hidden, and sending
+    // a chip list every frame of a fight would be pure noise on the wire. Option
+    // names go out as *string ids*, not text — the page resolves them through
+    // the same `t()` as everything else it says, so a translation lands in one
+    // place rather than in the host's `format!` calls.
+    if screen == "start" {
+        j.push_str(",\"loadout\":{");
+        let slot = |name: &str, chosen: usize, ids: Vec<&str>| {
+            let options = ids
+                .iter()
+                .map(|id| format!("\"{id}\""))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("\"{name}\":{{\"chosen\":{chosen},\"options\":[{options}]}}")
+        };
+        j.push_str(&slot(
+            "broadside",
+            loadout.fit.broadside,
+            loadout
+                .catalogue
+                .broadsides
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect(),
+        ));
+        j.push(',');
+        j.push_str(&slot(
+            "battery",
+            loadout.fit.battery,
+            loadout
+                .catalogue
+                .batteries
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect(),
+        ));
+        j.push(',');
+        j.push_str(&slot(
+            "special",
+            loadout.fit.special,
+            loadout
+                .catalogue
+                .specials
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect(),
+        ));
+        j.push('}');
+    }
 
     // ---- Session and encounter state, all from resources ----
     //
@@ -229,7 +383,7 @@ fn gather_hud_state(
     // Absent before the run starts and after it ends. The HUD retains the last
     // known value for anything missing, so these simply stop updating rather
     // than blanking out.
-    if let Ok((tf, hull, vel, stats, shield, boost, broadside, warp, torps, torp_lock)) =
+    if let Ok((tf, hull, vel, stats, shield, battery, broadside, warp, torps, torp_lock, barrels)) =
         player.single()
     {
         // The sim's plane is XY (see `translation.truncate()` uses elsewhere in
@@ -277,13 +431,10 @@ fn gather_hud_state(
             thrust.string_key()
         ));
 
-        if let Some(b) = boost {
-            let frac = if b.battery_max > 0.0 {
-                (b.battery / b.battery_max).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            j.push_str(&format!(",\"boostBattery\":{frac:.4}"));
+        // One gauge for the whole battery slot, whatever device is drawing on
+        // it — the pilot reads charge, not which thing is spending it.
+        if let Some(b) = battery {
+            j.push_str(&format!(",\"boostBattery\":{:.4}", b.fraction()));
         }
 
         if let Some(b) = broadside {
@@ -292,8 +443,30 @@ fn gather_hud_state(
             push_cooldown(&mut j, "starboardCd", b.starboard.timer, b.cooldown);
         }
 
+        // Which special is fitted. The page *retains* whatever the host stops
+        // sending, so without this a microwarp fit would leave a stale six-tube
+        // row glowing for the whole run. Sending the discriminator every frame
+        // is what lets the page hide the cluster rather than freeze it.
+        let special = if torps.is_some() {
+            "torpedoes"
+        } else if warp.is_some() {
+            "microwarp"
+        } else if barrels.is_some() {
+            "barrels"
+        } else {
+            "none"
+        };
+        j.push_str(&format!(",\"special\":\"{special}\""));
+
         if let Some(w) = warp {
             push_cooldown(&mut j, "microwarpCd", w.timer, w.cooldown);
+        }
+
+        if let Some(r) = barrels {
+            j.push_str(&format!(
+                ",\"barrelMagazine\":{{\"count\":{},\"max\":{}}}",
+                r.magazine, r.magazine_max
+            ));
         }
 
         if let Some(t) = torps {
@@ -380,6 +553,12 @@ mod web {
         /// because it changes on almost every frame while the snapshot does not.
         #[wasm_bindgen(js_namespace = window, js_name = vtHudRings)]
         fn vt_hud_rings(json: &str);
+
+        /// Drain whatever the page's controls have asked for since the last
+        /// frame. The overlay is real DOM here, so the clicks arrive on their
+        /// own; this is only the collection.
+        #[wasm_bindgen(js_namespace = window, js_name = vtHudDrainActions)]
+        fn vt_hud_drain_actions() -> String;
     }
 
     /// Mount the overlay once, at startup, and hand it the strings.
@@ -392,6 +571,7 @@ mod web {
     pub fn push(
         snap: Res<HudSnapshot>,
         rings: Res<super::RingSnapshot>,
+        mut actions: MessageWriter<super::HudAction>,
         mut last: Local<u64>,
         mut last_rings: Local<u64>,
     ) {
@@ -402,6 +582,14 @@ mod web {
         if rings.seq != *last_rings {
             *last_rings = rings.seq;
             vt_hud_rings(&rings.json);
+        }
+        // Same drain as the native transport, and the same parser — the two
+        // hosts differ in how a click *reaches* the page, not in what it says.
+        for action in super::parse_hud_actions(&vt_hud_drain_actions()) {
+            if let super::HudAction::Unknown(raw) = &action {
+                warn!("HUD asked for something this build does not know: {raw}");
+            }
+            actions.write(action);
         }
     }
 }
@@ -423,8 +611,10 @@ mod native {
     use bevy::prelude::*;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     use bevy::window::PrimaryWindow;
+    use std::sync::Arc;
     use ul_next::{
         config::Config,
+        event::{MouseButton as UlMouseButton, MouseEvent, MouseEventType},
         platform,
         renderer::Renderer,
         view::{View, ViewConfig},
@@ -439,6 +629,11 @@ mod native {
         image: Handle<Image>,
         width: usize,
         height: usize,
+        /// Kept because `MouseEvent::new` needs it and `Library::linked` returns
+        /// a cheap `Arc` clone — there is no reason to reach for it again.
+        lib: Arc<Library>,
+        /// Last cursor position forwarded, so a still mouse costs no events.
+        last_cursor: Option<Vec2>,
         last_seq: u64,
         /// Sequence of the last ring payload evaluated, so an unmoving scene
         /// skips the script entirely.
@@ -505,7 +700,7 @@ mod native {
         }
 
         // Size the HUD to the window; wait for it to exist.
-        let Some((w, h)) = world
+        let Some((w, h, scale)) = world
             .query_filtered::<&Window, With<PrimaryWindow>>()
             .iter(world)
             .next()
@@ -513,6 +708,7 @@ mod native {
                 (
                     win.physical_width().max(1) as usize,
                     win.physical_height().max(1) as usize,
+                    win.scale_factor(),
                 )
             })
         else {
@@ -537,9 +733,15 @@ mod native {
         let Ok(renderer) = Renderer::create(config) else {
             return fail(world, "Renderer::create");
         };
+        // The view is sized in *physical* pixels, so the page's device scale must
+        // match or the whole HUD renders at the wrong size — at 150% it was
+        // laying out at two-thirds its intended CSS dimensions. Setting it here
+        // also makes Bevy's *logical* `cursor_position()` map 1:1 onto page CSS
+        // pixels, so forwarding a click needs no conversion in the hot path.
         let Some(view_config) = ViewConfig::start()
             .is_accelerated(false)
             .is_transparent(true)
+            .initial_device_scale(scale as f64)
             .build(lib.clone())
         else {
             return fail(world, "ViewConfig::build");
@@ -550,6 +752,9 @@ mod native {
         if view.load_html(&hud_document()).is_err() {
             return fail(world, "load_html");
         }
+        // Ultralight drops input into an unfocused view, so a card full of chips
+        // would simply never respond.
+        view.focus();
 
         // Target texture, transparent to start, CPU-writable + rendered.
         let image = Image::new_fill(
@@ -577,16 +782,124 @@ mod native {
             HudCanvas,
         ));
 
-        info!("Ultralight HUD initialised ({w}x{h})");
+        info!("Ultralight HUD initialised ({w}x{h} at {scale}x)");
         world.insert_non_send(HudUl {
             renderer,
             view,
             image: handle,
             width: w,
             height: h,
+            lib,
+            last_cursor: None,
             last_seq: 0,
             last_ring_seq: 0,
         });
+    }
+
+    /// Forward the mouse into the page, and drain whatever it asked for.
+    ///
+    /// Runs before `render_hud` so a click is seen in the same frame it is made.
+    /// Only the *mouse* is forwarded: the HUD has no text fields, and handing
+    /// Ultralight the keyboard would fight the game for every key.
+    pub fn forward_input(
+        hud: Option<NonSendMut<HudUl>>,
+        mouse: Res<ButtonInput<MouseButton>>,
+        windows: Query<&Window, With<PrimaryWindow>>,
+        mut actions: MessageWriter<super::HudAction>,
+    ) {
+        let Some(mut hud) = hud else {
+            return;
+        };
+        let Ok(window) = windows.single() else {
+            return;
+        };
+
+        // Logical pixels, which the view's device scale makes equal to page CSS
+        // pixels — see `init`.
+        if let Some(cursor) = window.cursor_position() {
+            let (x, y) = (cursor.x as i32, cursor.y as i32);
+            // Ultralight decides what is under the pointer from the *move*, so a
+            // press with no preceding move lands on whatever was hovered last.
+            // Sending the move first, in the same frame, is what makes a chip
+            // clicked on the first frame the mouse arrives register at all.
+            if hud.last_cursor != Some(cursor) {
+                hud.last_cursor = Some(cursor);
+                fire_mouse(&hud, MouseEventType::MouseMoved, x, y, UlMouseButton::None);
+            }
+            if mouse.just_pressed(MouseButton::Left) {
+                fire_mouse(&hud, MouseEventType::MouseDown, x, y, UlMouseButton::Left);
+            }
+            if mouse.just_released(MouseButton::Left) {
+                fire_mouse(&hud, MouseEventType::MouseUp, x, y, UlMouseButton::Left);
+            }
+        }
+
+        // Ask the page what it wants. An empty queue returns an empty string, so
+        // this costs one script evaluation per frame and nothing else.
+        let Ok(Ok(drained)) = hud.view.evaluate_script("window.__drainActions()") else {
+            return;
+        };
+        for action in super::parse_hud_actions(&drained) {
+            if let super::HudAction::Unknown(raw) = &action {
+                warn!("HUD asked for something this build does not know: {raw}");
+            }
+            actions.write(action);
+        }
+    }
+
+    /// One mouse event, built and fired. Ultralight frees the event on drop, so
+    /// each one is constructed fresh.
+    fn fire_mouse(hud: &HudUl, kind: MouseEventType, x: i32, y: i32, button: UlMouseButton) {
+        if let Ok(event) = MouseEvent::new(hud.lib.clone(), kind, x, y, button) {
+            hud.view.fire_mouse_event(event);
+        }
+    }
+
+    /// Keep the view, the texture and the click coordinates in step with the
+    /// window.
+    ///
+    /// This is a bug fix as much as a feature: the pixel copy in `render_hud`
+    /// walks `hud.width`/`hud.height` against a surface whose stride is re-read
+    /// every frame, so a resized window read past the end of the buffer. Nothing
+    /// resized before because fullscreen is borderless at desktop resolution —
+    /// but a card you can click is a card people will resize the window for.
+    pub fn resize_hud(
+        hud: Option<NonSendMut<HudUl>>,
+        mut resized: MessageReader<bevy::window::WindowResized>,
+        windows: Query<&Window, With<PrimaryWindow>>,
+        mut images: ResMut<Assets<Image>>,
+    ) {
+        let Some(mut hud) = hud else {
+            resized.clear();
+            return;
+        };
+        if resized.read().last().is_none() {
+            return;
+        }
+        let Ok(window) = windows.single() else {
+            return;
+        };
+        let (w, h) = (
+            window.physical_width().max(1) as usize,
+            window.physical_height().max(1) as usize,
+        );
+        if (w, h) == (hud.width, hud.height) {
+            return;
+        }
+
+        hud.view.resize(w as u32, h as u32);
+        hud.width = w;
+        hud.height = h;
+        if let Some(mut image) = images.get_mut(&hud.image) {
+            image.resize(Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: 1,
+            });
+        }
+        // The next frame must repaint into a buffer that just changed shape.
+        hud.last_seq = 0;
+        hud.last_ring_seq = 0;
     }
 
     /// Each frame: push the latest snapshot to JS, render Ultralight, and copy the
@@ -668,5 +981,78 @@ mod native {
         }
 
         surface.clear_dirty_bounds();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole HUD->host vocabulary, exercised without a browser. This is the
+    /// only part of the channel that can be tested headlessly, which is exactly
+    /// why the wire format is a line of text rather than JSON.
+    ///
+    /// The lines below are the literal output of `bridge.js`'s `__drainActions`
+    /// for the matching `game.send` calls, so this is the two languages agreeing
+    /// on the format and not just Rust agreeing with itself.
+    #[test]
+    fn the_page_can_ask_for_the_things_the_host_understands() {
+        assert_eq!(parse_hud_action("start_run"), Some(HudAction::StartRun));
+        assert_eq!(parse_hud_action("restart"), Some(HudAction::Restart));
+        assert_eq!(
+            parse_hud_action("select_slot|slot=battery|option=2"),
+            Some(HudAction::SelectSlot {
+                slot: Slot::Battery,
+                option: 2,
+            })
+        );
+        assert_eq!(
+            parse_hud_action("select_scenario|name=test_range"),
+            Some(HudAction::SelectScenario(paths::TEST_RANGE))
+        );
+    }
+
+    /// A batch arrives as one string; blank lines are not actions.
+    #[test]
+    fn a_drained_batch_is_one_action_per_line() {
+        let actions = parse_hud_actions("select_slot|slot=special|option=1\n\nstart_run\n");
+        assert_eq!(
+            actions,
+            vec![
+                HudAction::SelectSlot {
+                    slot: Slot::Special,
+                    option: 1,
+                },
+                HudAction::StartRun,
+            ]
+        );
+    }
+
+    /// Anything the host does not recognise is *kept*, not dropped. A page and a
+    /// host that have drifted apart should show up in a log rather than as a
+    /// button that silently does nothing.
+    #[test]
+    fn an_unknown_action_is_reported_rather_than_swallowed() {
+        assert!(matches!(
+            parse_hud_action("undock|bay=3"),
+            Some(HudAction::Unknown(_))
+        ));
+        // Well-formed name, missing payload — still not something to act on.
+        assert!(matches!(
+            parse_hud_action("select_slot|slot=battery"),
+            Some(HudAction::Unknown(_))
+        ));
+        // An unknown scenario must never become a path.
+        assert!(matches!(
+            parse_hud_action("select_scenario|name=../../etc/passwd"),
+            Some(HudAction::Unknown(_))
+        ));
+    }
+
+    #[test]
+    fn nothing_at_all_is_not_an_action() {
+        assert_eq!(parse_hud_action(""), None);
+        assert_eq!(parse_hud_action("   "), None);
+        assert!(parse_hud_actions("").is_empty());
     }
 }

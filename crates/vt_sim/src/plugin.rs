@@ -9,13 +9,18 @@ use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
 use crate::ai::ai_system;
+use crate::barrels::{barrel_burn_system, barrel_drop_system};
 use crate::collide::{landmark_system, ram_system};
 use crate::combat::{collision_system, destruction_system, projectile_system, weapons_system};
-use crate::drive::{battery_system, microwarp_system, speed_scale_system};
+use crate::drive::{
+    battery_draw_system, battery_recharge_system, emp_recovery_system, microwarp_system,
+    speed_scale_system,
+};
 use crate::emp::{emp_bolt_system, emp_system};
-use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
+use crate::events::{EmpImpact, MunitionIntercepted, ShipDestroyed, ShipHit};
 use crate::pilot::pilot_system;
 use crate::piracy::{boarding_system, cripple_system, BoardIntent, Boarding, Plunder};
+use crate::point_defense::point_defense_system;
 use crate::shield::{shield_refit_system, shield_regen_system};
 use crate::ship::movement_system;
 use crate::spawn::{director_system, Encounter, SpawnDirector};
@@ -70,6 +75,7 @@ impl Plugin for SimPlugin {
             .add_message::<ShipHit>()
             .add_message::<ShipDestroyed>()
             .add_message::<EmpImpact>()
+            .add_message::<MunitionIntercepted>()
             .configure_sets(
                 FixedUpdate,
                 (
@@ -94,7 +100,12 @@ impl Plugin for SimPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    battery_system,
+                    emp_recovery_system,
+                    // Draw before recharge, and both before anything that reads
+                    // a `powered` flag: a device paid for this step acts this
+                    // step, and a pool that paid never tops itself back up.
+                    battery_draw_system,
+                    battery_recharge_system,
                     torpedo_reload_system,
                     microwarp_system,
                     speed_scale_system,
@@ -123,7 +134,11 @@ impl Plugin for SimPlugin {
                     // queues for next frame's drain, not an immediate one).
                     torpedo_launch_system,
                     torpedo_lock_system,
+                    barrel_drop_system,
                     projectile_system,
+                    // Last, so the screen only ever takes what is still in the
+                    // air: a shot that already landed this step is not un-hit.
+                    point_defense_system,
                 )
                     .chain()
                     .in_set(SimSet::Weapons),
@@ -135,6 +150,9 @@ impl Plugin for SimPlugin {
                     collision_system,
                     emp_bolt_system,
                     torpedo_hit_system,
+                    // Burning is damage like any other, so it settles alongside
+                    // the other hits and before anything is destroyed.
+                    barrel_burn_system,
                     destruction_system,
                 )
                     .chain()

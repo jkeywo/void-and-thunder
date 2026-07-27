@@ -21,17 +21,19 @@ entities:
       confidence: confirmed
       title: Headless Test Harness
       summary: >-
-        Ships are one uniform entity shape (base hull + full ShipLoadout +
-        PilotIntent); a player ship and an AI ship differ only in which system
-        writes their intent (the client for a Player, ai_system for an
-        AiController). Harness builds a deterministic headless World + step
+        Ships are one uniform entity shape: the base hull from ship_bundle plus
+        whatever devices the ShipLoadout fits, plus a PilotIntent. A player ship
+        and an AI ship differ only in which system writes their intent (the
+        client for a Player, ai_system for an AiController). The kit itself is
+        not uniform any more, and no system may assume it is: see
+        loadout-selection. Harness builds a deterministic headless World + step
         schedule mirroring SimSet order, so automated tests can AI-pilot a
         player-shaped ship (Protagonist + AiController) and step the sim.
       references: [void-and-thunder-simulation, enemy-ai, client-shell]
     implementation:
       status: declared
       paths: [crates/vt_sim/src/harness.rs, crates/vt_sim/src/spawn.rs]
-      symbols: [Harness, ShipLoadout, ship_bundle]
+      symbols: [Harness, ShipLoadout, ship_bundle, spawn_ship_in]
       tests: [crates/vt_sim/src/harness.rs]
 
   - component: ship-movement
@@ -216,12 +218,13 @@ entities:
       summary: >-
         Per-ship SpeedScale (= EMP x boost) recomputed each step and applied by
         movement_system. EmpDefense is the EMP bar that inverse-lerps speed and
-        recovers; BoostDrive is a rechargeable speed overdrive; MicrowarpDrive is
-        a short-range aimed teleport (clamp_to_range, cooldown-gated). Aiming any
-        weapon dilates global time to 25% via the client's AimBattery easing
-        Time<Virtual> (bullet-time), spent in real seconds so the sim slows while
-        input/camera stay live. All tuning is per-ship.
-      references: [ship-movement, emp-weapon]
+        recovers; BoostDrive is a speed overdrive drawing on the shared Battery
+        (see battery-power); MicrowarpDrive is a short-range aimed teleport
+        (clamp_to_range, cooldown-gated). Aiming any weapon dilates global time
+        to 25% via the client's AimBattery easing Time<Virtual> (bullet-time),
+        spent in real seconds so the sim slows while input/camera stay live. All
+        tuning is per-ship.
+      references: [ship-movement, emp-weapon, battery-power]
     implementation:
       status: declared
       paths: [crates/vt_sim/src/drive.rs, crates/vt_sim/src/components.rs]
@@ -229,7 +232,7 @@ entities:
         [
           speed_scale,
           speed_scale_system,
-          battery_system,
+          emp_recovery_system,
           microwarp_system,
           clamp_to_range,
           SpeedScale,
@@ -238,6 +241,146 @@ entities:
           MicrowarpDrive,
         ]
       tests: [crates/vt_sim/src/drive.rs]
+
+  - component: battery-power
+    core:
+      status: implemented
+      confidence: confirmed
+      title: The Battery Slot
+      summary: >-
+        One Battery per ship, shared by whichever device occupies the battery
+        loadout slot: BoostDrive, the EmpWeapon disruptor, or PointDefense.
+        battery_draw_system is the only place charge is spent. It walks the
+        fitted devices in a fixed order (boost, disruptor, screen), debits
+        drain_per_sec x dt while the pilot holds the slot key, and sets each
+        device's engaged/powered flag. battery_recharge_system tops the pool up
+        only in a step where nothing drew, so holding a device costs its full
+        drain rather than the difference between drain and recharge. A device on
+        a hull with no Battery is never powered.
+      references: [ship-drives, emp-weapon, point-defense, loadout-selection]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/drive.rs]
+      symbols: [Battery, battery_draw_system, battery_recharge_system]
+      tests: [crates/vt_sim/src/drive.rs]
+
+  - component: point-defense
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Point Defence Screen
+      summary: >-
+        The defensive option in the battery slot. While powered, the emitter
+        destroys the nearest hostile munition inside its radius at most once per
+        1/rate seconds: cannon shot, EMP bolts and torpedoes alike, because a
+        screen that stops only one of the three cannot be reasoned about
+        mid-fight. Torpedoes fly off the plane, so the radius test uses the
+        flattened XY position while the MunitionIntercepted message carries the
+        true 3D point for the client's tracer. Runs last in SimSet::Weapons, so
+        it only ever takes what is still in the air.
+      references: [battery-power, ship-combat, torpedoes]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/point_defense.rs, crates/vt_sim/src/events.rs]
+      symbols: [PointDefense, point_defense_system, MunitionIntercepted]
+      tests: [crates/vt_sim/src/point_defense.rs]
+
+  - component: fire-barrels
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Fire Barrels
+      summary: >-
+        The unaimed option in the special slot: burning barrels rolled off the
+        stern to deny the lane behind you. PilotIntent.barrel_drop is a level,
+        not an edge. FireBarrelRack owns the cadence through its own cooldown, so
+        edge detection stays in the client. A dropped FireBarrel burns
+        overlapping hostiles through apply_hull_damage, so brace, shields and
+        invulnerability behave exactly as they do against shot, and announces a
+        ShipHit only every HIT_REPORT_INTERVAL rather than every step. Finite and
+        restocked by boarding, like torpedoes.
+      references: [ship-combat, piracy-finisher, loadout-selection]
+    implementation:
+      status: declared
+      paths: [crates/vt_sim/src/barrels.rs, crates/vt_sim/src/piracy.rs]
+      symbols:
+        [FireBarrelRack, FireBarrel, barrel_drop_system, barrel_burn_system]
+      tests: [crates/vt_sim/src/barrels.rs]
+
+  - component: loadout-selection
+    core:
+      status: implemented
+      confidence: confirmed
+      title: Loadout Slots
+      summary: >-
+        The player's ship is a fit, not a fixed kit. ShipLoadout's device fields
+        are optional, and "not fitted" means the component is never inserted, so
+        the system that services it never sees the ship: the slots live in the
+        archetype rather than in enabled flags. Three slots, one option each.
+        Broadside (long nines or carronades), battery (boost, disruptor or point
+        defence) and special (torpedoes, microwarp or fire barrels), authored in
+        loadouts.ron. SelectedLoadout holds the choice; LoadoutCatalogue::fit
+        lays it over the class's own loadout at spawn. One key per slot, resolved
+        against what the ship carries rather than naming a device.
+      references:
+        [spawn-director, battery-power, point-defense, fire-barrels, hud-bridge]
+    implementation:
+      status: declared
+      paths:
+        [
+          crates/vt_sim/src/spawn.rs,
+          crates/vt_client/src/data/loadouts.rs,
+          crates/vt_client/src/input.rs,
+        ]
+      symbols:
+        [
+          ShipLoadout,
+          fit_devices,
+          spawn_ship,
+          spawn_ship_in,
+          LoadoutCatalogue,
+          SelectedLoadout,
+        ]
+      tests:
+        [crates/vt_sim/src/spawn.rs, crates/vt_client/src/data/loadouts.rs]
+
+  - component: hud-action-channel
+    core:
+      status: implemented
+      confidence: confirmed
+      title: HUD Action Channel
+      summary: >-
+        The HUD's controls talk back. bridge.js queues game.send(action, payload)
+        calls; the host drains the queue once a frame, Ultralight through
+        evaluate_script of window.__drainActions and wasm through
+        window.vtHudDrainActions, and parse_hud_action reads one line of
+        "action|key=value" into a HudAction. Deliberately not JSON: the host
+        hand-builds its own JSON and carries no parser, and a line of text is the
+        one part of the channel testable without a browser. On native,
+        forward_input fires Ultralight mouse events (move before down, so hit
+        testing settles) at logical cursor coordinates the view's device scale
+        makes equal to page CSS pixels; resize_hud keeps view, texture and
+        coordinates in step with the window. Hit-testing stops at the chips, so
+        the card stays click-through and the canvas still gets gameplay clicks.
+      references: [hud-bridge, loadout-selection]
+    implementation:
+      status: declared
+      paths:
+        [
+          crates/vt_client/src/hud.rs,
+          crates/vt_client/assets/ui/bridge.js,
+          crates/vt_client/src/session.rs,
+        ]
+      symbols:
+        [
+          HudAction,
+          parse_hud_action,
+          parse_hud_actions,
+          apply_hud_actions,
+          forward_input,
+          resize_hud,
+        ]
+      tests: [crates/vt_client/src/hud.rs]
 
   - component: bullet-time
     core:

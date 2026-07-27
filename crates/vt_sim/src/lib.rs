@@ -18,6 +18,7 @@
 //! `FireOrders`; the sim does the rest.
 
 pub mod ai;
+pub mod barrels;
 pub mod collide;
 pub mod combat;
 pub mod components;
@@ -28,6 +29,7 @@ pub mod harness;
 pub mod pilot;
 pub mod piracy;
 pub mod plugin;
+pub mod point_defense;
 pub mod shield;
 pub mod ship;
 pub mod spawn;
@@ -41,6 +43,7 @@ pub use plugin::{SimPlugin, SimSet};
 /// Common imports for consumers of the simulation.
 pub mod prelude {
     pub use crate::ai::desired_helm;
+    pub use crate::barrels::{FireBarrel, FireBarrelRack};
     pub use crate::collide::{ram_damage, RAM_DAMAGE_THRESHOLD};
     pub use crate::combat::{
         apply_hull_damage, broadside_direction, broadside_volley, intercept_lead, BankState,
@@ -51,20 +54,21 @@ pub mod prelude {
         Faction, FireOrders, Heading, Helm, Hull, Invulnerable, Landmark, PilotIntent, Projectile,
         Protagonist, Ship, ShipStats, SpeedScale, Ttl, Velocity, ENGAGEMENT_RANGE,
     };
-    pub use crate::drive::{clamp_to_range, speed_scale, BoostDrive, MicrowarpDrive};
+    pub use crate::drive::{clamp_to_range, speed_scale, Battery, BoostDrive, MicrowarpDrive};
     pub use crate::emp::{EmpBolt, EmpWeapon};
-    pub use crate::events::{EmpImpact, ShipDestroyed, ShipHit};
+    pub use crate::events::{EmpImpact, MunitionIntercepted, ShipDestroyed, ShipHit};
     pub use crate::harness::Harness;
     pub use crate::pilot::{Action, Contact, Kit, PilotBrain, Plan, Situation};
     pub use crate::piracy::{
         BoardIntent, Boarding, Plunder, BOARD_DWELL, BOARD_RANGE, CRIPPLE_THRESHOLD,
     };
     pub use crate::plugin::{SimPlugin, SimSet};
+    pub use crate::point_defense::PointDefense;
     pub use crate::shield::{shield_arc, DamageReport, Shield, ShieldArc, ShieldBank};
     pub use crate::ship::{agility_at, helm_step};
     pub use crate::spawn::{
-        reset_encounter, ship_bundle, DirectorSettings, Encounter, FinaleWave, Outcome,
-        ShipLoadout, SpawnDirector,
+        fit_devices, reset_encounter, ship_bundle, spawn_ship, spawn_ship_in, DirectorSettings,
+        Encounter, FinaleWave, Outcome, ShipLoadout, SpawnDirector,
     };
     pub use crate::torpedo::{Torpedo, TorpedoBay, TorpedoLaunchQueue, TorpedoLock};
     pub use crate::tuning::{AiTuning, PilotTuning, SimTuning};

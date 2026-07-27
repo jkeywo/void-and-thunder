@@ -304,6 +304,12 @@ pub struct PilotIntent {
     pub torpedo_hold: bool,
     /// Holding microwarp aim (previews destination; warps on release).
     pub microwarp_hold: bool,
+    /// Holding the point-defence emitter.
+    pub point_defense_fire: bool,
+    /// Wanting a fire barrel astern *now*. A level, not an edge: the rack owns
+    /// the cadence through its own cooldown, so holding the key drops at a fixed
+    /// rate and the sim never has to know about key edges.
+    pub barrel_drop: bool,
 }
 
 /// Marks a ship as AI-controlled and carries its combat tuning. The AI system

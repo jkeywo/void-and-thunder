@@ -45,11 +45,16 @@
                         arc: 1.1780972,
                         charge_time: 0.0,
                     ),
-                    emp: (),
-                    torpedoes: (),
-                    boost: (),
-                    // 20s: warping is an escape, not a manoeuvre.
-                    microwarp: (cooldown: 20.0),
+                    // The default fit: one device per slot. The loadout
+                    // catalogue swaps which one, never how many — see
+                    // assets/data/loadouts.ron. A slot left `None` here is a
+                    // component the ship never carries at all.
+                    battery: Some(()),
+                    // The disruptor, not the boost drive: without something to
+                    // slow a target, a ten-second reload never connects and a
+                    // duel with the last survivor deadlocks.
+                    emp: Some(()),
+                    torpedoes: Some(()),
                     // Fore and aft banks of 22.5 against a 50-point hull, so a
                     // well-presented side roughly doubles your effective health
                     // and a badly-presented one gives you nothing. The 2.5s
@@ -90,10 +95,9 @@
                         arc: 1.1780972,
                         charge_time: 0.5,
                     ),
-                    emp: (),
-                    torpedoes: (),
-                    boost: (),
-                    microwarp: (),
+                    // No kit at all: enemies always flew the broadside only
+                    // (`use_abilities: false`), so now they simply do not carry
+                    // the rest of it.
                 ),
                 ai: (
                     engage_range: 300.0,
@@ -144,10 +148,6 @@
                         arc: 3.14159265,
                         charge_time: 0.0,
                     ),
-                    emp: (),
-                    torpedoes: (),
-                    boost: (),
-                    microwarp: (),
                     // Pooled: one charge over the whole hull, so there is no
                     // side of this thing worth manoeuvring for. Two equal banks
                     // would only have moved the trick — flatten the near side,

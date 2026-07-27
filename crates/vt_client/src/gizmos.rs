@@ -335,6 +335,30 @@ pub fn draw_microwarp_range(
     gizmos.line(ship.extend(1.0), dest.extend(1.0), color);
 }
 
+/// Ring the point-defence screen while it is up.
+///
+/// The whole device is otherwise invisible — shots simply stop arriving — so the
+/// ring is what tells the player where the bubble ends and why that torpedo did
+/// not land. Drawn only while held, because an always-on circle around your own
+/// ship is furniture rather than information.
+pub fn draw_point_defense_radius(
+    mut gizmos: Gizmos,
+    player: Query<(&Transform, &PointDefense), With<Player>>,
+) {
+    let Ok((transform, screen)) = player.single() else {
+        return;
+    };
+    if !screen.powered {
+        return;
+    }
+    let ship = transform.translation.truncate();
+    gizmos.circle(
+        Isometry3d::from_translation(ship.extend(1.0)),
+        screen.radius,
+        Color::srgba(0.55, 0.85, 1.0, 0.45),
+    );
+}
+
 /// Show the microwarp ghost at the clamped destination while the pilot aims a
 /// warp, matching the player's heading; hide it otherwise.
 pub fn microwarp_ghost(
