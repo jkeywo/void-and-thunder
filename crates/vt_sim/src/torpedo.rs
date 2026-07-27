@@ -644,11 +644,20 @@ mod tests {
     #[test]
     fn sweeping_the_cursor_collects_a_target_per_ship() {
         let mut h = LockHarness::new(6.0);
+        // Spaced well beyond `lock_radius` so the cursor can only ever be over
+        // one at a time, and derived from the bay's own numbers so a change to
+        // either the brush or the reach cannot silently push a ship out of range
+        // and turn this into a mystery.
+        let bay = TorpedoBay::default();
+        let spacing = bay.lock_radius * 2.0;
         let ships: Vec<(Entity, Vec2)> = (0..4)
             .map(|i| {
-                // Spaced well beyond `lock_radius`, so the cursor can only ever
-                // be over one of them at a time.
-                let pos = Vec2::new(200.0, i as f32 * 400.0 - 600.0);
+                let pos = Vec2::new(120.0, i as f32 * spacing - spacing * 1.5);
+                assert!(
+                    pos.length() < bay.range,
+                    "the fixture must sit inside the bay's reach: {pos} vs {}",
+                    bay.range
+                );
                 (h.spawn_hostile(pos), pos)
             })
             .collect();

@@ -156,6 +156,64 @@ pub struct AimCursor {
 // sensitivity and stick deadzone — the two numbers a player is most likely to
 // want changed — the only ones in the game that needed a recompile.
 
+/// Log what the engine can see of the player's controllers.
+///
+/// A pad that does not work is nearly impossible to diagnose from the outside:
+/// every layer fails silently and identically, whether the device was never
+/// detected, was detected but reports nothing, or reports fine and is being
+/// dropped further down. This says which, in the log, on any build.
+///
+/// It reports a pad arriving or leaving, and then *once* per pad the first time
+/// it actually produces input — so a working controller costs three lines a
+/// session and a broken one tells you where it stopped.
+pub fn log_gamepads(
+    pads: Query<(Entity, &Gamepad)>,
+    controls: Res<FeelTuning>,
+    mut known: Local<Vec<Entity>>,
+    mut spoken: Local<Vec<Entity>>,
+) {
+    let live: Vec<Entity> = pads.iter().map(|(e, _)| e).collect();
+    for entity in &live {
+        if !known.contains(entity) {
+            info!("gamepad connected: {entity} — press a stick or button to confirm input");
+        }
+    }
+    for entity in known.iter() {
+        if !live.contains(entity) {
+            info!("gamepad disconnected: {entity}");
+        }
+    }
+    *known = live;
+
+    for (entity, pad) in &pads {
+        if spoken.contains(&entity) {
+            continue;
+        }
+        let axis = |a| pad.get(a).unwrap_or(0.0);
+        let raw = [
+            axis(GamepadAxis::LeftStickX),
+            axis(GamepadAxis::LeftStickY),
+            axis(GamepadAxis::RightStickX),
+            axis(GamepadAxis::RightStickY),
+        ];
+        let any_button = pad.get_pressed().next().is_some();
+        if !any_button && raw.iter().all(|v| v.abs() <= controls.controls.deadzone) {
+            continue;
+        }
+        spoken.push(entity);
+        info!(
+            "gamepad {entity} is sending input — sticks LX {:.2} LY {:.2} RX {:.2} RY {:.2}, \
+             a button is {}. If the ship still does not answer, the input is arriving and \
+             something downstream is dropping it.",
+            raw[0],
+            raw[1],
+            raw[2],
+            raw[3],
+            if any_button { "down" } else { "up" }
+        );
+    }
+}
+
 /// Radial deadzone below which the stick reads zero, above which it is rescaled
 /// so motion starts smoothly just past the edge (5% → ~0) and *saturates* before
 /// the physical limit (≥ 90% → 100%).

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// one ring on screen means one mental model: "this is how far I can act". They
 /// share the constant rather than each carrying their own so they cannot drift
 /// apart.
-pub const ENGAGEMENT_RANGE: f32 = 675.0;
+pub const ENGAGEMENT_RANGE: f32 = 506.0;
 
 /// Which power a ship answers to. Used for friendly-fire filtering and, later,
 /// AI target selection. Names are drawn from the Settled Dark setting.

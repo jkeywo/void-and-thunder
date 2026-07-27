@@ -31,7 +31,7 @@
                     turn_rate_fast: 0.55,
                     turn_accel: 4.0,
                 ),
-                hull: 100.0,
+                hull: 50.0,
                 collider: (radius: 26.0),
                 emp_defense: (resist: 100.0, recovery_per_sec: 14.0),
                 loadout: (
@@ -50,13 +50,13 @@
                     boost: (),
                     // 20s: warping is an escape, not a manoeuvre.
                     microwarp: (cooldown: 20.0),
-                    // Fore and aft banks of 45 against a 100-point hull, so a
+                    // Fore and aft banks of 22.5 against a 50-point hull, so a
                     // well-presented side roughly doubles your effective health
                     // and a badly-presented one gives you nothing. The 2.5s
                     // suppression is what stops it being a flat damage
                     // reduction: under sustained fire the struck bank stays at
                     // zero, so the answer is always to turn.
-                    shield: (max: 45.0, regen_per_sec: 7.0, regen_delay: 2.5),
+                    shield: (max: 22.5, regen_per_sec: 7.0, regen_delay: 2.5),
                 ),
                 ai: (),
             ),

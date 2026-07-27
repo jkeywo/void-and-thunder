@@ -33,6 +33,7 @@ use crate::combat::apply_hull_damage;
 use crate::components::{
     Anchored, Brace, Collider, Faction, Heading, Hull, Invulnerable, Ship, Velocity,
 };
+use crate::drive::BoostDrive;
 use crate::events::ShipHit;
 use crate::shield::{shield_arc, Shield};
 use crate::tuning::SimTuning;
@@ -46,6 +47,13 @@ pub const RAM_RESTITUTION: f32 = 0.35;
 pub const RAM_DAMAGE_THRESHOLD: f32 = 45.0;
 /// Hull damage per unit of closing speed *above* the threshold.
 pub const RAM_DAMAGE_PER_SPEED: f32 = 0.22;
+/// How much harder a boosted, bow-on ram lands, at full alignment.
+///
+/// The drive is already a commitment — a spent battery and a wide turn — so
+/// spending it to put your bow through someone should be a real attack rather
+/// than a slightly firmer nudge. Scaled by how squarely the bow meets them, so
+/// clipping a hull in passing while boosting gains almost nothing.
+pub const RAM_BOOST_BONUS: f32 = 2.5;
 /// Fraction of the overlap corrected per step. Below 1 so a deep overlap eases
 /// apart over a few frames instead of teleporting, which would fight the
 /// client's pose interpolation and read as a flicker.
@@ -56,6 +64,19 @@ pub const RAM_SEPARATION: f32 = 0.6;
 /// by playtesting.
 pub fn ram_damage(closing_speed: f32, threshold: f32, per_speed: f32) -> f32 {
     (closing_speed - threshold).max(0.0) * per_speed
+}
+
+/// The multiplier a rammer's blow gets for driving its bow into the contact
+/// under boost.
+///
+/// `bow_on` is how squarely the bow meets the other hull: `1.0` dead-on, `0.0`
+/// or less abeam or astern. A ship that is not boosting gets nothing, however
+/// well aimed — the bonus is for spending the drive, not for arriving.
+pub fn ram_boost_multiplier(boosting: bool, bow_on: f32, bonus: f32) -> f32 {
+    if !boosting {
+        return 1.0;
+    }
+    1.0 + bonus * bow_on.clamp(0.0, 1.0)
 }
 
 /// Bevy system: separate overlapping hulls, exchange momentum, and hurt the pair
@@ -73,6 +94,7 @@ pub fn ram_system(
             &Faction,
             &mut Hull,
             Option<&mut Shield>,
+            Option<&BoostDrive>,
             Option<&Brace>,
             Has<Invulnerable>,
             Has<Anchored>,
@@ -98,6 +120,7 @@ pub fn ram_system(
                 a_fac,
                 mut a_hull,
                 a_shield,
+                a_boost,
                 a_brace,
                 a_inv,
                 a_anchored,
@@ -111,6 +134,7 @@ pub fn ram_system(
                 b_fac,
                 mut b_hull,
                 b_shield,
+                b_boost,
                 b_brace,
                 b_inv,
                 b_anchored,
@@ -162,14 +186,27 @@ pub fn ram_system(
             a_vel.0 -= normal * impulse * a_share;
             b_vel.0 += normal * impulse * b_share;
 
-            let damage = ram_damage(
+            let base = ram_damage(
                 closing,
                 tuning.ram_damage_threshold,
                 tuning.ram_damage_per_speed,
             );
-            if damage <= 0.0 {
+            if base <= 0.0 {
                 continue;
             }
+
+            // Who drove into whom. `normal` runs from A toward B, so A meets B
+            // bow-on when A's bow points along it, and B when its bow points
+            // back down it. The bonus lands on the blow the rammer *deals*, not
+            // on what they take: putting your bow through someone under power
+            // should hurt them, not you.
+            let boosting = |b: Option<&BoostDrive>| b.is_some_and(|d| d.active);
+            let a_bow_on = Vec2::from_angle(a_head.0).dot(normal);
+            let b_bow_on = Vec2::from_angle(b_head.0).dot(-normal);
+            let to_b =
+                base * ram_boost_multiplier(boosting(a_boost), a_bow_on, tuning.ram_boost_bonus);
+            let to_a =
+                base * ram_boost_multiplier(boosting(b_boost), b_bow_on, tuning.ram_boost_bonus);
 
             // Both hulls take it: a ram is not free for the rammer. The contact
             // point sits on the line between the two centres, so each ship's arc
@@ -180,7 +217,7 @@ pub fn ram_system(
                 &mut a_hull,
                 a_shield.map(Mut::into_inner),
                 shield_arc(a_head.0, a_pos, contact),
-                damage,
+                to_a,
                 a_brace.is_some_and(|x| x.active),
                 a_inv,
                 tuning.brace_damage_factor,
@@ -189,7 +226,7 @@ pub fn ram_system(
                 &mut b_hull,
                 b_shield.map(Mut::into_inner),
                 shield_arc(b_head.0, b_pos, contact),
-                damage,
+                to_b,
                 b_brace.is_some_and(|x| x.active),
                 b_inv,
                 tuning.brace_damage_factor,
@@ -202,7 +239,7 @@ pub fn ram_system(
                 position: contact,
                 ship: a_entity,
                 faction: *a_fac,
-                damage,
+                damage: to_a,
                 direction: -normal,
                 report: a_report,
             });
@@ -210,7 +247,7 @@ pub fn ram_system(
                 position: contact,
                 ship: b_entity,
                 faction: *b_fac,
-                damage,
+                damage: to_b,
                 direction: normal,
                 report: b_report,
             });
@@ -237,6 +274,25 @@ mod tests {
             0.0,
             "exactly at the threshold is still a nudge"
         );
+    }
+
+    #[test]
+    fn a_boosted_bow_on_ram_hits_much_harder() {
+        let plain = ram_boost_multiplier(false, 1.0, RAM_BOOST_BONUS);
+        let bow_on = ram_boost_multiplier(true, 1.0, RAM_BOOST_BONUS);
+        assert_eq!(plain, 1.0, "no drive spent, no bonus — however well aimed");
+        assert!(
+            bow_on >= 3.0,
+            "driving the bow home under boost should be a real attack, was {bow_on}x"
+        );
+        // Clipping someone in passing gains almost nothing, even under boost.
+        let glancing = ram_boost_multiplier(true, 0.1, RAM_BOOST_BONUS);
+        assert!(
+            glancing < 1.5,
+            "a glancing boosted contact should barely differ, was {glancing}x"
+        );
+        // Reversing into someone under boost is not a ram.
+        assert_eq!(ram_boost_multiplier(true, -1.0, RAM_BOOST_BONUS), 1.0);
     }
 
     #[test]

@@ -86,6 +86,9 @@ impl Default for ShipTable {
                 NamedClass {
                     name: "corsair_sloop".into(),
                     class: ShipClass {
+                        // Half the stock hull: the player is the fragile one, and
+                        // the shields are what keep them alive.
+                        hull: 50.0,
                         loadout: ShipLoadout::player(),
                         ..ShipClass::default()
                     },

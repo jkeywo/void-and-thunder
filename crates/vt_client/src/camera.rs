@@ -166,6 +166,7 @@ pub fn camera_orbit(
     windows: Query<&Window>,
     gamepads: Query<&Gamepad>,
     state: Res<State<GameState>>,
+    tuning: Res<SimTuning>,
     player: Query<
         (
             &Transform,
@@ -250,7 +251,14 @@ pub fn camera_orbit(
             // reticle moves within the view, the camera doesn't chase it).
             target_yaw = heading.0;
             target_pitch = cam.topdown_pitch;
-            target_dist = cam.topdown_dist;
+            // Frame the engagement ring by the screen's HEIGHT. The vertical
+            // field of view is the tighter of the two axes on any normal
+            // display, so a distance chosen to fit the width left the top and
+            // bottom of the ring — the part being aimed into — off the screen.
+            // Deriving it also means the framing follows the range if it is
+            // retuned, instead of quietly going wrong.
+            let half_fov = (rig.fov * 0.5).max(0.05);
+            target_dist = (tuning.engagement_range / half_fov.tan()) * cam.topdown_margin;
             locked = true;
         } else if manual && aiming_broadside {
             // Lock the yaw along where the broadside points; the aim axis steers

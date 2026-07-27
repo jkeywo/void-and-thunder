@@ -815,8 +815,8 @@
   var TUBE_COUNT=4;
   function buildTubes(n){
     var row=document.getElementById("tubes"); row.innerHTML="";
-    for(var i=0;i<n;i++){ var t=document.createElement("div"); t.className="tube empty";
-      t.innerHTML='<div class="tfill"></div><div class="tg">--</div>'; row.appendChild(t); }
+    for(var i=0;i<n;i++){ var tube=document.createElement("div"); tube.className="tube empty";
+      tube.innerHTML='<div class="tfill"></div><div class="tg">--</div>'; row.appendChild(tube); }
   }
   var C=2*Math.PI*18;
   function initGauges(){
@@ -1244,6 +1244,11 @@
   // row. Until it arrives (or if it never does), every data-i18n element
   // keeps its authored English, so the worst case is untranslated, not blank.
   var STRINGS = {};
+  // NEVER shadow `t`. It is one letter and it is called from inside loops, so a
+  // stray `var t = ...` turns every lookup below it into a TypeError — and
+  // because updateHud is one long sequence of ifs, a throw part-way through
+  // silently kills every readout after it. That is exactly how the title card
+  // and the end-of-run banner went missing once already.
   function t(id){ return STRINGS[id] !== undefined ? STRINGS[id] : "!!MISSING STRING!!"; }
   // For text chosen at runtime, which has no markup to hold an authored
   // fallback the way a data-i18n element does.
@@ -1371,12 +1376,12 @@
     var nodes=el.tubes.children;
     if(nodes.length!==list.length){ buildTubes(list.length); nodes=el.tubes.children; }
     for(var i=0;i<list.length;i++){
-      var t=nodes[i], d=list[i]||{}, fill=t.querySelector(".tfill"), g=t.querySelector(".tg");
-      t.classList.remove("ready","loading","empty");
-      if(d.state==="ready"){ t.classList.add("ready"); fill.style.transform="scaleY(1)"; g.textContent=t("hud.ready"); }
-      else if(d.state==="loading"){ t.classList.add("loading"); var p=clamp01(d.progress||0);
+      var tube=nodes[i], d=list[i]||{}, fill=tube.querySelector(".tfill"), g=tube.querySelector(".tg");
+      tube.classList.remove("ready","loading","empty");
+      if(d.state==="ready"){ tube.classList.add("ready"); fill.style.transform="scaleY(1)"; g.textContent=t("hud.ready"); }
+      else if(d.state==="loading"){ tube.classList.add("loading"); var p=clamp01(d.progress||0);
         fill.style.transform="scaleY("+p+")"; g.textContent=Math.round(p*100)+"%"; }
-      else{ t.classList.add("empty"); fill.style.transform="scaleY(0)"; g.textContent="--"; }
+      else{ tube.classList.add("empty"); fill.style.transform="scaleY(0)"; g.textContent="--"; }
     }
   }
 
@@ -1420,10 +1425,10 @@
       else s.boostBattery=Math.min(1,s.boostBattery+0.012);
       s.aimBattery=Math.max(0,Math.min(1, s.aimBattery + (Math.random()<.3?-0.08:0.03)));
       demoCd(s.portCd,0.1,.05); demoCd(s.starboardCd,0.1,.05); demoCd(s.microwarpCd,0.1,.02);
-      s.torpedoes.forEach(function(t){
-        if(t.state==="ready"){ if(Math.random()<.03) t.state="empty"; }
-        else if(t.state==="empty"){ if(Math.random()<.06){ t.state="loading"; t.progress=0; } }
-        else if(t.state==="loading"){ t.progress=(t.progress||0)+0.03; if(t.progress>=1){ t.state="ready"; t.progress=1; } }
+      s.torpedoes.forEach(function(tube){
+        if(tube.state==="ready"){ if(Math.random()<.03) tube.state="empty"; }
+        else if(tube.state==="empty"){ if(Math.random()<.06){ tube.state="loading"; tube.progress=0; } }
+        else if(tube.state==="loading"){ tube.progress=(tube.progress||0)+0.03; if(tube.progress>=1){ tube.state="ready"; tube.progress=1; } }
       });
       if(Math.random()<.01) s.enemiesRemaining=Math.max(0,s.enemiesRemaining-1);
       window.updateHud(s);

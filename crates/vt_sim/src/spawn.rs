@@ -51,12 +51,12 @@ impl ShipLoadout {
                 cooldown: 20.0,
                 ..MicrowarpDrive::default()
             },
-            // Fore and aft banks of 45 against a 100-point hull: a
-            // well-presented side roughly doubles your effective health, a badly
-            // presented one gives you nothing. Enemies fit none (see `enemy`),
-            // which is a per-class decision rather than a rule.
+            // Fore and aft banks of 22.5 against a 50-point hull: a
+            // well-presented side still roughly doubles your effective health,
+            // but every exchange matters more than it did. Enemies fit none
+            // (see `enemy`), which is a per-class decision rather than a rule.
             shield: Shield {
-                max: 45.0,
+                max: 22.5,
                 ..Shield::default()
             },
             ..Self::default()

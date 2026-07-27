@@ -140,9 +140,16 @@ pub struct CameraFeel {
     /// closer, so the arc fills the screen.
     pub aim_pitch: f32,
     pub aim_dist: f32,
-    /// Pitch and distance for the top-down modes (torpedoes, microwarp).
+    /// Pitch for the top-down modes (torpedoes, microwarp).
     pub topdown_pitch: f32,
-    pub topdown_dist: f32,
+    /// How much room to leave around the engagement ring when the view lifts
+    /// overhead, as a multiple of the ring's radius.
+    ///
+    /// The distance itself is *computed* from the range and the vertical field
+    /// of view rather than authored. A fixed distance framed the ring by the
+    /// screen's width, so on any normal display the top and bottom of the ring
+    /// — the part you are aiming into — fell off the screen.
+    pub topdown_margin: f32,
     /// How fast the camera eases into an aim mode, and how fast distance follows.
     pub aim_lerp: f32,
     pub dist_lerp: f32,
@@ -192,7 +199,7 @@ impl Default for CameraFeel {
             aim_pitch: 0.28,
             aim_dist: 0.62,
             topdown_pitch: 1.5,
-            topdown_dist: 1125.0,
+            topdown_margin: 1.12,
             aim_lerp: 9.0,
             dist_lerp: 6.0,
             look_yaw_rate: 2.4,

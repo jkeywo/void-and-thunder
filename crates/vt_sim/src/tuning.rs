@@ -23,7 +23,9 @@ use crate::ai::{
     STATION_THROTTLE, SURROUND_COUNT, SURROUND_RADIUS, TORPEDO_MIN_VOLLEY, TURN_EASE, TURN_GAIN,
     WARP_PRIME,
 };
-use crate::collide::{RAM_DAMAGE_PER_SPEED, RAM_DAMAGE_THRESHOLD, RAM_RESTITUTION, RAM_SEPARATION};
+use crate::collide::{
+    RAM_BOOST_BONUS, RAM_DAMAGE_PER_SPEED, RAM_DAMAGE_THRESHOLD, RAM_RESTITUTION, RAM_SEPARATION,
+};
 use crate::combat::{
     BRACE_DAMAGE_FACTOR, HULL_LENGTH, MUZZLE_STANDOFF, PROJECTILE_RADIUS, PROJECTILE_TTL,
 };
@@ -112,6 +114,8 @@ pub struct SimTuning {
     pub ram_damage_per_speed: f32,
     /// Fraction of a hull overlap corrected per step.
     pub ram_separation: f32,
+    /// Extra ram damage for driving a boosted bow squarely into someone.
+    pub ram_boost_bonus: f32,
     /// The AI's control gains.
     pub ai: AiTuning,
 }
@@ -136,6 +140,7 @@ impl Default for SimTuning {
             ram_damage_threshold: RAM_DAMAGE_THRESHOLD,
             ram_damage_per_speed: RAM_DAMAGE_PER_SPEED,
             ram_separation: RAM_SEPARATION,
+            ram_boost_bonus: RAM_BOOST_BONUS,
             ai: AiTuning::default(),
         }
     }
@@ -158,7 +163,7 @@ mod tests {
         assert_eq!(t.torpedo_launch_interval, 0.5);
         assert_eq!(t.reverse_throttle, 0.25);
         assert_eq!(t.bounds_spring, 3.0);
-        assert_eq!(t.engagement_range, 675.0);
+        assert_eq!(t.engagement_range, 506.0);
         assert_eq!(t.cripple_threshold, 0.25);
         assert_eq!(t.board_range, 95.0);
         assert_eq!(t.board_dwell, 3.0);

@@ -90,9 +90,9 @@ use visuals::{
 
 mod input;
 use input::{
-    player_input, toggle_controls_panel, toggle_fullscreen, toggle_pause, toggle_player_ai,
-    track_input_method, AimCursor, Aiming, BroadsideAim, ControlsPanel, InputMethod, Paused,
-    PlayerAi, ThrustState,
+    log_gamepads, player_input, toggle_controls_panel, toggle_fullscreen, toggle_pause,
+    toggle_player_ai, track_input_method, AimCursor, Aiming, BroadsideAim, ControlsPanel,
+    InputMethod, Paused, PlayerAi, ThrustState,
 };
 
 mod gizmos;
@@ -358,6 +358,7 @@ fn main() {
         )
         // Window management answers whatever else has focus, so it is not gated
         // on the design panel's input guard.
+        .add_systems(Update, log_gamepads)
         .add_systems(Update, toggle_fullscreen)
         // Start screen: wait for the player to cast off.
         .add_systems(

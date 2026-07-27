@@ -31,7 +31,7 @@
 
     // How far the top-down kit reaches — microwarp jump and torpedo range share
     // this deliberately, so one ring on screen means one mental model.
-    engagement_range: 675.0,
+    engagement_range: 506.0,
 
     // Piracy: hull fraction that cripples a ship, and the range/dwell to board it.
     cripple_threshold: 0.25,
